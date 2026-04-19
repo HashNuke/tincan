@@ -11,7 +11,7 @@ protocol AudioTurnPipelineOutput: AnyObject {
 }
 
 final class AudioTurnPipeline {
-    private let audioEngine = AVAudioEngine()
+    private var audioEngine = AVAudioEngine()
     private let tapAudioConverter = AudioConverter()
     private let sink = TurnEventSink()
     private let turnDetector: VadTurnDetector
@@ -34,6 +34,7 @@ final class AudioTurnPipeline {
         guard !isRunning else { return }
 
         try await turnDetector.prepare()
+        audioEngine = AVAudioEngine()
 
         let stream = AsyncStream<[Float]> { continuation in
             audioStreamContinuation = continuation
@@ -78,11 +79,13 @@ final class AudioTurnPipeline {
 
         audioEngine.inputNode.removeTap(onBus: 0)
         audioEngine.stop()
+        audioEngine.reset()
         audioStreamContinuation?.finish()
         audioStreamContinuation = nil
         processingTask?.cancel()
         processingTask = nil
         isRunning = false
+        audioEngine = AVAudioEngine()
         await turnDetector.reset()
         await sink.emitLog("Microphone capture stopped")
     }
