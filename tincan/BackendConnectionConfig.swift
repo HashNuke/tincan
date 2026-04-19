@@ -11,4 +11,5 @@ enum BackendConnectionConfig {
     static let inferenceURLString = "http://\(publicHost):\(port)\(inferencePath)"
     static let healthURLString = "http://\(publicHost):\(port)\(healthPath)"
     static let loopbackInferenceURLString = "http://127.0.0.1:\(port)\(inferencePath)"
+    static let loopbackHealthURLString = "http://127.0.0.1:\(port)\(healthPath)"
 }

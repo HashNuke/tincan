@@ -16,7 +16,9 @@ final class BackendServerController: ObservableObject {
     private var stderrPipe: Pipe?
 
     init() {
-        start()
+        Task {
+            await start()
+        }
     }
 
     var availableEndpoints: [String] {
@@ -41,7 +43,9 @@ final class BackendServerController: ObservableObject {
 
     func restart() {
         stop()
-        start()
+        Task {
+            await start()
+        }
     }
 
     func stop() {
@@ -51,8 +55,15 @@ final class BackendServerController: ObservableObject {
         appendLog("Stopped backend process")
     }
 
-    private func start() {
+    private func start() async {
         guard process?.isRunning != true else { return }
+        statusDescription = "Starting local backend…"
+
+        if await isExistingBackendReachable() {
+            statusDescription = "Backend already running on \(BackendConnectionConfig.bindHost):\(port)"
+            appendLog("Reusing existing backend on 127.0.0.1:\(port)")
+            return
+        }
 
         let process = Process()
         let stdout = Pipe()
@@ -88,10 +99,8 @@ final class BackendServerController: ObservableObject {
         }
 
         process.terminationHandler = { [weak self] process in
-            Task { @MainActor [weak self] in
-                self?.statusDescription = "Backend exited with code \(process.terminationStatus)"
-                self?.appendLog("Backend exited")
-                self?.process = nil
+            Task { [weak self] in
+                await self?.handleTermination(status: process.terminationStatus)
             }
         }
 
@@ -105,6 +114,39 @@ final class BackendServerController: ObservableObject {
         } catch {
             statusDescription = "Failed to launch backend"
             appendLog("Launch failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func handleTermination(status: Int32) async {
+        process = nil
+
+        if status == 1, await isExistingBackendReachable() {
+            statusDescription = "Backend already running on \(BackendConnectionConfig.bindHost):\(port)"
+            appendLog("Backend launch found an existing server on port \(port); using that instance")
+            return
+        }
+
+        statusDescription = "Backend exited with code \(status)"
+        appendLog("Backend exited")
+    }
+
+    private func isExistingBackendReachable() async -> Bool {
+        guard let url = URL(string: BackendConnectionConfig.loopbackHealthURLString) else {
+            return false
+        }
+
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 1
+
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                return false
+            }
+
+            return (200..<300).contains(httpResponse.statusCode)
+        } catch {
+            return false
         }
     }
 
