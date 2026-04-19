@@ -30,6 +30,9 @@ func routes(_ app: Application) throws {
         do {
             let transcript = try await req.application.tincanInferenceService.transcribe(audioFileURL: temporaryURL)
             req.logger.info("Transcript: \(transcript)")
+            Task {
+                await req.application.opencodeRunner.run(transcript: transcript, logger: req.logger)
+            }
             return InferResponse(requestID: requestID, transcript: transcript)
         } catch {
             req.logger.error("Inference failed: \(String(describing: error))")
