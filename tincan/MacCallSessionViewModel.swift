@@ -12,6 +12,7 @@ final class MacCallSessionViewModel: ObservableObject {
 
     private let audioPipeline = AudioTurnPipeline()
     private let inferenceClient = BackendInferenceClient()
+    private let tonePlayer = CallTonePlayer.shared
     private let backendURL = URL(string: BackendConnectionConfig.loopbackInferenceURLString)
 
     init() {
@@ -32,6 +33,7 @@ final class MacCallSessionViewModel: ObservableObject {
                 try await audioPipeline.start()
                 callStateDescription = "Listening"
                 isCallActive = true
+                tonePlayer.playConnectTone()
             } catch {
                 callStateDescription = "Audio start failed"
                 appendLog("Failed to start audio pipeline: \(error.localizedDescription)")
@@ -44,6 +46,7 @@ final class MacCallSessionViewModel: ObservableObject {
             await audioPipeline.stop()
             callStateDescription = "Disconnected"
             isCallActive = false
+            tonePlayer.playDisconnectTone()
         }
     }
 

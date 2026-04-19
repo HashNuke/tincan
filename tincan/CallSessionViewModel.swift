@@ -14,6 +14,7 @@ final class CallSessionViewModel: ObservableObject {
     private let callKitController = CallKitController()
     private let audioPipeline = AudioTurnPipeline()
     private let inferenceClient = BackendInferenceClient()
+    private let tonePlayer = CallTonePlayer.shared
 
     private static let backendURLKey = "backend_url"
     private static let defaultBackendURL = BackendConnectionConfig.inferenceURLString
@@ -111,6 +112,7 @@ extension CallSessionViewModel: CallKitControllerDelegate {
                 try await audioPipeline.start()
                 callStateDescription = "Listening"
                 isCallActive = true
+                tonePlayer.playConnectTone()
             } catch {
                 callStateDescription = "Audio start failed"
                 appendLog("Failed to start audio pipeline: \(error.localizedDescription)")
@@ -123,6 +125,7 @@ extension CallSessionViewModel: CallKitControllerDelegate {
             await audioPipeline.stop()
             callStateDescription = "Idle"
             isCallActive = false
+            tonePlayer.playDisconnectTone()
         }
     }
 
