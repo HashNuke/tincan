@@ -151,47 +151,52 @@ private struct MacBackendView: View {
                 }
             }
 
-            HStack(spacing: 12) {
-                Button("Restart Backend") {
-                    controller.restart()
-                }
-                Button("Stop Backend") {
-                    controller.stop()
-                }
-            }
-
-            Divider()
-
-            Text("Live Transcripts")
-                .font(.headline)
-            if controller.recentTranscripts.isEmpty {
-                Text("Speech from the phone will appear here once the backend receives a turn.")
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Run Backend Manually")
+                    .font(.headline)
+                Text("The macOS app does not start or stop the Python backend. Launch it in Terminal with:")
                     .foregroundStyle(.secondary)
-            } else {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 10) {
-                        ForEach(Array(controller.recentTranscripts.enumerated()), id: \.offset) { _, transcript in
-                            Text(transcript)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(12)
-                                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
-                        }
-                    }
+                Text(controller.manualLaunchCommand)
+                    .textSelection(.enabled)
+                    .font(.system(.footnote, design: .monospaced))
+                    .padding(12)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+
+                HStack(spacing: 12) {
+                    Button("Refresh Status") {
+                        controller.refresh()
+                    }
+
+                    Text(controller.loopbackHealthEndpoint)
+                        .font(.footnote.monospaced())
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
                 }
-                .frame(minHeight: 160, maxHeight: 240)
             }
 
             Divider()
 
-            Text("Backend Logs")
+            Text("Manual Mode")
+                .font(.headline)
+            Text("Backend stdout is no longer piped into the app. Transcripts and errors from phone-originated requests will appear in the Terminal window where you launched the backend.")
+                .foregroundStyle(.secondary)
+
+            Divider()
+
+            Text("Status Checks")
                 .font(.headline)
             ScrollView {
                 VStack(alignment: .leading, spacing: 6) {
-                    ForEach(Array(controller.logLines.enumerated()), id: \.offset) { _, line in
-                        Text(line)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .font(.system(.footnote, design: .monospaced))
+                    if controller.logLines.isEmpty {
+                        Text("No status checks yet.")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(Array(controller.logLines.enumerated()), id: \.offset) { _, line in
+                            Text(line)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .font(.system(.footnote, design: .monospaced))
+                        }
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)

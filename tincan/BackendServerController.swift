@@ -5,20 +5,17 @@ import Foundation
 
 @MainActor
 final class BackendServerController: ObservableObject {
-    @Published private(set) var statusDescription = "Starting local backend…"
-    @Published private(set) var recentTranscripts: [String] = []
+    @Published private(set) var statusDescription = "Checking manual backend…"
     @Published private(set) var logLines: [String] = []
 
     let port: Int = BackendConnectionConfig.port
 
-    private var process: Process?
-    private var stdoutPipe: Pipe?
-    private var stderrPipe: Pipe?
+    private var isBackendReachable = false
 
     init() {
-        Task {
-            await start()
-        }
+        appendLog("Manual backend mode enabled")
+        appendLog("Run in Terminal: \(manualLaunchCommand)")
+        refresh()
     }
 
     var availableEndpoints: [String] {
@@ -41,98 +38,44 @@ final class BackendServerController: ObservableObject {
         BackendConnectionConfig.inferenceURLString
     }
 
-    func restart() {
-        stop()
+    var manualLaunchCommand: String {
+        "cd \(AppPaths.projectRoot.path) && uv run python -m \(AppPaths.backendServerModule) --host \(BackendConnectionConfig.bindHost) --port \(port)"
+    }
+
+    func refresh() {
         Task {
-            await start()
+            await refreshStatus()
         }
     }
 
-    func stop() {
-        process?.terminate()
-        process = nil
-        statusDescription = "Backend stopped"
-        appendLog("Stopped backend process")
+    var loopbackHealthEndpoint: String {
+        BackendConnectionConfig.loopbackHealthURLString
     }
 
-    private func start() async {
-        guard process?.isRunning != true else { return }
-        statusDescription = "Starting local backend…"
+    private func refreshStatus() async {
+        let result = await backendHealthCheck()
 
-        if await isExistingBackendReachable() {
-            statusDescription = "Backend already running on \(BackendConnectionConfig.bindHost):\(port)"
-            appendLog("Reusing existing backend on 127.0.0.1:\(port)")
-            return
-        }
-
-        let process = Process()
-        let stdout = Pipe()
-        let stderr = Pipe()
-
-        process.currentDirectoryURL = AppPaths.projectRoot
-        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        process.arguments = [
-            "-lc",
-            "uv run python -m \(AppPaths.backendServerModule) --host \(BackendConnectionConfig.bindHost) --port \(port)",
-        ]
-
-        var environment = ProcessInfo.processInfo.environment
-        environment["PYTHONUNBUFFERED"] = "1"
-        process.environment = environment
-        process.standardOutput = stdout
-        process.standardError = stderr
-
-        stdout.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            let data = handle.availableData
-            guard !data.isEmpty, let line = String(data: data, encoding: .utf8) else { return }
-            Task { @MainActor [weak self] in
-                self?.appendLog(line)
+        switch result {
+        case .reachable:
+            statusDescription = "Manual backend is reachable on 127.0.0.1:\(port)"
+            if !isBackendReachable {
+                appendLog("Health check passed on 127.0.0.1:\(port)")
             }
-        }
-
-        stderr.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            let data = handle.availableData
-            guard !data.isEmpty, let line = String(data: data, encoding: .utf8) else { return }
-            Task { @MainActor [weak self] in
-                self?.appendLog(line)
+            isBackendReachable = true
+        case let .unreachable(reason):
+            statusDescription = "Start the backend manually on 127.0.0.1:\(port)"
+            if isBackendReachable {
+                appendLog("Backend became unreachable: \(reason)")
+            } else {
+                appendLog("Health check failed: \(reason)")
             }
-        }
-
-        process.terminationHandler = { [weak self] process in
-            Task { [weak self] in
-                await self?.handleTermination(status: process.terminationStatus)
-            }
-        }
-
-        do {
-            try process.run()
-            self.process = process
-            self.stdoutPipe = stdout
-            self.stderrPipe = stderr
-            statusDescription = "Backend running on \(BackendConnectionConfig.bindHost):\(port)"
-            appendLog("Started backend in \(AppPaths.projectRoot.path)")
-        } catch {
-            statusDescription = "Failed to launch backend"
-            appendLog("Launch failed: \(error.localizedDescription)")
+            isBackendReachable = false
         }
     }
 
-    private func handleTermination(status: Int32) async {
-        process = nil
-
-        if status == 1, await isExistingBackendReachable() {
-            statusDescription = "Backend already running on \(BackendConnectionConfig.bindHost):\(port)"
-            appendLog("Backend launch found an existing server on port \(port); using that instance")
-            return
-        }
-
-        statusDescription = "Backend exited with code \(status)"
-        appendLog("Backend exited")
-    }
-
-    private func isExistingBackendReachable() async -> Bool {
+    private func backendHealthCheck() async -> BackendHealthResult {
         guard let url = URL(string: BackendConnectionConfig.loopbackHealthURLString) else {
-            return false
+            return .unreachable("invalid loopback health URL")
         }
 
         var request = URLRequest(url: url)
@@ -141,12 +84,16 @@ final class BackendServerController: ObservableObject {
         do {
             let (_, response) = try await URLSession.shared.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse else {
-                return false
+                return .unreachable("health endpoint returned a non-HTTP response")
             }
 
-            return (200..<300).contains(httpResponse.statusCode)
+            guard (200..<300).contains(httpResponse.statusCode) else {
+                return .unreachable("health endpoint returned HTTP \(httpResponse.statusCode)")
+            }
+
+            return .reachable
         } catch {
-            return false
+            return .unreachable(error.localizedDescription)
         }
     }
 
@@ -155,29 +102,17 @@ final class BackendServerController: ObservableObject {
             let rendered = String(line)
             guard !rendered.isEmpty else { continue }
 
-            if let transcript = transcriptPayload(from: rendered) {
-                recentTranscripts.insert(transcript, at: 0)
-                if recentTranscripts.count > 12 {
-                    recentTranscripts.removeLast(recentTranscripts.count - 12)
-                }
-            }
-
             logLines.insert(rendered, at: 0)
             if logLines.count > 120 {
                 logLines.removeLast(logLines.count - 120)
             }
         }
     }
+}
 
-    private func transcriptPayload(from logLine: String) -> String? {
-        let marker = "[tincan-backend] transcript"
-        guard logLine.hasPrefix(marker), let separatorRange = logLine.range(of: ": ") else {
-            return nil
-        }
-
-        let transcript = String(logLine[separatorRange.upperBound...]).trimmingCharacters(in: .whitespaces)
-        return transcript.isEmpty ? nil : transcript
-    }
+private enum BackendHealthResult {
+    case reachable
+    case unreachable(String)
 }
 
 private enum NetworkAddressProvider {
