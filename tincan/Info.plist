@@ -2,9 +2,17 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>tincan connects to your Mac-hosted coding backend over the local network.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>tincan uses the microphone to capture voice instructions for coding agents.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>remote-notification</string>
+		<string>audio</string>
+		<string>fetch</string>
+		<string>processing</string>
+		<string>voip</string>
 	</array>
 </dict>
 </plist>

@@ -6,6 +6,11 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		389AF1652F954C930031FFE3 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = 389AF1642F954C930031FFE3 /* FluidAudio */; };
+		389AF1672F954C930031FFE3 /* fluidaudiocli in Frameworks */ = {isa = PBXBuildFile; productRef = 389AF1662F954C930031FFE3 /* fluidaudiocli */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		389AF1402F95073E0031FFE3 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -65,6 +70,8 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				389AF1652F954C930031FFE3 /* FluidAudio in Frameworks */,
+				389AF1672F954C930031FFE3 /* fluidaudiocli in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -125,6 +132,8 @@
 			);
 			name = tincan;
 			packageProductDependencies = (
+				389AF1642F954C930031FFE3 /* FluidAudio */,
+				389AF1662F954C930031FFE3 /* fluidaudiocli */,
 			);
 			productName = tincan;
 			productReference = 389AF12E2F95073C0031FFE3 /* tincan.app */;
@@ -208,6 +217,9 @@
 			);
 			mainGroup = 389AF1252F95073C0031FFE3;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				389AF1632F954C930031FFE3 /* XCRemoteSwiftPackageReference "FluidAudio" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 389AF12F2F95073C0031FFE3 /* Products */;
 			projectDirPath = "";
@@ -292,8 +304,18 @@
 				DEVELOPMENT_TEAM = EPW5DK6JN4;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_INCOMING_NETWORK_CONNECTIONS = YES;
+				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
 				ENABLE_PREVIEWS = YES;
-				ENABLE_USER_SELECTED_FILES = readonly;
+				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = YES;
+				ENABLE_RESOURCE_ACCESS_BLUETOOTH = YES;
+				ENABLE_RESOURCE_ACCESS_CALENDARS = NO;
+				ENABLE_RESOURCE_ACCESS_CAMERA = NO;
+				ENABLE_RESOURCE_ACCESS_CONTACTS = NO;
+				ENABLE_RESOURCE_ACCESS_LOCATION = NO;
+				ENABLE_RESOURCE_ACCESS_PRINTING = NO;
+				ENABLE_RESOURCE_ACCESS_USB = NO;
+				ENABLE_USER_SELECTED_FILES = readwrite;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = tincan/Info.plist;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
@@ -337,8 +359,18 @@
 				DEVELOPMENT_TEAM = EPW5DK6JN4;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_INCOMING_NETWORK_CONNECTIONS = YES;
+				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
 				ENABLE_PREVIEWS = YES;
-				ENABLE_USER_SELECTED_FILES = readonly;
+				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = YES;
+				ENABLE_RESOURCE_ACCESS_BLUETOOTH = YES;
+				ENABLE_RESOURCE_ACCESS_CALENDARS = NO;
+				ENABLE_RESOURCE_ACCESS_CAMERA = NO;
+				ENABLE_RESOURCE_ACCESS_CONTACTS = NO;
+				ENABLE_RESOURCE_ACCESS_LOCATION = NO;
+				ENABLE_RESOURCE_ACCESS_PRINTING = NO;
+				ENABLE_RESOURCE_ACCESS_USB = NO;
+				ENABLE_USER_SELECTED_FILES = readwrite;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = tincan/Info.plist;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
@@ -630,6 +662,30 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		389AF1632F954C930031FFE3 /* XCRemoteSwiftPackageReference "FluidAudio" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/FluidInference/FluidAudio.git";
+			requirement = {
+				kind = exactVersion;
+				version = 0.13.6;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		389AF1642F954C930031FFE3 /* FluidAudio */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 389AF1632F954C930031FFE3 /* XCRemoteSwiftPackageReference "FluidAudio" */;
+			productName = FluidAudio;
+		};
+		389AF1662F954C930031FFE3 /* fluidaudiocli */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 389AF1632F954C930031FFE3 /* XCRemoteSwiftPackageReference "FluidAudio" */;
+			productName = fluidaudiocli;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 389AF1262F95073C0031FFE3 /* Project object */;
 }

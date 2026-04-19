@@ -312,9 +312,38 @@ These are not yet fully resolved:
 The current v1 direction is:
 
 - call-like app on iPhone, iPad, and Mac
-- local VAD + speaker filtering on device
-- owner voice enrollment plus fixed-phrase fallback
-- backend as canonical STT and orchestration layer
+- embedded Swift backend hosted by the Mac app
 - pluggable coding-agent profiles
+- OpenCode-driven execution through `opencode run`
+- OpenCode plugin hooks forwarding session events back to the tincan backend
 - stable session identities like `atlas#41`
-- local TTS playback with profile/session voice identity
+- no speaker identification in the first shipping cut
+- transcript-in, CLI-run-out as the first end-to-end verification path
+
+## V1 Reset
+
+The first buildable version is intentionally narrower than the broader long-term spec above.
+
+For v1:
+
+- the phone client does not perform speaker identification
+- the backend does not receive multiple-speaker filtering signals
+- the immediate goal is to prove the orchestration loop from call transcript to coding-agent execution
+
+The concrete v1 execution flow is:
+
+1. the phone client captures or simulates a transcript
+2. the client sends that transcript to the Mac app's embedded Swift backend
+3. the backend selects an agent profile
+4. the backend shells out to `opencode run`
+5. an embedded OpenCode plugin forwards hook events back to the same Swift backend
+6. the backend returns the final result to the client
+
+This v1 is therefore centered on:
+
+- `agent profiles`
+- `opencode run`
+- `opencode` plugin hooks
+- Mac-side Swift orchestration
+
+Audio capture, STT, and call UX still matter, but they sit on top of this loop rather than replacing it.
