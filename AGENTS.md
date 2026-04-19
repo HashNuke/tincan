@@ -10,3 +10,7 @@ Primary functionality
 * The backend uses a speech-to-text model (nvidia parakeet) via mlx-audio-swift library to understand what I'm saying.
 * And then execute it with one of the coding agents running. It could be sending a message to an existing session, or creating a new session.
 * Since we stay on call all day, I want you to use speaker diarization to identify what audio I speak vs what others speak (so that you can ignore stuff others say). FluidAudio library provides speaker diarization.
+
+## Reference
+
+FluidAudio source code is available in ~/sources/FluidAudio
