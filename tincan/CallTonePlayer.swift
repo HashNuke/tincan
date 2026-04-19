@@ -7,6 +7,8 @@ final class CallTonePlayer: NSObject, AVAudioPlayerDelegate {
 
     private var activePlayers: [AVAudioPlayer] = []
     private var ambientPlayer: AVAudioPlayer?
+    private let ambientBaseVolume: Float = 0.35
+    private let ambientDuckedVolume: Float = 0.03
 
     func playConnectTone() {
         playTone(sequence: [
@@ -30,7 +32,7 @@ final class CallTonePlayer: NSObject, AVAudioPlayerDelegate {
             let audioData = try ToneWaveform.renderNoiseBed(duration: 1.2)
             let player = try AVAudioPlayer(data: audioData)
             player.numberOfLoops = -1
-            player.volume = 0.35
+            player.volume = ambientBaseVolume
             player.prepareToPlay()
             player.play()
             ambientPlayer = player
@@ -42,6 +44,14 @@ final class CallTonePlayer: NSObject, AVAudioPlayerDelegate {
     func stopCallBed() {
         ambientPlayer?.stop()
         ambientPlayer = nil
+    }
+
+    func duckCallBed() {
+        ambientPlayer?.setVolume(ambientDuckedVolume, fadeDuration: 0.05)
+    }
+
+    func unduckCallBed() {
+        ambientPlayer?.setVolume(ambientBaseVolume, fadeDuration: 0.2)
     }
 
     private func playTone(sequence: [ToneSegment]) {

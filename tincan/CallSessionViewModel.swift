@@ -146,5 +146,13 @@ extension CallSessionViewModel: AudioTurnPipelineOutput {
     func audioTurnPipelineDidProduceSegment(_ data: Data, duration: TimeInterval) {
         uploadSegment(data, duration: duration)
     }
+
+    func audioTurnPipelineDidDetectSpeechStart() {
+        tonePlayer.duckCallBed()
+    }
+
+    func audioTurnPipelineDidDetectSpeechEnd() {
+        tonePlayer.unduckCallBed()
+    }
 }
 #endif

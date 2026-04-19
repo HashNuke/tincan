@@ -33,6 +33,7 @@ final class MacCallSessionViewModel: ObservableObject {
                 try await audioPipeline.start()
                 callStateDescription = "Listening"
                 isCallActive = true
+                tonePlayer.startCallBed()
                 tonePlayer.playConnectTone()
             } catch {
                 callStateDescription = "Audio start failed"
@@ -46,6 +47,7 @@ final class MacCallSessionViewModel: ObservableObject {
             await audioPipeline.stop()
             callStateDescription = "Disconnected"
             isCallActive = false
+            tonePlayer.stopCallBed()
             tonePlayer.playDisconnectTone()
         }
     }
@@ -94,6 +96,14 @@ extension MacCallSessionViewModel: AudioTurnPipelineOutput {
 
     func audioTurnPipelineDidProduceSegment(_ data: Data, duration: TimeInterval) {
         uploadSegment(data, duration: duration)
+    }
+
+    func audioTurnPipelineDidDetectSpeechStart() {
+        tonePlayer.duckCallBed()
+    }
+
+    func audioTurnPipelineDidDetectSpeechEnd() {
+        tonePlayer.unduckCallBed()
     }
 }
 #endif
