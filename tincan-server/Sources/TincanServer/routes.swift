@@ -7,7 +7,14 @@ func routes(_ app: Application) throws {
     }
 
     app.get("health") { req async throws -> HealthResponse in
-        await req.application.tincanInferenceService.health()
+        async let inferenceHealth = req.application.tincanInferenceService.health()
+        async let ttsHealth = req.application.tincanSpeechService.health()
+        return await HealthResponse(
+            status: "ok",
+            modelCacheDirectory: inferenceHealth.modelCacheDirectory,
+            isModelReady: inferenceHealth.isModelReady,
+            tts: ttsHealth
+        )
     }
 
     app.on(.POST, "infer", body: .collect(maxSize: "25mb")) { req async throws -> InferResponse in
@@ -39,11 +46,30 @@ func routes(_ app: Application) throws {
             throw Abort(.internalServerError, reason: error.localizedDescription)
         }
     }
+
+    app.post("speak") { req async throws -> Response in
+        let request = try req.content.decode(SpeakRequest.self)
+        let audioData = try await req.application.tincanSpeechService.synthesize(text: request.text)
+
+        var headers = HTTPHeaders()
+        headers.replaceOrAdd(name: .contentType, value: "audio/wav")
+        return Response(
+            status: .ok,
+            headers: headers,
+            body: .init(data: audioData)
+        )
+    }
 }
 
 struct HealthResponse: Content {
     let status: String
     let modelCacheDirectory: String
+    let isModelReady: Bool
+    let tts: TtsHealthResponse
+}
+
+struct TtsHealthResponse: Content {
+    let defaultVoice: String
     let isModelReady: Bool
 }
 
@@ -55,4 +81,8 @@ struct InferResponse: Content {
         case requestID = "requestId"
         case transcript
     }
+}
+
+struct SpeakRequest: Content {
+    let text: String
 }

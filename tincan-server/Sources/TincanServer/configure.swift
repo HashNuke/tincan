@@ -6,6 +6,7 @@ public func configure(_ app: Application) async throws {
     app.http.server.configuration.port = 8004
 
     app.tincanInferenceService = TincanInferenceService()
+    app.tincanSpeechService = TincanSpeechService()
     app.opencodeRunner = OpencodeRunner()
 
     try routes(app)

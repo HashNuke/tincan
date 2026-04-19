@@ -11,9 +11,8 @@ actor TincanInferenceService {
 
     private var state: State = .idle
 
-    func health() -> HealthResponse {
-        HealthResponse(
-            status: "ok",
+    func health() -> AsrHealthResponse {
+        AsrHealthResponse(
             modelCacheDirectory: AsrModels.defaultCacheDirectory().path,
             isModelReady: isModelReady
         )
@@ -78,4 +77,9 @@ extension Application {
             storage[TincanInferenceServiceKey.self] = newValue
         }
     }
+}
+
+struct AsrHealthResponse: Sendable {
+    let modelCacheDirectory: String
+    let isModelReady: Bool
 }
