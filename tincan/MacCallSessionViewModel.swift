@@ -15,7 +15,6 @@ final class MacCallSessionViewModel: ObservableObject {
     private let inferenceClient = BackendInferenceClient()
     private let tonePlayer = CallTonePlayer.shared
     private let backendURL = URL(string: BackendConnectionConfig.loopbackInferenceURLString)
-    private var callBedRestoreTask: Task<Void, Never>?
 
     init() {
         audioPipeline.setDelegate(self)
@@ -42,7 +41,6 @@ final class MacCallSessionViewModel: ObservableObject {
                 try await audioPipeline.start()
                 callStateDescription = "Listening"
                 isCallActive = true
-                tonePlayer.startCallBed()
                 tonePlayer.playConnectTone()
             } catch {
                 callStateDescription = "Audio start failed"
@@ -60,9 +58,6 @@ final class MacCallSessionViewModel: ObservableObject {
             await audioPipeline.stop()
             callStateDescription = "Disconnected"
             isCallActive = false
-            callBedRestoreTask?.cancel()
-            callBedRestoreTask = nil
-            tonePlayer.stopCallBed()
             tonePlayer.playDisconnectTone()
             isTransitioningCallState = false
         }
@@ -112,29 +107,6 @@ extension MacCallSessionViewModel: AudioTurnPipelineOutput {
 
     func audioTurnPipelineDidProduceSegment(_ data: Data, duration: TimeInterval) {
         uploadSegment(data, duration: duration)
-    }
-
-    func audioTurnPipelineDidDetectInputActivity() {
-        tonePlayer.duckCallBed()
-        scheduleCallBedRestore()
-    }
-
-    func audioTurnPipelineDidDetectSpeechStart() {
-        tonePlayer.duckCallBed()
-        scheduleCallBedRestore()
-    }
-
-    func audioTurnPipelineDidDetectSpeechEnd() {
-        tonePlayer.unduckCallBed()
-    }
-
-    private func scheduleCallBedRestore() {
-        callBedRestoreTask?.cancel()
-        callBedRestoreTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(1200))
-            guard let self, self.isCallActive else { return }
-            self.tonePlayer.unduckCallBed()
-        }
     }
 }
 #endif
