@@ -6,9 +6,10 @@ import Foundation
 @MainActor
 final class BackendServerController: ObservableObject {
     @Published private(set) var statusDescription = "Starting local backend…"
+    @Published private(set) var recentTranscripts: [String] = []
     @Published private(set) var logLines: [String] = []
 
-    let port: Int = 52_734
+    let port: Int = BackendConnectionConfig.port
 
     private var process: Process?
     private var stdoutPipe: Pipe?
@@ -19,16 +20,23 @@ final class BackendServerController: ObservableObject {
     }
 
     var availableEndpoints: [String] {
-        let addresses = NetworkAddressProvider.localIPv4Addresses()
-        if addresses.isEmpty {
-            return ["http://127.0.0.1:\(port)/infer"]
+        var endpoints = [
+            BackendConnectionConfig.inferenceURLString,
+            BackendConnectionConfig.loopbackInferenceURLString,
+        ]
+
+        for address in NetworkAddressProvider.localIPv4Addresses() {
+            let endpoint = "http://\(address):\(port)\(BackendConnectionConfig.inferencePath)"
+            if !endpoints.contains(endpoint) {
+                endpoints.append(endpoint)
+            }
         }
 
-        return addresses.map { "http://\($0):\(port)/infer" }
+        return endpoints
     }
 
     var primaryEndpoint: String? {
-        availableEndpoints.first
+        BackendConnectionConfig.inferenceURLString
     }
 
     func restart() {
@@ -59,7 +67,7 @@ final class BackendServerController: ObservableObject {
             "-m",
             AppPaths.backendServerModule,
             "--host",
-            "0.0.0.0",
+            BackendConnectionConfig.bindHost,
             "--port",
             String(port),
         ]
@@ -99,7 +107,7 @@ final class BackendServerController: ObservableObject {
             self.process = process
             self.stdoutPipe = stdout
             self.stderrPipe = stderr
-            statusDescription = "Backend running on port \(port)"
+            statusDescription = "Backend running on \(BackendConnectionConfig.bindHost):\(port)"
             appendLog("Started backend in \(AppPaths.projectRoot.path)")
         } catch {
             statusDescription = "Failed to launch backend"
@@ -111,11 +119,29 @@ final class BackendServerController: ObservableObject {
         for line in rawLine.split(whereSeparator: \.isNewline) {
             let rendered = String(line)
             guard !rendered.isEmpty else { continue }
+
+            if let transcript = transcriptPayload(from: rendered) {
+                recentTranscripts.insert(transcript, at: 0)
+                if recentTranscripts.count > 12 {
+                    recentTranscripts.removeLast(recentTranscripts.count - 12)
+                }
+            }
+
             logLines.insert(rendered, at: 0)
             if logLines.count > 120 {
                 logLines.removeLast(logLines.count - 120)
             }
         }
+    }
+
+    private func transcriptPayload(from logLine: String) -> String? {
+        let marker = "[tincan-backend] transcript"
+        guard logLine.hasPrefix(marker), let separatorRange = logLine.range(of: ": ") else {
+            return nil
+        }
+
+        let transcript = String(logLine[separatorRange.upperBound...]).trimmingCharacters(in: .whitespaces)
+        return transcript.isEmpty ? nil : transcript
     }
 }
 

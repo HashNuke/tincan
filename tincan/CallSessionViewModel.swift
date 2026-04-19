@@ -5,7 +5,7 @@ import Foundation
 
 @MainActor
 final class CallSessionViewModel: ObservableObject {
-    @Published var backendURLString: String = UserDefaults.standard.string(forKey: Self.backendURLKey) ?? Self.defaultBackendURL
+    @Published var backendURLString: String = Self.initialBackendURL()
     @Published var callStateDescription = "Idle"
     @Published var lastServerTranscript = ""
     @Published var logLines: [String] = []
@@ -16,7 +16,11 @@ final class CallSessionViewModel: ObservableObject {
     private let inferenceClient = BackendInferenceClient()
 
     private static let backendURLKey = "backend_url"
-    private static let defaultBackendURL = "http://127.0.0.1:52734/infer"
+    private static let defaultBackendURL = BackendConnectionConfig.inferenceURLString
+    private static let legacyDefaultBackendURLs: Set<String> = [
+        "http://127.0.0.1:52734/infer",
+        "http://127.0.0.1:8004/infer",
+    ]
 
     init() {
         callKitController.delegate = self
@@ -52,6 +56,20 @@ final class CallSessionViewModel: ObservableObject {
 
     private func persistBackendURL() {
         UserDefaults.standard.set(backendURLString, forKey: Self.backendURLKey)
+    }
+
+    private static func initialBackendURL() -> String {
+        let storedValue = UserDefaults.standard.string(forKey: backendURLKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let storedValue, !storedValue.isEmpty else {
+            return defaultBackendURL
+        }
+
+        if legacyDefaultBackendURLs.contains(storedValue) {
+            return defaultBackendURL
+        }
+
+        return storedValue
     }
 
     private func appendLog(_ message: String) {

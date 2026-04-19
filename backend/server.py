@@ -16,7 +16,7 @@ import uvicorn
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_HOST = "0.0.0.0"
-DEFAULT_PORT = 52734
+DEFAULT_PORT = 8004
 
 app = FastAPI(title="tincan local backend", version="0.1.0")
 

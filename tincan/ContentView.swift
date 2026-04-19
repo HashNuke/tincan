@@ -26,12 +26,12 @@ private struct IOSCallView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Backend URL")
                             .font(.headline)
-                        TextField("http://192.168.1.10:52734/infer", text: $viewModel.backendURLString)
+                        TextField(BackendConnectionConfig.inferenceURLString, text: $viewModel.backendURLString)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                             .keyboardType(.URL)
                             .textFieldStyle(.roundedBorder)
-                        Text("Use `http://127.0.0.1:52734/infer` on Simulator, or your Mac's LAN IP on a device.")
+                        Text("Device builds should use `\(BackendConnectionConfig.inferenceURLString)`. `localhost` only works on the same machine.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
@@ -126,6 +126,28 @@ private struct MacBackendView: View {
                 Button("Stop Backend") {
                     controller.stop()
                 }
+            }
+
+            Divider()
+
+            Text("Live Transcripts")
+                .font(.headline)
+            if controller.recentTranscripts.isEmpty {
+                Text("Speech from the phone will appear here once the backend receives a turn.")
+                    .foregroundStyle(.secondary)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(Array(controller.recentTranscripts.enumerated()), id: \.offset) { _, transcript in
+                            Text(transcript)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(12)
+                                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(minHeight: 160, maxHeight: 240)
             }
 
             Divider()
