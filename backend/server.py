@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import time
 import uuid
+import wave
 from functools import lru_cache
 from pathlib import Path
 
@@ -69,20 +70,83 @@ def transcribe_wav(audio_path: Path) -> str:
     elapsed = time.monotonic() - started_at
 
     if completed.returncode != 0:
-        stderr = completed.stderr.strip()
-        stdout = completed.stdout.strip()
-        raise RuntimeError(
-            f"FluidAudio transcription failed after {elapsed:.2f}s\nstdout:\n{stdout}\nstderr:\n{stderr}"
-        )
+        raise RuntimeError(build_transcription_failure(
+            audio_path=audio_path,
+            elapsed=elapsed,
+            stdout=completed.stdout,
+            stderr=completed.stderr,
+            reason="fluidaudiocli exited with a non-zero status",
+        ))
 
     try:
-        output = json.loads(json_path.read_text())
+        json_text = json_path.read_text().strip()
     finally:
         json_path.unlink(missing_ok=True)
+
+    if not json_text:
+        raise RuntimeError(build_transcription_failure(
+            audio_path=audio_path,
+            elapsed=elapsed,
+            stdout=completed.stdout,
+            stderr=completed.stderr,
+            reason="fluidaudiocli produced no JSON output",
+        ))
+
+    try:
+        output = json.loads(json_text)
+    except json.JSONDecodeError as error:
+        raise RuntimeError(build_transcription_failure(
+            audio_path=audio_path,
+            elapsed=elapsed,
+            stdout=completed.stdout,
+            stderr=completed.stderr,
+            reason=f"invalid JSON output: {error}",
+        )) from error
 
     transcript = str(output.get("text", "")).strip()
     print(f"[tincan-backend] transcript ({elapsed:.2f}s): {transcript}", flush=True)
     return transcript
+
+
+def build_transcription_failure(
+    *,
+    audio_path: Path,
+    elapsed: float,
+    stdout: str,
+    stderr: str,
+    reason: str,
+) -> str:
+    details = describe_audio_file(audio_path)
+    return (
+        f"FluidAudio transcription failed after {elapsed:.2f}s: {reason}\n"
+        f"audio:\n{details}\n"
+        f"stdout:\n{stdout.strip()}\n"
+        f"stderr:\n{stderr.strip()}"
+    )
+
+
+def describe_audio_file(audio_path: Path) -> str:
+    size = audio_path.stat().st_size
+    header_hex = audio_path.read_bytes()[:16].hex(" ")
+
+    description = [
+        f"path={audio_path}",
+        f"size_bytes={size}",
+        f"header_hex={header_hex}",
+    ]
+
+    try:
+        with wave.open(str(audio_path), "rb") as wav_file:
+            description.extend([
+                f"channels={wav_file.getnchannels()}",
+                f"sample_width={wav_file.getsampwidth()}",
+                f"sample_rate={wav_file.getframerate()}",
+                f"frame_count={wav_file.getnframes()}",
+            ])
+    except wave.Error as error:
+        description.append(f"wave_error={error}")
+
+    return "\n".join(description)
 
 
 @app.get("/health")
