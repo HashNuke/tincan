@@ -59,17 +59,10 @@ final class BackendServerController: ObservableObject {
         let stderr = Pipe()
 
         process.currentDirectoryURL = AppPaths.projectRoot
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
         process.arguments = [
-            "uv",
-            "run",
-            "python",
-            "-m",
-            AppPaths.backendServerModule,
-            "--host",
-            BackendConnectionConfig.bindHost,
-            "--port",
-            String(port),
+            "-lc",
+            "uv run python -m \(AppPaths.backendServerModule) --host \(BackendConnectionConfig.bindHost) --port \(port)",
         ]
 
         var environment = ProcessInfo.processInfo.environment
