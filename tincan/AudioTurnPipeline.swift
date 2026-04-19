@@ -8,6 +8,7 @@ import Foundation
 protocol AudioTurnPipelineOutput: AnyObject {
     func audioTurnPipelineDidLog(_ message: String)
     func audioTurnPipelineDidProduceSegment(_ data: Data, duration: TimeInterval)
+    func audioTurnPipelineDidDetectInputActivity()
     func audioTurnPipelineDidDetectSpeechStart()
     func audioTurnPipelineDidDetectSpeechEnd()
 }
@@ -61,6 +62,11 @@ final class AudioTurnPipeline {
             guard let self else { return }
             do {
                 let resampled = try self.tapAudioConverter.resampleBuffer(buffer)
+                if Self.containsInputActivity(resampled) {
+                    Task {
+                        await self.sink.emitInputActivity()
+                    }
+                }
                 self.audioStreamContinuation?.yield(resampled)
             } catch {
                 Task {
@@ -88,6 +94,14 @@ final class AudioTurnPipeline {
         await turnDetector.reset()
         await sink.emitLog("Microphone capture stopped")
     }
+
+    private static func containsInputActivity(_ samples: [Float]) -> Bool {
+        guard !samples.isEmpty else { return false }
+        let energy = samples.reduce(into: Float.zero) { partialResult, sample in
+            partialResult += sample * sample
+        } / Float(samples.count)
+        return energy > 0.00015
+    }
 }
 
 private enum AudioTurnPipelineError: LocalizedError {
@@ -114,6 +128,10 @@ private actor TurnEventSink {
 
     func emitSegment(_ data: Data, duration: TimeInterval) async {
         await delegate?.audioTurnPipelineDidProduceSegment(data, duration: duration)
+    }
+
+    func emitInputActivity() async {
+        await delegate?.audioTurnPipelineDidDetectInputActivity()
     }
 
     func emitSpeechStart() async {
@@ -253,6 +271,7 @@ private actor VadTurnDetector {
 }
 
 extension AudioTurnPipelineOutput {
+    func audioTurnPipelineDidDetectInputActivity() {}
     func audioTurnPipelineDidDetectSpeechStart() {}
     func audioTurnPipelineDidDetectSpeechEnd() {}
 }
