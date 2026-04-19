@@ -95,76 +95,46 @@ private struct MacBackendView: View {
     @ObservedObject var callSession: MacCallSessionViewModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Local Backend")
+        VStack(alignment: .leading, spacing: 18) {
+            Text("tincan")
                 .font(.largeTitle.weight(.bold))
 
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Local Call")
-                    .font(.headline)
+            HStack(spacing: 12) {
+                Button("Call") {
+                    callSession.startCall()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(callSession.isCallActive)
+
+                Button("Disconnect") {
+                    callSession.endCall()
+                }
+                .buttonStyle(.bordered)
+                .disabled(!callSession.isCallActive)
+
+                Spacer()
+
                 Text(callSession.callStateDescription)
                     .font(.title3.weight(.semibold))
-
-                HStack(spacing: 12) {
-                    Button("Call") {
-                        callSession.startCall()
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(callSession.isCallActive)
-
-                    Button("Disconnect") {
-                        callSession.endCall()
-                    }
-                    .buttonStyle(.bordered)
-                    .disabled(!callSession.isCallActive)
-                }
-
-                if !callSession.lastServerTranscript.isEmpty {
-                    Text("Latest Local Transcript")
-                        .font(.headline)
-                        .padding(.top, 4)
-                    Text(callSession.lastServerTranscript)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(12)
-                        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
-                }
             }
 
-            Text(controller.statusDescription)
-                .font(.title3.weight(.semibold))
-
-            if let primaryEndpoint = controller.primaryEndpoint {
-                LabeledContent("Primary Endpoint") {
-                    Text(primaryEndpoint)
-                        .textSelection(.enabled)
-                }
-            }
-
-            if !controller.availableEndpoints.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Reachable Endpoints")
-                        .font(.headline)
-                    ForEach(controller.availableEndpoints, id: \.self) { endpoint in
-                        Text(endpoint)
-                            .textSelection(.enabled)
-                    }
-                }
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Run Backend Manually")
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Server Diagnostics")
                     .font(.headline)
-                Text("The macOS app does not start or stop the Python backend. Launch it in Terminal with:")
-                    .foregroundStyle(.secondary)
-                Text(controller.manualLaunchCommand)
-                    .textSelection(.enabled)
-                    .font(.system(.footnote, design: .monospaced))
-                    .padding(12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+
+                Text(controller.statusDescription)
+                    .font(.title3.weight(.semibold))
+
+                if let primaryEndpoint = controller.primaryEndpoint {
+                    LabeledContent("Endpoint") {
+                        Text(primaryEndpoint)
+                            .textSelection(.enabled)
+                            .font(.footnote.monospaced())
+                    }
+                }
 
                 HStack(spacing: 12) {
-                    Button("Refresh Status") {
+                    Button("Refresh") {
                         controller.refresh()
                     }
 
@@ -173,57 +143,19 @@ private struct MacBackendView: View {
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                 }
-            }
 
-            Divider()
-
-            Text("Manual Mode")
-                .font(.headline)
-            Text("Backend stdout is no longer piped into the app. Transcripts and errors from phone-originated requests will appear in the Terminal window where you launched the backend.")
-                .foregroundStyle(.secondary)
-
-            Divider()
-
-            Text("Status Checks")
-                .font(.headline)
-            ScrollView {
-                VStack(alignment: .leading, spacing: 6) {
-                    if controller.logLines.isEmpty {
-                        Text("No status checks yet.")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(Array(controller.logLines.enumerated()), id: \.offset) { _, line in
-                            Text(line)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .font(.system(.footnote, design: .monospaced))
-                        }
-                    }
+                if let latestLog = controller.logLines.first {
+                    Text(latestLog)
+                        .font(.footnote.monospaced())
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
-
-            Divider()
-
-            Text("Call Activity")
-                .font(.headline)
-            ScrollView {
-                VStack(alignment: .leading, spacing: 6) {
-                    if callSession.logLines.isEmpty {
-                        Text("No call activity yet.")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(Array(callSession.logLines.enumerated()), id: \.offset) { _, line in
-                            Text(line)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .font(.system(.footnote, design: .monospaced))
-                        }
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
+            .padding(16)
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
         }
         .padding(24)
-        .frame(minWidth: 680, minHeight: 620)
+        .frame(minWidth: 560, minHeight: 220)
     }
 }
 #endif
