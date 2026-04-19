@@ -8,9 +8,6 @@ import Foundation
 protocol AudioTurnPipelineOutput: AnyObject {
     func audioTurnPipelineDidLog(_ message: String)
     func audioTurnPipelineDidProduceSegment(_ data: Data, duration: TimeInterval)
-    func audioTurnPipelineDidDetectInputActivity()
-    func audioTurnPipelineDidDetectSpeechStart()
-    func audioTurnPipelineDidDetectSpeechEnd()
 }
 
 final class AudioTurnPipeline {
@@ -62,11 +59,6 @@ final class AudioTurnPipeline {
             guard let self else { return }
             do {
                 let resampled = try self.tapAudioConverter.resampleBuffer(buffer)
-                if Self.containsInputActivity(resampled) {
-                    Task {
-                        await self.sink.emitInputActivity()
-                    }
-                }
                 self.audioStreamContinuation?.yield(resampled)
             } catch {
                 Task {
@@ -94,14 +86,6 @@ final class AudioTurnPipeline {
         await turnDetector.reset()
         await sink.emitLog("Microphone capture stopped")
     }
-
-    private static func containsInputActivity(_ samples: [Float]) -> Bool {
-        guard !samples.isEmpty else { return false }
-        let energy = samples.reduce(into: Float.zero) { partialResult, sample in
-            partialResult += sample * sample
-        } / Float(samples.count)
-        return energy > 0.00015
-    }
 }
 
 private enum AudioTurnPipelineError: LocalizedError {
@@ -128,18 +112,6 @@ private actor TurnEventSink {
 
     func emitSegment(_ data: Data, duration: TimeInterval) async {
         await delegate?.audioTurnPipelineDidProduceSegment(data, duration: duration)
-    }
-
-    func emitInputActivity() async {
-        await delegate?.audioTurnPipelineDidDetectInputActivity()
-    }
-
-    func emitSpeechStart() async {
-        await delegate?.audioTurnPipelineDidDetectSpeechStart()
-    }
-
-    func emitSpeechEnd() async {
-        await delegate?.audioTurnPipelineDidDetectSpeechEnd()
     }
 }
 
@@ -181,9 +153,6 @@ private actor VadTurnDetector {
     }
 
     func reset() async {
-        if currentSpeechStartSample != nil {
-            await sink.emitSpeechEnd()
-        }
         streamState = VadStreamState.initial()
         pendingSamples.removeAll(keepingCapacity: true)
         bufferedSamples.removeAll(keepingCapacity: true)
@@ -213,7 +182,6 @@ private actor VadTurnDetector {
             if event.isStart {
                 currentSpeechStartSample = event.sampleIndex
                 await sink.emitLog("Speech detected")
-                await sink.emitSpeechStart()
             } else if event.isEnd {
                 try await finalizeSegment(endSample: event.sampleIndex)
             }
@@ -234,7 +202,6 @@ private actor VadTurnDetector {
         let turnSamples = Array(bufferedSamples[localStart..<localEnd])
         let duration = Double(turnSamples.count) / Double(VadManager.sampleRate)
         self.currentSpeechStartSample = nil
-        await sink.emitSpeechEnd()
 
         pruneProcessedAudio(localEnd)
 
@@ -268,11 +235,5 @@ private actor VadTurnDetector {
         .cpuAndNeuralEngine
 #endif
     }
-}
-
-extension AudioTurnPipelineOutput {
-    func audioTurnPipelineDidDetectInputActivity() {}
-    func audioTurnPipelineDidDetectSpeechStart() {}
-    func audioTurnPipelineDidDetectSpeechEnd() {}
 }
 #endif
