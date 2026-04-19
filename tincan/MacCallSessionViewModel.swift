@@ -9,6 +9,7 @@ final class MacCallSessionViewModel: ObservableObject {
     @Published private(set) var lastServerTranscript = ""
     @Published private(set) var logLines: [String] = []
     @Published private(set) var isCallActive = false
+    @Published private(set) var isTransitioningCallState = false
 
     private let audioPipeline = AudioTurnPipeline()
     private let inferenceClient = BackendInferenceClient()
@@ -21,11 +22,18 @@ final class MacCallSessionViewModel: ObservableObject {
     }
 
     func startCall() {
+        guard !isCallActive, !isTransitioningCallState else {
+            appendLog("Ignored duplicate call start request")
+            return
+        }
+
+        isTransitioningCallState = true
         Task {
             let hasPermission = await requestMicrophonePermission()
             guard hasPermission else {
                 callStateDescription = "Microphone permission required"
                 appendLog("Microphone permission was denied")
+                isTransitioningCallState = false
                 return
             }
 
@@ -39,16 +47,21 @@ final class MacCallSessionViewModel: ObservableObject {
                 callStateDescription = "Audio start failed"
                 appendLog("Failed to start audio pipeline: \(error.localizedDescription)")
             }
+
+            isTransitioningCallState = false
         }
     }
 
     func endCall() {
+        guard isCallActive || isTransitioningCallState else { return }
+        isTransitioningCallState = true
         Task {
             await audioPipeline.stop()
             callStateDescription = "Disconnected"
             isCallActive = false
             tonePlayer.stopCallBed()
             tonePlayer.playDisconnectTone()
+            isTransitioningCallState = false
         }
     }
 

@@ -10,6 +10,7 @@ final class CallSessionViewModel: ObservableObject {
     @Published var lastServerTranscript = ""
     @Published var logLines: [String] = []
     @Published var isCallActive = false
+    @Published var isTransitioningCallState = false
 
     private let callKitController = CallKitController()
     private let audioPipeline = AudioTurnPipeline()
@@ -30,11 +31,18 @@ final class CallSessionViewModel: ObservableObject {
     }
 
     func startCall() {
+        guard !isCallActive, !isTransitioningCallState else {
+            appendLog("Ignored duplicate call start request")
+            return
+        }
+
+        isTransitioningCallState = true
         Task {
             let hasPermission = await requestMicrophonePermission()
             guard hasPermission else {
                 appendLog("Microphone permission was denied")
                 callStateDescription = "Microphone permission required"
+                isTransitioningCallState = false
                 return
             }
 
@@ -44,6 +52,8 @@ final class CallSessionViewModel: ObservableObject {
     }
 
     func endCall() {
+        guard isCallActive || isTransitioningCallState else { return }
+        isTransitioningCallState = true
         callKitController.endCall()
     }
 
@@ -118,6 +128,8 @@ extension CallSessionViewModel: CallKitControllerDelegate {
                 callStateDescription = "Audio start failed"
                 appendLog("Failed to start audio pipeline: \(error.localizedDescription)")
             }
+
+            isTransitioningCallState = false
         }
     }
 
@@ -128,12 +140,15 @@ extension CallSessionViewModel: CallKitControllerDelegate {
             isCallActive = false
             tonePlayer.stopCallBed()
             tonePlayer.playDisconnectTone()
+            isTransitioningCallState = false
         }
     }
 
     func callKitController(_ controller: CallKitController, didFail message: String) {
         callStateDescription = "Call failed"
         tonePlayer.stopCallBed()
+        isCallActive = false
+        isTransitioningCallState = false
         appendLog("CallKit error: \(message)")
     }
 }
