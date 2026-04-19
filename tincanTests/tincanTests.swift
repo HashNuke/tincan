@@ -1,0 +1,18 @@
+//
+//  tincanTests.swift
+//  tincanTests
+//
+//  Created by Akash Manohar John on 19/04/26.
+//
+
+import Testing
+
+struct tincanTests {
+
+    @Test func example() async throws {
+        // Write your test here and use APIs like `#expect(...)` to check expected conditions.
+        // Swift Testing Documentation
+        // https://developer.apple.com/documentation/testing
+    }
+
+}
