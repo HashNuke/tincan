@@ -33,7 +33,6 @@ final class MacCallSessionViewModel: ObservableObject {
                 try await audioPipeline.start()
                 callStateDescription = "Listening"
                 isCallActive = true
-                tonePlayer.startCallBed()
                 tonePlayer.playConnectTone()
             } catch {
                 callStateDescription = "Audio start failed"
@@ -47,7 +46,6 @@ final class MacCallSessionViewModel: ObservableObject {
             await audioPipeline.stop()
             callStateDescription = "Disconnected"
             isCallActive = false
-            tonePlayer.stopCallBed()
             tonePlayer.playDisconnectTone()
         }
     }
