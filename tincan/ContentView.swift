@@ -118,6 +118,13 @@ private struct MacBackendView: View {
                     .font(.title3.weight(.semibold))
             }
 
+            if let latestCallLog = callSession.logLines.first {
+                Text(latestCallLog)
+                    .font(.footnote.monospaced())
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
             VStack(alignment: .leading, spacing: 10) {
                 Text("Server Diagnostics")
                     .font(.headline)

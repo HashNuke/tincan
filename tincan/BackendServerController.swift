@@ -35,7 +35,7 @@ final class BackendServerController: ObservableObject {
     }
 
     var primaryEndpoint: String? {
-        BackendConnectionConfig.inferenceURLString
+        BackendConnectionConfig.loopbackInferenceURLString
     }
 
     var manualLaunchCommand: String {

@@ -17,6 +17,7 @@ func routes(_ app: Application) throws {
 
         let requestID = UUID()
         let audioData = Data(body.readableBytesView)
+        req.logger.info("Received /infer request \(requestID) with \(audioData.count) bytes")
         let temporaryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(requestID.uuidString)
             .appendingPathExtension("wav")
