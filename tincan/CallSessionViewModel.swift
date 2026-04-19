@@ -112,6 +112,7 @@ extension CallSessionViewModel: CallKitControllerDelegate {
                 try await audioPipeline.start()
                 callStateDescription = "Listening"
                 isCallActive = true
+                tonePlayer.startCallBed()
                 tonePlayer.playConnectTone()
             } catch {
                 callStateDescription = "Audio start failed"
@@ -125,12 +126,14 @@ extension CallSessionViewModel: CallKitControllerDelegate {
             await audioPipeline.stop()
             callStateDescription = "Idle"
             isCallActive = false
+            tonePlayer.stopCallBed()
             tonePlayer.playDisconnectTone()
         }
     }
 
     func callKitController(_ controller: CallKitController, didFail message: String) {
         callStateDescription = "Call failed"
+        tonePlayer.stopCallBed()
         appendLog("CallKit error: \(message)")
     }
 }

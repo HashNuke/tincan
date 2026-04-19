@@ -6,6 +6,7 @@ final class CallTonePlayer: NSObject, AVAudioPlayerDelegate {
     static let shared = CallTonePlayer()
 
     private var activePlayers: [AVAudioPlayer] = []
+    private var ambientPlayer: AVAudioPlayer?
 
     func playConnectTone() {
         playTone(sequence: [
@@ -20,6 +21,27 @@ final class CallTonePlayer: NSObject, AVAudioPlayerDelegate {
             ToneSegment(frequency: 660, duration: 0.1),
             ToneSegment(frequency: 440, duration: 0.12),
         ])
+    }
+
+    func startCallBed() {
+        guard ambientPlayer == nil else { return }
+
+        do {
+            let audioData = try ToneWaveform.renderNoiseBed(duration: 1.2)
+            let player = try AVAudioPlayer(data: audioData)
+            player.numberOfLoops = -1
+            player.volume = 0.35
+            player.prepareToPlay()
+            player.play()
+            ambientPlayer = player
+        } catch {
+            assertionFailure("Failed to start call bed: \(error.localizedDescription)")
+        }
+    }
+
+    func stopCallBed() {
+        ambientPlayer?.stop()
+        ambientPlayer = nil
     }
 
     private func playTone(sequence: [ToneSegment]) {
@@ -71,6 +93,25 @@ private enum ToneWaveform {
                 var intSample = Int16(max(-1.0, min(1.0, sample)) * Double(Int16.max))
                 pcm.append(Data(bytes: &intSample, count: MemoryLayout<Int16>.size))
             }
+        }
+
+        return wavData(forPCM: pcm, sampleRate: sampleRate, channels: 1, bitsPerSample: 16)
+    }
+
+    static func renderNoiseBed(duration: TimeInterval, sampleRate: Int = 44_100) throws -> Data {
+        let frameCount = Int(duration * Double(sampleRate))
+        guard frameCount > 0 else { return Data() }
+
+        var pcm = Data(capacity: frameCount * MemoryLayout<Int16>.size)
+        var previousSample = 0.0
+        var rng = SystemRandomNumberGenerator()
+
+        for _ in 0..<frameCount {
+            let white = Double.random(in: -1.0...1.0, using: &rng)
+            let filtered = previousSample * 0.94 + white * 0.06
+            previousSample = filtered
+            var intSample = Int16(max(-1.0, min(1.0, filtered * 0.05)) * Double(Int16.max))
+            pcm.append(Data(bytes: &intSample, count: MemoryLayout<Int16>.size))
         }
 
         return wavData(forPCM: pcm, sampleRate: sampleRate, channels: 1, bitsPerSample: 16)
