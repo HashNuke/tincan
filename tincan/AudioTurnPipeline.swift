@@ -50,7 +50,10 @@ final class AudioTurnPipeline {
         }
 
         let inputNode = audioEngine.inputNode
-        let inputFormat = inputNode.inputFormat(forBus: 0)
+        let inputFormat = inputNode.outputFormat(forBus: 0)
+        guard inputFormat.channelCount > 0 else {
+            throw AudioTurnPipelineError.noInputChannels
+        }
         inputNode.removeTap(onBus: 0)
         inputNode.installTap(onBus: 0, bufferSize: 2_048, format: inputFormat) { [weak self] buffer, _ in
             guard let self else { return }
@@ -82,6 +85,17 @@ final class AudioTurnPipeline {
         isRunning = false
         await turnDetector.reset()
         await sink.emitLog("Microphone capture stopped")
+    }
+}
+
+private enum AudioTurnPipelineError: LocalizedError {
+    case noInputChannels
+
+    var errorDescription: String? {
+        switch self {
+        case .noInputChannels:
+            "No microphone input channels are available."
+        }
     }
 }
 
