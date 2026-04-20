@@ -9,7 +9,7 @@ type Adapter interface {
 	Backend() string
 	ValidateBackend(name string, backend tincanconfig.AgentBackendDefinition) error
 	StartConversation(profile tincanconfig.AgentProfile, backend tincanconfig.AgentBackendDefinition, title string, message string) (ConversationStartResult, error)
-	RouteUser(backend tincanconfig.AgentBackendDefinition, input tincanrouter.UserRouterInput) (tincanrouter.UserRouterResult, error)
+	RunRouterPrompt(backend tincanconfig.AgentBackendDefinition, prompt string, rawTranscript string) (tincanrouter.UserRouterResult, error)
 }
 
 type ConversationStartResult struct {

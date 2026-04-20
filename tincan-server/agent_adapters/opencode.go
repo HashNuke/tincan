@@ -131,7 +131,7 @@ func (a *OpencodeAdapter) StartConversation(profile tincanconfig.AgentProfile, b
 	}, nil
 }
 
-func (a *OpencodeAdapter) RouteUser(backend tincanconfig.AgentBackendDefinition, input tincanrouter.UserRouterInput) (tincanrouter.UserRouterResult, error) {
+func (a *OpencodeAdapter) RunUserRouterPrompt(backend tincanconfig.AgentBackendDefinition, prompt string, rawTranscript string) (tincanrouter.UserRouterResult, error) {
 	if err := a.ValidateBackend("__router__", backend); err != nil {
 		return tincanrouter.UserRouterResult{}, err
 	}
@@ -162,7 +162,6 @@ func (a *OpencodeAdapter) RouteUser(backend tincanconfig.AgentBackendDefinition,
 		return tincanrouter.UserRouterResult{}, err
 	}
 
-	prompt := buildUserRouterPrompt(input)
 	body, err := json.Marshal(openCodePromptAsyncRequest{
 		Model: modelRef,
 		Agent: backend.Options.Agent,
@@ -212,7 +211,7 @@ func (a *OpencodeAdapter) RouteUser(backend tincanconfig.AgentBackendDefinition,
 	if result.Action == "" {
 		return tincanrouter.UserRouterResult{}, fmt.Errorf("router response missing action")
 	}
-	result.RawTranscript = input.Transcript
+	result.RawTranscript = rawTranscript
 	return result, nil
 }
 
@@ -260,39 +259,4 @@ func parseOpenCodeModel(raw string) (*openCodeModelRef, error) {
 		return nil, fmt.Errorf("expected opencode model in provider/model form")
 	}
 	return &openCodeModelRef{ProviderID: parts[0], ModelID: parts[1]}, nil
-}
-
-func buildUserRouterPrompt(input tincanrouter.UserRouterInput) string {
-	return strings.TrimSpace(`You are the Tincan router. Decide what to do with the user's transcript.
-
-Return JSON only. Do not wrap in markdown.
-
-Allowed actions:
-- new_conversation
-- message
-- read_conversation_update
-- switch_context
-- ask_clarifying_question
-- ignore
-
-Response schema:
-{
-  "action": string,
-  "message": string,
-  "agent": string,
-  "conversation_handle": string,
-  "conversation_title": string,
-  "immediate_feedback": string,
-  "raw_transcript": string
-}
-
-Rules:
-- Only choose new_conversation when the user explicitly asks for a new chat/session/conversation.
-- If ambiguous, use ask_clarifying_question.
-- For now, if the transcript clearly addresses an existing handle like emma#12 use message.
-- If no action should be taken, use ignore.
-- conversation_title should be short and useful when action is new_conversation.
-
-User transcript:
-` + input.Transcript)
 }

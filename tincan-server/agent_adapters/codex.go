@@ -33,7 +33,7 @@ func (a *CodexAdapter) StartConversation(profile tincanconfig.AgentProfile, back
 	return ConversationStartResult{}, fmt.Errorf("codex adapter is not implemented yet")
 }
 
-func (a *CodexAdapter) RouteUser(backend tincanconfig.AgentBackendDefinition, input tincanrouter.UserRouterInput) (tincanrouter.UserRouterResult, error) {
+func (a *CodexAdapter) RunUserRouterPrompt(backend tincanconfig.AgentBackendDefinition, prompt string, rawTranscript string) (tincanrouter.UserRouterResult, error) {
 	if err := a.ValidateBackend("__router__", backend); err != nil {
 		return tincanrouter.UserRouterResult{}, err
 	}

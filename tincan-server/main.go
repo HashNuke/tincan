@@ -263,7 +263,13 @@ func (s *server) handleGeneratedAudio(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	audioPath := filepath.Join("tmp", "generated-audio", name)
+	generatedDir, err := serverAudioDir("generated-audio")
+	if err != nil {
+		http.Error(w, "audio storage unavailable", http.StatusInternalServerError)
+		return
+	}
+
+	audioPath := filepath.Join(generatedDir, name)
 	audioData, err := os.ReadFile(audioPath)
 	if err != nil {
 		http.NotFound(w, r)
@@ -375,7 +381,7 @@ func (s *server) handleUtteranceUpload(w http.ResponseWriter, r *http.Request, s
 		http.Error(w, fmt.Sprintf("router failed: %v", err), http.StatusBadGateway)
 		return
 	}
-	log.Printf("peer %s router action: %s agent=%q handle=%q feedback=%q", sessionID, routerResult.Action, routerResult.Agent, routerResult.ConversationHandle, routerResult.ImmediateFeedback)
+	log.Printf("peer %s router action: %s agent_profile=%q handle=%q feedback=%q", sessionID, routerResult.Action, routerResult.AgentProfile, routerResult.ConversationHandle, routerResult.ImmediateFeedback)
 
 	responsePayload := map[string]any{
 		"text":   transcript,
@@ -392,7 +398,7 @@ func (s *server) handleUtteranceUpload(w http.ResponseWriter, r *http.Request, s
 
 	if routerResult.Action == "new_conversation" {
 		conversation, err := s.conversationService.CreateConversation(ConversationCreateInput{
-			ProfileName:       routerResult.Agent,
+			ProfileName:       routerResult.AgentProfile,
 			ConversationTitle: routerResult.ConversationTitle,
 			Message:           routerResult.Message,
 		})
@@ -414,8 +420,8 @@ func (s *server) generateFeedbackAudio(text string) (string, error) {
 		return "", err
 	}
 
-	generatedDir := filepath.Join("tmp", "generated-audio")
-	if err := os.MkdirAll(generatedDir, 0o755); err != nil {
+	generatedDir, err := serverAudioDir("generated-audio")
+	if err != nil {
 		return "", err
 	}
 
@@ -740,9 +746,24 @@ func inferenceSocketPath() string {
 	return homeDir + "/Library/Application Support/tincan/run/inference.sock"
 }
 
+func serverAudioDir(parts ...string) (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+
+	dirParts := append([]string{homeDir, "Library", "Application Support", "tincan", "server-audio"}, parts...)
+	dirPath := filepath.Join(dirParts...)
+	if err := os.MkdirAll(dirPath, 0o755); err != nil {
+		return "", err
+	}
+
+	return dirPath, nil
+}
+
 func saveUtteranceForDebug(sessionID string, audioData []byte) (string, error) {
-	debugDir := filepath.Join("tmp", "utterances")
-	if err := os.MkdirAll(debugDir, 0o755); err != nil {
+	debugDir, err := serverAudioDir("utterances")
+	if err != nil {
 		return "", err
 	}
 
