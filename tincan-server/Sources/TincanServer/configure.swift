@@ -17,7 +17,6 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(AddConversationNumberToConversation())
     try await app.autoMigrate()
 
-    app.pluginRegistry = .default
     app.conversationService = ConversationService()
     app.agentProfileStore = try AgentProfileStore()
     app.tincanInferenceService = TincanInferenceService()

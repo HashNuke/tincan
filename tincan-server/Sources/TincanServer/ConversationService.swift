@@ -20,7 +20,6 @@ struct ConversationCreateResponse: Content {
     let agentBackend: String
     let backendConversationID: String
     let status: String
-    let summary: String
     let announcementText: String
 
     enum CodingKeys: String, CodingKey {
@@ -31,7 +30,6 @@ struct ConversationCreateResponse: Content {
         case agentBackend = "agent_backend"
         case backendConversationID = "backend_conversation_id"
         case status
-        case summary
         case announcementText = "announcement_text"
     }
 }
@@ -66,14 +64,9 @@ struct ConversationService: Sendable {
             throw Abort(.badRequest, reason: "Profile \(profile.name) is missing agent_backend_options.base_url")
         }
 
-        guard let summarizer = req.application.pluginRegistry.summarizer(named: profile.summarizer) else {
-            throw Abort(.internalServerError, reason: "Unknown summarizer plugin: \(profile.summarizer)")
-        }
-
         let conversationNumber = try await Conversation.nextAvailableNumber(for: profile.name, on: req.db)
         let displayHandle = "\(profile.name)#\(conversationNumber)"
-        let summary = try await summarizer.summarize(request.message)
-        let announcementText = "Hello, I'm \(displayHandle). I am working on \(summary)"
+        let announcementText = "Hello, I'm \(displayHandle). I am working on \(request.message)"
         let session = try await req.application.openCodeClient.createSession(
             req.client,
             baseURL,
@@ -125,7 +118,6 @@ struct ConversationService: Sendable {
             agentBackend: profile.agentBackend.rawValue,
             backendConversationID: session.id,
             status: conversation.status,
-            summary: summary,
             announcementText: announcementText
         )
     }

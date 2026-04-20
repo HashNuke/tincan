@@ -3,7 +3,6 @@
     "name": "emma",
     "working_directory": "/Users/akash/code/apple/tincan",
     "agent_backend": "opencode-server",
-    "summarizer": "no-summary",
     "agent_backend_options": {
       "model": "openai/gpt-5.4",
       "model_effort": "high",
@@ -16,7 +15,6 @@
     "name": "atlas",
     "working_directory": "/Users/akash/sources/opencode",
     "agent_backend": "codex",
-    "summarizer": "no-summary",
     "agent_backend_options": {
       "model": "gpt-5-codex",
       "model_effort": "medium",

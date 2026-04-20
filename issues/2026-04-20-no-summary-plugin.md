@@ -1,6 +1,6 @@
 ## Status
 
-DONE
+PARTIAL
 
 ## Problem
 
@@ -21,9 +21,14 @@ Implemented an internal summarizer plugin registry with a built-in `no-summary` 
 
 ## Notes
 
-This is intentionally minimal:
+This was intentionally minimal:
 
 - there is no dynamic plugin loader
 - there is no user scripting surface
-- only the `Summarizer` plugin type is introduced for now
-- the current plugin simply passes through the original prompt text
+- only the `Summarizer` plugin type was introduced
+- the current plugin simply passed through the original prompt text
+
+## Follow-up
+
+This approach was later superseded.
+The project direction moved summary-like behavior into the router itself, so the standalone `no-summary` plugin is no longer needed.
