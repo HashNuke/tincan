@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -28,21 +29,23 @@ import (
 )
 
 type server struct {
-	mu                  sync.Mutex
-	sessions            map[string]*sessionState
-	api                 *webrtc.API
-	config              webrtc.Configuration
-	inference           *inferenceClient
-	profiles            *AgentProfileStore
-	backends            *AgentBackendStore
-	conversations       *conversations.Store
-	agentAdapters       map[string]agent_adapters.Adapter
-	conversationService *ConversationService
-	router              *Router
+	mu                   sync.Mutex
+	sessions             map[string]*sessionState
+	conversationSessions map[string]string
+	api                  *webrtc.API
+	config               webrtc.Configuration
+	inference            *inferenceClient
+	profiles             *AgentProfileStore
+	backends             *AgentBackendStore
+	conversations        *conversations.Store
+	agentAdapters        map[string]agent_adapters.Adapter
+	conversationService  *ConversationService
+	router               *Router
 }
 
 type sessionState struct {
 	peerConnection *webrtc.PeerConnection
+	dataChannel    *webrtc.DataChannel
 	pushToTalk     bool
 }
 
@@ -55,6 +58,28 @@ type webRTCAnswerResponse struct {
 	SessionID string `json:"session_id"`
 	SDP       string `json:"sdp"`
 	Type      string `json:"type"`
+}
+
+type openCodeHookEvent struct {
+	EventType    string `json:"event_type"`
+	SessionID    string `json:"session_id"`
+	StatusType   string `json:"status_type,omitempty"`
+	ErrorName    string `json:"error_name,omitempty"`
+	ErrorMessage string `json:"error_message,omitempty"`
+}
+
+type pendingUpdateResponse struct {
+	Updates []conversations.ConversationUpdate `json:"updates"`
+}
+
+type openCodeMessageWithParts struct {
+	Info struct {
+		Role string `json:"role"`
+	} `json:"info"`
+	Parts []struct {
+		Type string `json:"type"`
+		Text string `json:"text,omitempty"`
+	} `json:"parts"`
 }
 
 type inferenceEnvelope struct {
@@ -118,6 +143,9 @@ func main() {
 	mux.HandleFunc("/speak", srv.handleSpeakPage)
 	mux.HandleFunc("/debug/audio/processing", srv.handleProcessingAudio)
 	mux.HandleFunc("/debug/audio/generated/", srv.handleGeneratedAudio)
+	mux.HandleFunc("/updates/pending", srv.handlePendingUpdates)
+	mux.HandleFunc("/updates/", srv.handleUpdateActions)
+	mux.HandleFunc("/hooks/opencode", srv.handleOpenCodeHook)
 	mux.HandleFunc("/session/", srv.handleSessionControl)
 	mux.HandleFunc("/webrtc/offer", srv.handleOffer)
 
@@ -198,15 +226,16 @@ func newServer() (*server, error) {
 	)
 
 	return &server{
-		sessions:            make(map[string]*sessionState),
-		api:                 api,
-		inference:           &inferenceClient{socketPath: inferenceSocketPath()},
-		profiles:            profiles,
-		backends:            backends,
-		conversations:       conversationStore,
-		agentAdapters:       agentAdapters,
-		conversationService: NewConversationService(profiles, backends, conversationStore, agentAdapters),
-		router:              NewRouter(routerBackend, routerAdapter),
+		sessions:             make(map[string]*sessionState),
+		conversationSessions: make(map[string]string),
+		api:                  api,
+		inference:            &inferenceClient{socketPath: inferenceSocketPath()},
+		profiles:             profiles,
+		backends:             backends,
+		conversations:        conversationStore,
+		agentAdapters:        agentAdapters,
+		conversationService:  NewConversationService(profiles, backends, conversationStore, agentAdapters),
+		router:               NewRouter(routerBackend, routerAdapter, profiles),
 		config: webrtc.Configuration{
 			ICEServers: []webrtc.ICEServer{
 				{URLs: []string{"stun:stun.l.google.com:19302"}},
@@ -280,6 +309,100 @@ func (s *server) handleGeneratedAudio(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(audioData)))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(audioData)
+}
+
+func (s *server) handlePendingUpdates(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	updates, err := s.conversations.ListPendingUpdates(20)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("failed to list pending updates: %v", err), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, pendingUpdateResponse{Updates: updates})
+}
+
+func (s *server) handleUpdateActions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	path := strings.TrimPrefix(r.URL.Path, "/updates/")
+	parts := strings.Split(path, "/")
+	if len(parts) != 2 || parts[1] != "consume" {
+		http.NotFound(w, r)
+		return
+	}
+
+	if err := s.conversations.ConsumeUpdate(parts[0]); err != nil {
+		http.Error(w, fmt.Sprintf("failed to consume update: %v", err), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *server) handleOpenCodeHook(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	defer r.Body.Close()
+
+	var event openCodeHookEvent
+	if err := json.NewDecoder(r.Body).Decode(&event); err != nil {
+		http.Error(w, "invalid json body", http.StatusBadRequest)
+		return
+	}
+	if event.SessionID == "" {
+		http.Error(w, "missing session id", http.StatusBadRequest)
+		return
+	}
+
+	conversation, ok, err := s.conversations.GetConversationByBackendConversationID(event.SessionID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("failed to find conversation: %v", err), http.StatusInternalServerError)
+		return
+	}
+	if !ok {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	switch event.EventType {
+	case "session.idle":
+		if err := s.createConversationUpdateFromLatestAssistant(conversation); err != nil {
+			log.Printf("failed to create conversation update for %s: %v", conversation.DisplayHandle, err)
+		}
+	case "session.error":
+		_, err := s.conversations.UpsertPendingUpdate(conversations.ConversationUpdate{
+			ConversationID:     conversation.ID,
+			ConversationHandle: conversation.DisplayHandle,
+			SummaryText:        event.ErrorMessage,
+			NotificationText:   conversation.DisplayHandle + " has an update.",
+			RawUpdateJSON:      mustMarshalJSON(event),
+			Status:             "pending",
+		})
+		if err != nil {
+			log.Printf("failed to store error update for %s: %v", conversation.DisplayHandle, err)
+		}
+	}
+
+	s.mu.Lock()
+	sessionID, hasSession := s.conversationSessions[conversation.BackendConversationID]
+	s.mu.Unlock()
+	if hasSession {
+		s.sendSessionEvent(sessionID, map[string]any{
+			"type":      "notify",
+			"text":      conversation.DisplayHandle + " has an update.",
+			"audio_url": "/debug/audio/processing",
+		})
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *server) handleSessionControl(w http.ResponseWriter, r *http.Request) {
@@ -393,6 +516,11 @@ func (s *server) handleUtteranceUpload(w http.ResponseWriter, r *http.Request, s
 			log.Printf("peer %s immediate feedback tts failed: %v", sessionID, err)
 		} else {
 			responsePayload["feedback_audio_url"] = feedbackAudioURL
+			s.sendSessionEvent(sessionID, map[string]any{
+				"type": "play_audio",
+				"url":  feedbackAudioURL,
+				"text": routerResult.ImmediateFeedback,
+			})
 		}
 	}
 
@@ -408,6 +536,14 @@ func (s *server) handleUtteranceUpload(w http.ResponseWriter, r *http.Request, s
 			return
 		}
 		log.Printf("peer %s created conversation: handle=%s backend_id=%s status=%s", sessionID, conversation.DisplayHandle, conversation.BackendConversationID, conversation.Status)
+		if strings.TrimSpace(routerResult.UpdatedConversationNotes) != "" {
+			if _, err := s.conversations.UpsertConversationNotes(conversation.ID, routerResult.UpdatedConversationNotes); err != nil {
+				log.Printf("peer %s failed to persist conversation notes for %s: %v", sessionID, conversation.DisplayHandle, err)
+			}
+		}
+		s.mu.Lock()
+		s.conversationSessions[conversation.BackendConversationID] = sessionID
+		s.mu.Unlock()
 		responsePayload["conversation"] = conversation
 	}
 
@@ -432,6 +568,76 @@ func (s *server) generateFeedbackAudio(text string) (string, error) {
 	}
 
 	return "/debug/audio/generated/" + fileName, nil
+}
+
+func (s *server) createConversationUpdateFromLatestAssistant(conversation conversations.Conversation) error {
+	backend, ok := s.backends.Get(conversation.AgentBackend)
+	if !ok {
+		return fmt.Errorf("unknown backend %q for conversation", conversation.AgentBackend)
+	}
+	if backend.Type != "opencode" || backend.Options.BaseURL == "" {
+		return fmt.Errorf("conversation backend does not support OpenCode message fetch")
+	}
+
+	baseURL, err := url.Parse(backend.Options.BaseURL)
+	if err != nil {
+		return err
+	}
+	messageURL := baseURL.ResolveReference(&url.URL{Path: strings.TrimRight(baseURL.Path, "/") + "/session/" + conversation.BackendConversationID + "/message"})
+	query := messageURL.Query()
+	query.Set("directory", conversation.WorkingDirectory)
+	messageURL.RawQuery = query.Encode()
+
+	resp, err := http.Get(messageURL.String())
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("fetch session messages failed with status %d", resp.StatusCode)
+	}
+
+	var messages []openCodeMessageWithParts
+	if err := json.NewDecoder(resp.Body).Decode(&messages); err != nil {
+		return err
+	}
+
+	latestText := ""
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Info.Role != "assistant" {
+			continue
+		}
+		for _, part := range messages[i].Parts {
+			if part.Type == "text" && strings.TrimSpace(part.Text) != "" {
+				latestText = strings.TrimSpace(part.Text)
+				break
+			}
+		}
+		if latestText != "" {
+			break
+		}
+	}
+	if latestText == "" {
+		latestText = "The agent has an update."
+	}
+
+	_, err = s.conversations.UpsertPendingUpdate(conversations.ConversationUpdate{
+		ConversationID:     conversation.ID,
+		ConversationHandle: conversation.DisplayHandle,
+		SummaryText:        latestText,
+		NotificationText:   conversation.DisplayHandle + " has an update.",
+		RawUpdateJSON:      mustMarshalJSON(messages),
+		Status:             "pending",
+	})
+	return err
+}
+
+func mustMarshalJSON(v any) string {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return ""
+	}
+	return string(data)
 }
 
 func (s *server) handleOffer(w http.ResponseWriter, r *http.Request) {
@@ -550,7 +756,14 @@ func (s *server) attachPeerLogging(sessionID string, peerConnection *webrtc.Peer
 		}()
 	})
 	peerConnection.OnDataChannel(func(dataChannel *webrtc.DataChannel) {
-		log.Printf("peer %s opened data channel %q; ignoring messages for now", sessionID, dataChannel.Label())
+		log.Printf("peer %s opened data channel %q", sessionID, dataChannel.Label())
+		if dataChannel.Label() == "events" {
+			s.mu.Lock()
+			if session, ok := s.sessions[sessionID]; ok {
+				session.dataChannel = dataChannel
+			}
+			s.mu.Unlock()
+		}
 	})
 }
 
@@ -570,6 +783,24 @@ func (s *server) closeAndDeletePeer(sessionID string) {
 
 	if ok {
 		_ = session.peerConnection.Close()
+	}
+}
+
+func (s *server) sendSessionEvent(sessionID string, payload any) {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		log.Printf("peer %s failed to encode session event: %v", sessionID, err)
+		return
+	}
+
+	s.mu.Lock()
+	session, ok := s.sessions[sessionID]
+	s.mu.Unlock()
+	if !ok || session.dataChannel == nil || session.dataChannel.ReadyState() != webrtc.DataChannelStateOpen {
+		return
+	}
+	if err := session.dataChannel.SendText(string(data)); err != nil {
+		log.Printf("peer %s failed to send session event: %v", sessionID, err)
 	}
 }
 

@@ -37,3 +37,14 @@ type ConversationUpdate struct {
 func (ConversationUpdate) TableName() string {
 	return "conversation_updates"
 }
+
+type ConversationNote struct {
+	ID             string    `gorm:"primaryKey;type:text"`
+	ConversationID string    `gorm:"column:conversation_id;not null;uniqueIndex:idx_conversation_notes_conversation"`
+	NotesText      string    `gorm:"column:notes_text;not null"`
+	UpdatedAt      time.Time `gorm:"column:updated_at;not null"`
+}
+
+func (ConversationNote) TableName() string {
+	return "conversation_notes"
+}

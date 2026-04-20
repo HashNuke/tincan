@@ -124,6 +124,25 @@
       white-space: pre-wrap;
       min-height: 48px;
     }
+    .events {
+      margin-top: 24px;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      padding-top: 20px;
+    }
+    .events h2 {
+      margin: 0 0 12px;
+      font-size: 18px;
+    }
+    .event-log {
+      padding: 14px;
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      color: #dfe8ff;
+      font-size: 12px;
+      white-space: pre-wrap;
+      min-height: 64px;
+    }
     code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
   </style>
 </head>
@@ -152,6 +171,10 @@
       <h2>Page Errors</h2>
       <div id="errorLog" class="error-log">No client-side errors yet.</div>
     </section>
+    <section class="events">
+      <h2>Event Log</h2>
+      <div id="eventLog" class="event-log">No realtime events yet.</div>
+    </section>
   </main>
   <script>
     const connectButton = document.getElementById('connectButton')
@@ -163,6 +186,7 @@
     const historyListEl = document.getElementById('historyList')
     const remoteAudioEl = document.getElementById('remoteAudio')
     const errorLogEl = document.getElementById('errorLog')
+    const eventLogEl = document.getElementById('eventLog')
 
     let peerConnection = null
     let localStream = null
@@ -173,10 +197,16 @@
     let recordedChunks = []
     let mediaRecorderRef = { current: null }
     let utteranceHistory = []
+    let eventsDataChannel = null
 
     function logClientError(message) {
       const existing = errorLogEl.textContent === 'No client-side errors yet.' ? '' : errorLogEl.textContent + '\n\n'
       errorLogEl.textContent = existing + '[' + new Date().toLocaleTimeString() + '] ' + message
+    }
+
+    function logEvent(message) {
+      const existing = eventLogEl.textContent === 'No realtime events yet.' ? '' : eventLogEl.textContent + '\n'
+      eventLogEl.textContent = existing + '[' + new Date().toLocaleTimeString() + '] ' + message
     }
 
     window.addEventListener('error', (event) => {
@@ -245,6 +275,51 @@
       }
     }
 
+    function setupEventsDataChannel() {
+      if (!peerConnection) return
+      eventsDataChannel = peerConnection.createDataChannel('events')
+      logEvent('Created events data channel.')
+      eventsDataChannel.onopen = () => {
+        logEvent('Events data channel opened.')
+      }
+      eventsDataChannel.onclose = () => {
+        logEvent('Events data channel closed.')
+      }
+      eventsDataChannel.onerror = (event) => {
+        logEvent('Events data channel error: ' + JSON.stringify(event))
+      }
+      eventsDataChannel.onmessage = (event) => {
+        try {
+          logEvent('Received data channel message: ' + event.data)
+          const payload = JSON.parse(event.data)
+          if (payload.type === 'play_audio' && payload.url) {
+            setMeta(payload.text || 'Playing server audio.')
+            logEvent('Attempting to play pushed audio: ' + payload.url)
+            remoteAudioEl.src = payload.url
+            void remoteAudioEl.play().catch((error) => {
+              console.error(error)
+              logEvent('Pushed audio playback failed: ' + (error instanceof Error ? error.message : String(error)))
+            })
+            return
+          }
+          if (payload.type === 'notify') {
+            setMeta(payload.text || 'Server update received.')
+            if (payload.audio_url) {
+              logEvent('Attempting to play notify audio: ' + payload.audio_url)
+              remoteAudioEl.src = payload.audio_url
+              void remoteAudioEl.play().catch((error) => {
+                console.error(error)
+                logEvent('Notify audio playback failed: ' + (error instanceof Error ? error.message : String(error)))
+              })
+            }
+          }
+        } catch (error) {
+          console.error(error)
+          logEvent('Failed to process data channel message: ' + (error instanceof Error ? error.message : String(error)))
+        }
+      }
+    }
+
     async function connect() {
       if (peerConnection) return
 
@@ -260,6 +335,8 @@
       peerConnection = new RTCPeerConnection({
         iceServers: [{ urls: ['stun:stun.l.google.com:19302'] }],
       })
+
+      setupEventsDataChannel()
 
       for (const track of localStream.getTracks()) {
         const sender = peerConnection.addTrack(track, localStream)
@@ -346,6 +423,7 @@
       }
       audioTrack = null
       sessionID = null
+      eventsDataChannel = null
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
         mediaRecorderRef.current.stop()
       }

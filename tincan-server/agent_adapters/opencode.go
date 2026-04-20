@@ -131,7 +131,7 @@ func (a *OpencodeAdapter) StartConversation(profile tincanconfig.AgentProfile, b
 	}, nil
 }
 
-func (a *OpencodeAdapter) RunUserRouterPrompt(backend tincanconfig.AgentBackendDefinition, prompt string, rawTranscript string) (tincanrouter.UserRouterResult, error) {
+func (a *OpencodeAdapter) RunRouterPrompt(backend tincanconfig.AgentBackendDefinition, prompt string, rawTranscript string) (tincanrouter.UserRouterResult, error) {
 	if err := a.ValidateBackend("__router__", backend); err != nil {
 		return tincanrouter.UserRouterResult{}, err
 	}

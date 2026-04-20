@@ -64,6 +64,17 @@ CREATE INDEX IF NOT EXISTS idx_conversation_updates_handle ON conversation_updat
 CREATE INDEX IF NOT EXISTS idx_conversation_updates_status ON conversation_updates(status);
 `,
 		},
+		{
+			name: "2026_04_20_create_conversation_notes",
+			sql: `
+CREATE TABLE IF NOT EXISTS conversation_notes (
+  id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL UNIQUE,
+  notes_text TEXT NOT NULL,
+  updated_at DATETIME NOT NULL
+);
+`,
+		},
 	}
 
 	for _, migration := range migrations {
