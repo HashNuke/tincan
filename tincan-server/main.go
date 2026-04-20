@@ -23,6 +23,7 @@ import (
 	"github.com/pion/webrtc/v4"
 	"tincan-server/agent_adapters"
 	"tincan-server/conversations"
+	"tincan-server/db"
 	tincanrouter "tincan-server/router"
 )
 
@@ -147,10 +148,12 @@ func newServer() (*server, error) {
 		return nil, fmt.Errorf("init agent backends: %w", err)
 	}
 
-	conversationStore, err := conversations.NewStore()
+	gormDB, err := db.OpenAndMigrate()
 	if err != nil {
-		return nil, fmt.Errorf("init conversation store: %w", err)
+		return nil, fmt.Errorf("init database: %w", err)
 	}
+
+	conversationStore := conversations.NewStore(gormDB)
 
 	agentAdapters := agent_adapters.Default()
 	for _, profile := range profiles.List() {

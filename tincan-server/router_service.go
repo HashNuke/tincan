@@ -13,20 +13,6 @@ type Router struct {
 	adapter agent_adapters.Adapter
 }
 
-type UserRouterInput struct {
-	Transcript string
-}
-
-type UserRouterResult struct {
-	Action             string `json:"action"`
-	Message            string `json:"message,omitempty"`
-	Agent              string `json:"agent,omitempty"`
-	ConversationHandle string `json:"conversation_handle,omitempty"`
-	ConversationTitle  string `json:"conversation_title,omitempty"`
-	ImmediateFeedback  string `json:"immediate_feedback,omitempty"`
-	RawTranscript      string `json:"raw_transcript"`
-}
-
 func NewRouter(backend tincanconfig.AgentBackendDefinition, adapter agent_adapters.Adapter) *Router {
 	return &Router{backend: backend, adapter: adapter}
 }
