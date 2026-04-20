@@ -2,7 +2,9 @@ package conversations
 
 import (
 	"fmt"
+	"regexp"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -99,6 +101,28 @@ func (s *Store) GetConversationByBackendConversationID(backendConversationID str
 	return conversation, true, nil
 }
 
+func (s *Store) GetConversationByHandle(handle string) (Conversation, bool, error) {
+	normalizedHandle := normalizeConversationHandle(handle)
+	var conversations []Conversation
+	if err := s.db.Find(&conversations).Error; err != nil {
+		return Conversation{}, false, fmt.Errorf("get conversation by handle: %w", err)
+	}
+	for _, candidate := range conversations {
+		if normalizeConversationHandle(candidate.DisplayHandle) == normalizedHandle {
+			return candidate, true, nil
+		}
+	}
+	return Conversation{}, false, nil
+}
+
+var conversationHandleNormalizer = regexp.MustCompile(`[^a-z0-9]+`)
+
+func normalizeConversationHandle(handle string) string {
+	normalized := strings.ToLower(strings.TrimSpace(handle))
+	normalized = strings.ReplaceAll(normalized, "#", "")
+	return conversationHandleNormalizer.ReplaceAllString(normalized, "")
+}
+
 func (s *Store) GetMostRecentConversationByBackendConversationIDs(backendConversationIDs []string) (Conversation, bool, error) {
 	filteredIDs := make([]string, 0, len(backendConversationIDs))
 	for _, backendConversationID := range backendConversationIDs {
@@ -164,6 +188,21 @@ func (s *Store) ListPendingUpdates(limit int) ([]ConversationUpdate, error) {
 		return nil, fmt.Errorf("list pending conversation updates: %w", err)
 	}
 	return updates, nil
+}
+
+func (s *Store) GetLatestPendingUpdateByConversationID(conversationID string) (ConversationUpdate, bool, error) {
+	var update ConversationUpdate
+	err := s.db.
+		Where("conversation_id = ? AND status = ?", conversationID, "pending").
+		Order("updated_at desc").
+		First(&update).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return ConversationUpdate{}, false, nil
+		}
+		return ConversationUpdate{}, false, fmt.Errorf("get latest pending conversation update: %w", err)
+	}
+	return update, true, nil
 }
 
 func (s *Store) ListPendingUpdateHandles(limit int) ([]string, error) {

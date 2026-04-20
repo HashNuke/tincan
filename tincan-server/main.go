@@ -38,6 +38,7 @@ type server struct {
 	agentAdapters       map[string]agent_adapters.Adapter
 	conversationService *ConversationService
 	router              *Router
+	dispatcher          *tincanrouter.Dispatcher
 }
 
 type openCodeHookEvent struct {
@@ -197,6 +198,8 @@ func newServer() (*server, error) {
 		return nil, fmt.Errorf("init linphone server: %w", err)
 	}
 
+	conversationService := NewConversationService(profiles, backends, conversationStore, agentAdapters)
+
 	return &server{
 		inference:           &inferenceClient{socketPath: inferenceSocketPath()},
 		callManager:         callManager,
@@ -205,8 +208,14 @@ func newServer() (*server, error) {
 		backends:            backends,
 		conversations:       conversationStore,
 		agentAdapters:       agentAdapters,
-		conversationService: NewConversationService(profiles, backends, conversationStore, agentAdapters),
+		conversationService: conversationService,
 		router:              NewRouter(routerBackend, routerAdapter, profiles),
+		dispatcher: &tincanrouter.Dispatcher{
+			Calls:              callManager,
+			Conversations:      conversationStore,
+			ConversationCreate: conversationCreator{service: conversationService},
+			Audio:              sessionAudioNotifier{server: nil},
+		},
 	}, nil
 }
 
@@ -482,25 +491,23 @@ func (s *server) handleUtteranceUpload(w http.ResponseWriter, r *http.Request, s
 		}
 	}
 
-	if routerResult.Action == "new_conversation" {
-		conversation, err := s.conversationService.CreateConversation(ConversationCreateInput{
-			ProfileName:       routerResult.AgentProfile,
-			ConversationTitle: routerResult.ConversationTitle,
-			Message:           routerResult.Message,
-		})
-		if err != nil {
-			log.Printf("peer %s conversation creation failed: %v", sessionID, err)
-			http.Error(w, fmt.Sprintf("conversation creation failed: %v", err), http.StatusBadGateway)
-			return
-		}
-		log.Printf("peer %s created conversation: handle=%s backend_id=%s status=%s", sessionID, conversation.DisplayHandle, conversation.BackendConversationID, conversation.Status)
-		if strings.TrimSpace(routerResult.UpdatedConversationNotes) != "" {
+	s.dispatcher.Audio = sessionAudioNotifier{server: s}
+	dispatchResult, err := s.dispatcher.DispatchUserInput(sessionID, routeRequest, routerResult)
+	if err != nil {
+		log.Printf("peer %s dispatch failed for action %s: %v", sessionID, routerResult.Action, err)
+		http.Error(w, fmt.Sprintf("dispatch failed: %v", err), http.StatusBadGateway)
+		return
+	}
+	for key, value := range dispatchResult.Fields {
+		responsePayload[key] = value
+	}
+
+	if conversationValue, ok := responsePayload["conversation"]; ok && strings.TrimSpace(routerResult.UpdatedConversationNotes) != "" {
+		if conversation, ok := conversationValue.(tincanrouter.ConversationCreateResult); ok {
 			if _, err := s.conversations.UpsertConversationNotes(conversation.ID, routerResult.UpdatedConversationNotes); err != nil {
 				log.Printf("peer %s failed to persist conversation notes for %s: %v", sessionID, conversation.DisplayHandle, err)
 			}
 		}
-		s.callManager.LinkConversation(sessionID, conversation.BackendConversationID, conversation.DisplayHandle)
-		responsePayload["conversation"] = conversation
 	}
 
 	writeJSON(w, http.StatusOK, responsePayload)
@@ -527,6 +534,12 @@ func (s *server) buildRouteUserInputRequest(sessionID string, transcript string)
 		return request, nil
 	}
 	request.CurrentConversationHandle = currentConversationHandle
+	for _, message := range s.callManager.ClarificationHistoryForSession(sessionID) {
+		request.ClarificationHistory = append(request.ClarificationHistory, tincanrouter.ClarificationMessage{
+			Role: message.Role,
+			Text: message.Text,
+		})
+	}
 
 	if !hasCurrentBackendConversationID {
 		return request, nil

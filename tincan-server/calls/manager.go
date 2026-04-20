@@ -134,6 +134,53 @@ func (m *Manager) CurrentConversationHandleForSession(transportSessionID string)
 	return session.State.CurrentConversationHandle, true
 }
 
+func (m *Manager) ClarificationHistoryForSession(transportSessionID string) []ClarificationMessage {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	session, ok := m.sessions[transportSessionID]
+	if !ok || len(session.State.ClarificationHistory) == 0 {
+		return nil
+	}
+
+	history := make([]ClarificationMessage, len(session.State.ClarificationHistory))
+	copy(history, session.State.ClarificationHistory)
+	return history
+}
+
+func (m *Manager) AppendClarificationExchange(transportSessionID string, userText string, agentQuestion string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	session, ok := m.sessions[transportSessionID]
+	if !ok {
+		return false
+	}
+
+	if userText != "" {
+		session.State.ClarificationHistory = append(session.State.ClarificationHistory, ClarificationMessage{
+			Role: "user",
+			Text: userText,
+		})
+	}
+	if agentQuestion != "" {
+		session.State.ClarificationHistory = append(session.State.ClarificationHistory, ClarificationMessage{
+			Role: "assistant",
+			Text: agentQuestion,
+		})
+	}
+	return true
+}
+
+func (m *Manager) ClearClarificationHistory(transportSessionID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	session, ok := m.sessions[transportSessionID]
+	if !ok {
+		return false
+	}
+	session.State.ClarificationHistory = nil
+	return true
+}
+
 func (m *Manager) SendEvent(transportSessionID string, payload any) bool {
 	m.mu.Lock()
 	session, ok := m.sessions[transportSessionID]

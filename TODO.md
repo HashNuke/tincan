@@ -30,11 +30,9 @@
 
 - Continue extracting transport-specific logic out of `main.go` into `calls/`.
 - Add explicit call/session event types beyond the current first slice if needed.
-- Add Liblinphone-facing server code under `tincan-server/calls/`.
 
 ## App
 
-- Remove or archive the current failed native `MacWebRTCClient` experiment once the Liblinphone path is in place.
 - Wire the macOS/iOS call UI to the new transport layer.
 - Verify immediate feedback and update notifications in the real app path.
 
@@ -42,4 +40,3 @@
 
 - Continue moving root-level orchestrator files to clearer names/packages where boundaries are stable.
 - Review whether router service can fully move into the `router/` package after dependency cleanup.
-- Keep `/speak` browser page as debug-only and do not let product behavior depend on it.

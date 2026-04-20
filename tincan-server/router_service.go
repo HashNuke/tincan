@@ -33,6 +33,13 @@ func (r *Router) buildUserRouterPrompt(input tincanrouter.RouteUserInputRequest)
 	for _, profile := range r.profiles.List() {
 		profileNames = append(profileNames, profile.Name)
 	}
+	var clarificationHistory []string
+	for _, message := range input.ClarificationHistory {
+		if strings.TrimSpace(message.Text) == "" {
+			continue
+		}
+		clarificationHistory = append(clarificationHistory, fmt.Sprintf("- %s: %s", message.Role, message.Text))
+	}
 
 	return strings.TrimSpace(`You are the Tincan router.
 
@@ -62,7 +69,12 @@ Response schema:
 Rules:
 - Only choose new_conversation when the user explicitly asks for a new chat/session/conversation.
 - If the transcript starts by directly addressing a defined agent profile name, treat that as a request to initiate a new conversation with that profile unless the user clearly asks to switch to an existing conversation handle instead.
+- If the transcript addresses or names an existing conversation handle and asks for status, progress, updates, what it has, or what happened, prefer read_conversation_update over message.
+- If a transcript names something that matches an existing conversation handle, prefer treating it as a conversation handle rather than an agent profile when the request is about updates or current work.
+- Spoken handle variants may omit punctuation. For example, "Emma 10" may refer to the handle "emma#10".
 - If ambiguous, use ask_clarifying_question.
+- If unresolved clarification history is present, treat it as prior conversation context for the current user reply.
+- If the current transcript appears to answer the last clarification question, use the full clarification history plus the current transcript to decide the next action.
 - If no action should be taken, use ignore.
 - conversation_title should be short and useful when action is new_conversation.
 - If the user says "start a conversation with Emma" or "open a chat with Emma", treat "Emma" as an agent profile name when it matches one of the defined agent profiles.
@@ -76,6 +88,9 @@ Examples:
 - "Emma, start a conversation" => action=new_conversation, agent_profile="Emma"
 - "Emma, do the iOS signing fix" => action=new_conversation, agent_profile="Emma", message="do the iOS signing fix"
 - "switch to MS7" => action=switch_context, conversation_handle="MS7"
+- "Emma 10 what do you have for me" => action=read_conversation_update, conversation_handle="emma#10"
+- "what update do you have for emma 10" => action=read_conversation_update, conversation_handle="emma#10"
+- "read the latest update from emma#10" => action=read_conversation_update, conversation_handle="emma#10"
 
 Defined agent profiles:
 - ` + strings.Join(profileNames, "\n- ") + `
@@ -91,6 +106,9 @@ Current conversation notes:
 
 Pending update handles:
 - ` + strings.Join(input.PendingUpdateHandles, "\n- ") + `
+
+Unresolved clarification history:
+` + strings.Join(clarificationHistory, "\n") + `
 
 User transcript:
 ` + input.Transcript)

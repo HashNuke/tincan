@@ -224,7 +224,6 @@ extension CallSessionViewModel: AudioTurnPipelineOutput {
                 let response = try await client.uploadUtterance(sessionID: sid, audioWAV: data)
                 lastServerTranscript = response.text
                 appendLog("Transcript: \(response.text)")
-                await playServerAudioIfPresent(response.feedbackAudioURL, client: client, fallbackLogPrefix: "Immediate feedback audio")
             } catch {
                 appendLog("Upload failed: \(error.localizedDescription)")
             }

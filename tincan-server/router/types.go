@@ -1,11 +1,17 @@
 package router
 
+type ClarificationMessage struct {
+	Role string `json:"role"`
+	Text string `json:"text"`
+}
+
 type RouteUserInputRequest struct {
-	Transcript                string   `json:"transcript"`
-	CurrentConversationHandle string   `json:"current_conversation_handle,omitempty"`
-	CurrentConversationNotes  string   `json:"current_conversation_notes,omitempty"`
-	ConversationHandles       []string `json:"conversation_handles,omitempty"`
-	PendingUpdateHandles      []string `json:"pending_update_handles,omitempty"`
+	Transcript                string                 `json:"transcript"`
+	CurrentConversationHandle string                 `json:"current_conversation_handle,omitempty"`
+	CurrentConversationNotes  string                 `json:"current_conversation_notes,omitempty"`
+	ConversationHandles       []string               `json:"conversation_handles,omitempty"`
+	PendingUpdateHandles      []string               `json:"pending_update_handles,omitempty"`
+	ClarificationHistory      []ClarificationMessage `json:"clarification_history,omitempty"`
 }
 
 type RouteUserInputResult struct {

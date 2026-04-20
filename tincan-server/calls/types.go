@@ -1,10 +1,16 @@
 package calls
 
+type ClarificationMessage struct {
+	Role string
+	Text string
+}
+
 type SessionState struct {
 	TransportSessionID           string
 	PushToTalk                   bool
 	CurrentBackendConversationID string
 	CurrentConversationHandle    string
+	ClarificationHistory         []ClarificationMessage
 }
 
 type PlayAudioEvent struct {
