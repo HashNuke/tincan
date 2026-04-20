@@ -23,30 +23,40 @@ import (
 	"github.com/pion/interceptor"
 	"github.com/pion/webrtc/v4"
 	"tincan-server/agent_adapters"
+	"tincan-server/calls"
 	"tincan-server/conversations"
 	"tincan-server/db"
 	tincanrouter "tincan-server/router"
 )
 
 type server struct {
-	mu                   sync.Mutex
-	sessions             map[string]*sessionState
-	conversationSessions map[string]string
-	api                  *webrtc.API
-	config               webrtc.Configuration
-	inference            *inferenceClient
-	profiles             *AgentProfileStore
-	backends             *AgentBackendStore
-	conversations        *conversations.Store
-	agentAdapters        map[string]agent_adapters.Adapter
-	conversationService  *ConversationService
-	router               *Router
+	mu                  sync.Mutex
+	api                 *webrtc.API
+	config              webrtc.Configuration
+	callManager         *calls.Manager
+	inference           *inferenceClient
+	profiles            *AgentProfileStore
+	backends            *AgentBackendStore
+	conversations       *conversations.Store
+	agentAdapters       map[string]agent_adapters.Adapter
+	conversationService *ConversationService
+	router              *Router
 }
 
-type sessionState struct {
-	peerConnection *webrtc.PeerConnection
-	dataChannel    *webrtc.DataChannel
-	pushToTalk     bool
+type rtcDataChannelSink struct {
+	channel *webrtc.DataChannel
+}
+
+func (s rtcDataChannelSink) SendJSON(payload any) error {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	return s.channel.SendText(string(data))
+}
+
+func (s rtcDataChannelSink) Ready() bool {
+	return s.channel != nil && s.channel.ReadyState() == webrtc.DataChannelStateOpen
 }
 
 type webRTCOfferRequest struct {
@@ -226,16 +236,15 @@ func newServer() (*server, error) {
 	)
 
 	return &server{
-		sessions:             make(map[string]*sessionState),
-		conversationSessions: make(map[string]string),
-		api:                  api,
-		inference:            &inferenceClient{socketPath: inferenceSocketPath()},
-		profiles:             profiles,
-		backends:             backends,
-		conversations:        conversationStore,
-		agentAdapters:        agentAdapters,
-		conversationService:  NewConversationService(profiles, backends, conversationStore, agentAdapters),
-		router:               NewRouter(routerBackend, routerAdapter, profiles),
+		api:                 api,
+		inference:           &inferenceClient{socketPath: inferenceSocketPath()},
+		callManager:         calls.NewManager(),
+		profiles:            profiles,
+		backends:            backends,
+		conversations:       conversationStore,
+		agentAdapters:       agentAdapters,
+		conversationService: NewConversationService(profiles, backends, conversationStore, agentAdapters),
+		router:              NewRouter(routerBackend, routerAdapter, profiles),
 		config: webrtc.Configuration{
 			ICEServers: []webrtc.ICEServer{
 				{URLs: []string{"stun:stun.l.google.com:19302"}},
@@ -391,9 +400,7 @@ func (s *server) handleOpenCodeHook(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	s.mu.Lock()
-	sessionID, hasSession := s.conversationSessions[conversation.BackendConversationID]
-	s.mu.Unlock()
+	sessionID, hasSession := s.callManager.SessionIDForConversation(conversation.BackendConversationID)
 	if hasSession {
 		s.sendSessionEvent(sessionID, map[string]any{
 			"type":      "notify",
@@ -426,23 +433,14 @@ func (s *server) handleSessionControl(w http.ResponseWriter, r *http.Request) {
 	sessionID := parts[0]
 	action := parts[2]
 
-	s.mu.Lock()
-	session, ok := s.sessions[sessionID]
-	if ok {
-		switch action {
-		case "start":
-			session.pushToTalk = true
-		case "stop":
-			session.pushToTalk = false
-		default:
-			s.mu.Unlock()
-			http.NotFound(w, r)
-			return
-		}
+	switch action {
+	case "start", "stop":
+	default:
+		http.NotFound(w, r)
+		return
 	}
-	s.mu.Unlock()
 
-	if !ok {
+	if ok := s.callManager.SetPushToTalk(sessionID, action == "start"); !ok {
 		http.Error(w, "unknown session", http.StatusNotFound)
 		return
 	}
@@ -457,10 +455,7 @@ func (s *server) handleUtteranceUpload(w http.ResponseWriter, r *http.Request, s
 		return
 	}
 
-	s.mu.Lock()
-	_, ok := s.sessions[sessionID]
-	s.mu.Unlock()
-	if !ok {
+	if !s.callManager.HasSession(sessionID) {
 		http.Error(w, "unknown session", http.StatusNotFound)
 		return
 	}
@@ -541,9 +536,7 @@ func (s *server) handleUtteranceUpload(w http.ResponseWriter, r *http.Request, s
 				log.Printf("peer %s failed to persist conversation notes for %s: %v", sessionID, conversation.DisplayHandle, err)
 			}
 		}
-		s.mu.Lock()
-		s.conversationSessions[conversation.BackendConversationID] = sessionID
-		s.mu.Unlock()
+		s.callManager.LinkConversation(sessionID, conversation.BackendConversationID)
 		responsePayload["conversation"] = conversation
 	}
 
@@ -758,49 +751,22 @@ func (s *server) attachPeerLogging(sessionID string, peerConnection *webrtc.Peer
 	peerConnection.OnDataChannel(func(dataChannel *webrtc.DataChannel) {
 		log.Printf("peer %s opened data channel %q", sessionID, dataChannel.Label())
 		if dataChannel.Label() == "events" {
-			s.mu.Lock()
-			if session, ok := s.sessions[sessionID]; ok {
-				session.dataChannel = dataChannel
-			}
-			s.mu.Unlock()
+			s.callManager.SetEventSink(sessionID, rtcDataChannelSink{channel: dataChannel})
 		}
 	})
 }
 
 func (s *server) storePeer(sessionID string, peerConnection *webrtc.PeerConnection) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.sessions[sessionID] = &sessionState{peerConnection: peerConnection}
+	s.callManager.RegisterSession(sessionID)
 }
 
 func (s *server) closeAndDeletePeer(sessionID string) {
-	s.mu.Lock()
-	session, ok := s.sessions[sessionID]
-	if ok {
-		delete(s.sessions, sessionID)
-	}
-	s.mu.Unlock()
-
-	if ok {
-		_ = session.peerConnection.Close()
-	}
+	s.callManager.RemoveSession(sessionID)
 }
 
 func (s *server) sendSessionEvent(sessionID string, payload any) {
-	data, err := json.Marshal(payload)
-	if err != nil {
-		log.Printf("peer %s failed to encode session event: %v", sessionID, err)
-		return
-	}
-
-	s.mu.Lock()
-	session, ok := s.sessions[sessionID]
-	s.mu.Unlock()
-	if !ok || session.dataChannel == nil || session.dataChannel.ReadyState() != webrtc.DataChannelStateOpen {
-		return
-	}
-	if err := session.dataChannel.SendText(string(data)); err != nil {
-		log.Printf("peer %s failed to send session event: %v", sessionID, err)
+	if ok := s.callManager.SendEvent(sessionID, payload); !ok {
+		log.Printf("peer %s failed to send session event", sessionID)
 	}
 }
 
