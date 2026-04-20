@@ -20,7 +20,7 @@ final class LiblinphoneCallClient {
 
         let factory = Factory.Instance
         let core = try factory.createCore(configPath: nil, factoryConfigPath: nil, systemContext: nil)
-        core.start()
+        try core.start()
         self.core = core
         log("Started Liblinphone core")
     }
