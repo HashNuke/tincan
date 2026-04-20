@@ -24,16 +24,16 @@ import (
 )
 
 type server struct {
-	mu        sync.Mutex
-	sessions  map[string]*sessionState
-	api       *webrtc.API
-	config    webrtc.Configuration
-	inference *inferenceClient
-	profiles  *AgentProfileStore
-	conversations *ConversationStore
-	agentAdapters map[string]AgentAdapter
+	mu                  sync.Mutex
+	sessions            map[string]*sessionState
+	api                 *webrtc.API
+	config              webrtc.Configuration
+	inference           *inferenceClient
+	profiles            *AgentProfileStore
+	conversations       *ConversationStore
+	agentAdapters       map[string]AgentAdapter
 	conversationService *ConversationService
-	router    *Router
+	router              *Router
 }
 
 type sessionState struct {
@@ -111,6 +111,8 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", srv.handleHealth)
 	mux.HandleFunc("/speak", srv.handleSpeakPage)
+	mux.HandleFunc("/debug/audio/processing", srv.handleProcessingAudio)
+	mux.HandleFunc("/debug/audio/generated/", srv.handleGeneratedAudio)
 	mux.HandleFunc("/session/", srv.handleSessionControl)
 	mux.HandleFunc("/webrtc/offer", srv.handleOffer)
 
@@ -168,14 +170,14 @@ func newServer() (*server, error) {
 	)
 
 	return &server{
-		sessions:  make(map[string]*sessionState),
-		api:       api,
-		inference: &inferenceClient{socketPath: inferenceSocketPath()},
-		profiles: profiles,
-		conversations: conversationStore,
-		agentAdapters: agentAdapters,
+		sessions:            make(map[string]*sessionState),
+		api:                 api,
+		inference:           &inferenceClient{socketPath: inferenceSocketPath()},
+		profiles:            profiles,
+		conversations:       conversationStore,
+		agentAdapters:       agentAdapters,
 		conversationService: NewConversationService(profiles, conversationStore, agentAdapters),
-		router:    NewRouter(profiles),
+		router:              NewRouter(profiles),
 		config: webrtc.Configuration{
 			ICEServers: []webrtc.ICEServer{
 				{URLs: []string{"stun:stun.l.google.com:19302"}},
@@ -186,7 +188,7 @@ func newServer() (*server, error) {
 
 func (s *server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status": "ok",
+		"status":              "ok",
 		"agent_profile_count": len(s.profiles.List()),
 	})
 }
@@ -199,6 +201,50 @@ func (s *server) handleSpeakPage(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write([]byte(speakPageHTML))
+}
+
+func (s *server) handleProcessingAudio(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	audioPath := filepath.Join("assets", "audio", "hold_on_processing_1.wav")
+	audioData, err := os.ReadFile(audioPath)
+	if err != nil {
+		http.Error(w, "audio asset not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "audio/wav")
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(audioData)))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(audioData)
+}
+
+func (s *server) handleGeneratedAudio(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	name := strings.TrimPrefix(r.URL.Path, "/debug/audio/generated/")
+	if name == "" || strings.Contains(name, "/") || strings.Contains(name, "..") {
+		http.NotFound(w, r)
+		return
+	}
+
+	audioPath := filepath.Join("tmp", "generated-audio", name)
+	audioData, err := os.ReadFile(audioPath)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	w.Header().Set("Content-Type", "audio/wav")
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(audioData)))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(audioData)
 }
 
 func (s *server) handleSessionControl(w http.ResponseWriter, r *http.Request) {
@@ -298,8 +344,16 @@ func (s *server) handleUtteranceUpload(w http.ResponseWriter, r *http.Request, s
 	log.Printf("peer %s router action: %s agent=%q handle=%q feedback=%q", sessionID, routerResult.Action, routerResult.Agent, routerResult.ConversationHandle, routerResult.ImmediateFeedback)
 
 	responsePayload := map[string]any{
-		"text": transcript,
+		"text":   transcript,
 		"router": routerResult,
+	}
+	if routerResult.ImmediateFeedback != "" {
+		feedbackAudioURL, err := s.generateFeedbackAudio(routerResult.ImmediateFeedback)
+		if err != nil {
+			log.Printf("peer %s immediate feedback tts failed: %v", sessionID, err)
+		} else {
+			responsePayload["feedback_audio_url"] = feedbackAudioURL
+		}
 	}
 
 	if routerResult.Action == "new_conversation" {
@@ -318,6 +372,26 @@ func (s *server) handleUtteranceUpload(w http.ResponseWriter, r *http.Request, s
 	}
 
 	writeJSON(w, http.StatusOK, responsePayload)
+}
+
+func (s *server) generateFeedbackAudio(text string) (string, error) {
+	audioData, err := s.inference.synthesize(text)
+	if err != nil {
+		return "", err
+	}
+
+	generatedDir := filepath.Join("tmp", "generated-audio")
+	if err := os.MkdirAll(generatedDir, 0o755); err != nil {
+		return "", err
+	}
+
+	fileName := uuid.NewString() + ".wav"
+	filePath := filepath.Join(generatedDir, fileName)
+	if err := os.WriteFile(filePath, audioData, 0o644); err != nil {
+		return "", err
+	}
+
+	return "/debug/audio/generated/" + fileName, nil
 }
 
 func (s *server) handleOffer(w http.ResponseWriter, r *http.Request) {
@@ -486,6 +560,45 @@ func (c *inferenceClient) transcribe(audioData []byte, contentType string) (stri
 		return "", err
 	}
 	return "", lastErr
+}
+
+func (c *inferenceClient) synthesize(text string) ([]byte, error) {
+	conn, err := net.Dial("unix", c.socketPath)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	body := []byte(text)
+	request := inferenceMessage{
+		Header: inferenceEnvelope{
+			Kind:        "request",
+			RequestID:   uuid.NewString(),
+			Action:      "tts",
+			Model:       "pockettts",
+			ContentType: "text/plain",
+			BodyLength:  len(body),
+			Voice:       "alba",
+		},
+		Body: body,
+	}
+
+	if err := writeInferenceMessage(conn, request); err != nil {
+		return nil, err
+	}
+
+	response, err := readInferenceMessage(conn)
+	if err != nil {
+		return nil, err
+	}
+
+	if response.Header.Kind == "error" {
+		return nil, fmt.Errorf(response.Header.Message)
+	}
+	if response.Header.Kind != "result" || response.Header.Action != "tts" {
+		return nil, fmt.Errorf("unexpected tts response: %+v", response.Header)
+	}
+	return response.Body, nil
 }
 
 func (c *inferenceClient) transcribeOnce(audioData []byte, contentType string) (string, error) {

@@ -105,6 +105,25 @@
       color: #93a2c8;
       white-space: pre-wrap;
     }
+    .errors {
+      margin-top: 24px;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      padding-top: 20px;
+    }
+    .errors h2 {
+      margin: 0 0 12px;
+      font-size: 18px;
+    }
+    .error-log {
+      padding: 14px;
+      border-radius: 14px;
+      background: rgba(255, 120, 120, 0.08);
+      border: 1px solid rgba(255, 120, 120, 0.18);
+      color: #ffd7d7;
+      font-size: 12px;
+      white-space: pre-wrap;
+      min-height: 48px;
+    }
     code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
   </style>
 </head>
@@ -117,8 +136,10 @@
       <button id="connectButton">Connect</button>
       <button id="disconnectButton" disabled>Disconnect</button>
       <button id="talkButton" disabled>Start Speaking</button>
+      <button id="playServerAudioButton">Play Server Audio</button>
     </div>
     <div class="meta" id="meta">Waiting to connect.</div>
+    <audio id="remoteAudio" autoplay controls style="width:100%; margin-top: 12px;"></audio>
     <section class="history">
       <h2>Utterance History</h2>
       <div id="historyList" class="history-list">
@@ -127,14 +148,21 @@
         </div>
       </div>
     </section>
+    <section class="errors">
+      <h2>Page Errors</h2>
+      <div id="errorLog" class="error-log">No client-side errors yet.</div>
+    </section>
   </main>
   <script>
     const connectButton = document.getElementById('connectButton')
     const disconnectButton = document.getElementById('disconnectButton')
     const talkButton = document.getElementById('talkButton')
+    const playServerAudioButton = document.getElementById('playServerAudioButton')
     const statusEl = document.getElementById('status')
     const metaEl = document.getElementById('meta')
     const historyListEl = document.getElementById('historyList')
+    const remoteAudioEl = document.getElementById('remoteAudio')
+    const errorLogEl = document.getElementById('errorLog')
 
     let peerConnection = null
     let localStream = null
@@ -145,6 +173,20 @@
     let recordedChunks = []
     let mediaRecorderRef = { current: null }
     let utteranceHistory = []
+
+    function logClientError(message) {
+      const existing = errorLogEl.textContent === 'No client-side errors yet.' ? '' : errorLogEl.textContent + '\n\n'
+      errorLogEl.textContent = existing + '[' + new Date().toLocaleTimeString() + '] ' + message
+    }
+
+    window.addEventListener('error', (event) => {
+      logClientError(event.message || 'Unknown window error')
+    })
+
+    window.addEventListener('unhandledrejection', (event) => {
+      const reason = event.reason instanceof Error ? event.reason.message : String(event.reason)
+      logClientError('Unhandled promise rejection: ' + reason)
+    })
 
     function setStatus(text, klass = '') {
       statusEl.textContent = text
@@ -247,6 +289,14 @@
           setStatus('Connection: ' + state)
         }
         setMeta('WebRTC state: ' + state)
+      }
+
+      peerConnection.ontrack = (event) => {
+        const [stream] = event.streams
+        if (stream) {
+          remoteAudioEl.srcObject = stream
+          setMeta('Received remote audio track from server.')
+        }
       }
 
       const offer = await peerConnection.createOffer()
@@ -404,6 +454,12 @@
         }
 
         const payload = await response.json()
+        if (payload.feedback_audio_url) {
+          const feedbackAudio = new Audio(payload.feedback_audio_url)
+          void feedbackAudio.play().catch((error) => {
+            console.error(error)
+          })
+        }
         historyEntry.transcript = payload.text || ''
         addHistoryEntry(historyEntry)
         setMeta('Transcript: ' + (payload.text || '(empty)') + '\nRecorded content type: ' + (blob.type || 'audio/webm') + '\nUploaded content type: audio/wav\nUploaded bytes: ' + wavBytes.byteLength)
@@ -599,6 +655,17 @@
 
     talkButton.addEventListener('click', () => {
       setSpeaking(!isHoldingPushToTalk)
+    })
+
+    playServerAudioButton.addEventListener('click', async () => {
+      const audio = new Audio('/debug/audio/processing')
+      try {
+        await audio.play()
+        setMeta('Playing bundled server audio test.')
+      } catch (error) {
+        console.error(error)
+        setMeta('Server audio playback failed: ' + (error instanceof Error ? error.message : String(error)))
+      }
     })
 
     window.addEventListener('keydown', (event) => {
