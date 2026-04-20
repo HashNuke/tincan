@@ -19,16 +19,16 @@ func NewRouter(backend tincanconfig.AgentBackendDefinition, adapter agent_adapte
 	return &Router{backend: backend, adapter: adapter, profiles: profiles}
 }
 
-func (r *Router) RouteUserTranscript(input tincanrouter.UserRouterInput) (tincanrouter.UserRouterResult, error) {
+func (r *Router) RouteUserInput(input tincanrouter.RouteUserInputRequest) (tincanrouter.RouteUserInputResult, error) {
 	prompt := r.buildUserRouterPrompt(input)
 	result, err := r.adapter.RunRouterPrompt(r.backend, prompt, input.Transcript)
 	if err != nil {
-		return tincanrouter.UserRouterResult{}, fmt.Errorf("route transcript: %w", err)
+		return tincanrouter.RouteUserInputResult{}, fmt.Errorf("route user input: %w", err)
 	}
 	return result, nil
 }
 
-func (r *Router) buildUserRouterPrompt(input tincanrouter.UserRouterInput) string {
+func (r *Router) buildUserRouterPrompt(input tincanrouter.RouteUserInputRequest) string {
 	var profileNames []string
 	for _, profile := range r.profiles.List() {
 		profileNames = append(profileNames, profile.Name)
@@ -76,6 +76,9 @@ Current conversation handle:
 
 Current conversation notes:
 ` + input.CurrentConversationNotes + `
+
+Pending update handles:
+- ` + strings.Join(input.PendingUpdateHandles, "\n- ") + `
 
 User transcript:
 ` + input.Transcript)

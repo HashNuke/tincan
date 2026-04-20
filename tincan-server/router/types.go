@@ -1,13 +1,14 @@
 package router
 
-type UserRouterInput struct {
+type RouteUserInputRequest struct {
 	Transcript                string   `json:"transcript"`
 	CurrentConversationHandle string   `json:"current_conversation_handle,omitempty"`
 	CurrentConversationNotes  string   `json:"current_conversation_notes,omitempty"`
 	ConversationHandles       []string `json:"conversation_handles,omitempty"`
+	PendingUpdateHandles      []string `json:"pending_update_handles,omitempty"`
 }
 
-type UserRouterResult struct {
+type RouteUserInputResult struct {
 	Action                   string `json:"action"`
 	Message                  string `json:"message,omitempty"`
 	AgentProfile             string `json:"agent_profile,omitempty"`

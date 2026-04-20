@@ -2,6 +2,7 @@ package conversations
 
 import (
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -65,6 +66,27 @@ func (s *Store) CreateConversation(conversation Conversation) (Conversation, err
 	return conversation, nil
 }
 
+func (s *Store) ListConversationHandles() ([]string, error) {
+	var conversations []Conversation
+	if err := s.db.Select("display_handle").Order("created_at desc").Find(&conversations).Error; err != nil {
+		return nil, fmt.Errorf("list conversation handles: %w", err)
+	}
+
+	handles := make([]string, 0, len(conversations))
+	seen := make(map[string]struct{}, len(conversations))
+	for _, conversation := range conversations {
+		if conversation.DisplayHandle == "" {
+			continue
+		}
+		if _, ok := seen[conversation.DisplayHandle]; ok {
+			continue
+		}
+		seen[conversation.DisplayHandle] = struct{}{}
+		handles = append(handles, conversation.DisplayHandle)
+	}
+	return handles, nil
+}
+
 func (s *Store) GetConversationByBackendConversationID(backendConversationID string) (Conversation, bool, error) {
 	var conversation Conversation
 	err := s.db.Where("backend_conversation_id = ?", backendConversationID).First(&conversation).Error
@@ -73,6 +95,31 @@ func (s *Store) GetConversationByBackendConversationID(backendConversationID str
 			return Conversation{}, false, nil
 		}
 		return Conversation{}, false, fmt.Errorf("get conversation by backend id: %w", err)
+	}
+	return conversation, true, nil
+}
+
+func (s *Store) GetMostRecentConversationByBackendConversationIDs(backendConversationIDs []string) (Conversation, bool, error) {
+	filteredIDs := make([]string, 0, len(backendConversationIDs))
+	for _, backendConversationID := range backendConversationIDs {
+		if backendConversationID != "" {
+			filteredIDs = append(filteredIDs, backendConversationID)
+		}
+	}
+	if len(filteredIDs) == 0 {
+		return Conversation{}, false, nil
+	}
+
+	var conversation Conversation
+	err := s.db.
+		Where("backend_conversation_id IN ?", filteredIDs).
+		Order("updated_at desc").
+		First(&conversation).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return Conversation{}, false, nil
+		}
+		return Conversation{}, false, fmt.Errorf("get most recent conversation by backend ids: %w", err)
 	}
 	return conversation, true, nil
 }
@@ -117,6 +164,28 @@ func (s *Store) ListPendingUpdates(limit int) ([]ConversationUpdate, error) {
 		return nil, fmt.Errorf("list pending conversation updates: %w", err)
 	}
 	return updates, nil
+}
+
+func (s *Store) ListPendingUpdateHandles(limit int) ([]string, error) {
+	updates, err := s.ListPendingUpdates(limit)
+	if err != nil {
+		return nil, err
+	}
+
+	handles := make([]string, 0, len(updates))
+	seen := make(map[string]struct{}, len(updates))
+	for _, update := range updates {
+		if update.ConversationHandle == "" {
+			continue
+		}
+		if _, ok := seen[update.ConversationHandle]; ok {
+			continue
+		}
+		seen[update.ConversationHandle] = struct{}{}
+		handles = append(handles, update.ConversationHandle)
+	}
+	slices.Sort(handles)
+	return handles, nil
 }
 
 func (s *Store) ConsumeUpdate(id string) error {

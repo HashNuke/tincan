@@ -40,7 +40,6 @@ type server struct {
 	router              *Router
 }
 
-
 type openCodeHookEvent struct {
 	EventType    string `json:"event_type"`
 	SessionID    string `json:"session_id"`
@@ -447,7 +446,14 @@ func (s *server) handleUtteranceUpload(w http.ResponseWriter, r *http.Request, s
 
 	log.Printf("peer %s transcript: %s", sessionID, transcript)
 
-	routerResult, err := s.router.RouteUserTranscript(tincanrouter.UserRouterInput{Transcript: transcript})
+	routeRequest, err := s.buildRouteUserInputRequest(sessionID, transcript)
+	if err != nil {
+		log.Printf("peer %s failed to build router input context: %v", sessionID, err)
+		http.Error(w, fmt.Sprintf("failed to build router input context: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	routerResult, err := s.router.RouteUserInput(routeRequest)
 	if err != nil {
 		log.Printf("peer %s router failed: %v", sessionID, err)
 		http.Error(w, fmt.Sprintf("router failed: %v", err), http.StatusBadGateway)
@@ -491,6 +497,42 @@ func (s *server) handleUtteranceUpload(w http.ResponseWriter, r *http.Request, s
 	}
 
 	writeJSON(w, http.StatusOK, responsePayload)
+}
+
+func (s *server) buildRouteUserInputRequest(sessionID string, transcript string) (tincanrouter.RouteUserInputRequest, error) {
+	request := tincanrouter.RouteUserInputRequest{Transcript: transcript}
+
+	conversationHandles, err := s.conversations.ListConversationHandles()
+	if err != nil {
+		return tincanrouter.RouteUserInputRequest{}, err
+	}
+	request.ConversationHandles = conversationHandles
+
+	pendingUpdateHandles, err := s.conversations.ListPendingUpdateHandles(20)
+	if err != nil {
+		return tincanrouter.RouteUserInputRequest{}, err
+	}
+	request.PendingUpdateHandles = pendingUpdateHandles
+
+	currentConversation, ok, err := s.conversations.GetMostRecentConversationByBackendConversationIDs(s.callManager.BackendConversationIDsForSession(sessionID))
+	if err != nil {
+		return tincanrouter.RouteUserInputRequest{}, err
+	}
+	if !ok {
+		return request, nil
+	}
+
+	request.CurrentConversationHandle = currentConversation.DisplayHandle
+
+	note, ok, err := s.conversations.GetConversationNotes(currentConversation.ID)
+	if err != nil {
+		return tincanrouter.RouteUserInputRequest{}, err
+	}
+	if ok {
+		request.CurrentConversationNotes = note.NotesText
+	}
+
+	return request, nil
 }
 
 func (s *server) generateFeedbackAudio(text string) (string, error) {

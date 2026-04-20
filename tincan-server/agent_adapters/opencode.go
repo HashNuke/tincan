@@ -131,9 +131,9 @@ func (a *OpencodeAdapter) StartConversation(profile tincanconfig.AgentProfile, b
 	}, nil
 }
 
-func (a *OpencodeAdapter) RunRouterPrompt(backend tincanconfig.AgentBackendDefinition, prompt string, rawTranscript string) (tincanrouter.UserRouterResult, error) {
+func (a *OpencodeAdapter) RunRouterPrompt(backend tincanconfig.AgentBackendDefinition, prompt string, rawTranscript string) (tincanrouter.RouteUserInputResult, error) {
 	if err := a.ValidateBackend("__router__", backend); err != nil {
-		return tincanrouter.UserRouterResult{}, err
+		return tincanrouter.RouteUserInputResult{}, err
 	}
 
 	httpClient := a.httpClient
@@ -143,13 +143,13 @@ func (a *OpencodeAdapter) RunRouterPrompt(backend tincanconfig.AgentBackendDefin
 
 	baseURL, err := url.Parse(backend.Options.BaseURL)
 	if err != nil {
-		return tincanrouter.UserRouterResult{}, fmt.Errorf("parse opencode base url: %w", err)
+		return tincanrouter.RouteUserInputResult{}, fmt.Errorf("parse opencode base url: %w", err)
 	}
 
 	workingDirectory := "/Users/akash/code/apple/tincan"
 	session, err := a.createSession(httpClient, *baseURL, workingDirectory, "Router")
 	if err != nil {
-		return tincanrouter.UserRouterResult{}, err
+		return tincanrouter.RouteUserInputResult{}, err
 	}
 
 	messageURL := baseURL.ResolveReference(&url.URL{Path: strings.TrimRight(baseURL.Path, "/") + "/session/" + session.ID + "/message"})
@@ -159,7 +159,7 @@ func (a *OpencodeAdapter) RunRouterPrompt(backend tincanconfig.AgentBackendDefin
 
 	modelRef, err := parseOpenCodeModel(backend.Options.Model)
 	if err != nil {
-		return tincanrouter.UserRouterResult{}, err
+		return tincanrouter.RouteUserInputResult{}, err
 	}
 
 	body, err := json.Marshal(openCodePromptAsyncRequest{
@@ -168,28 +168,28 @@ func (a *OpencodeAdapter) RunRouterPrompt(backend tincanconfig.AgentBackendDefin
 		Parts: []openCodePromptPart{{Type: "text", Text: prompt}},
 	})
 	if err != nil {
-		return tincanrouter.UserRouterResult{}, fmt.Errorf("marshal router prompt: %w", err)
+		return tincanrouter.RouteUserInputResult{}, fmt.Errorf("marshal router prompt: %w", err)
 	}
 
 	req, err := http.NewRequest(http.MethodPost, messageURL.String(), bytes.NewReader(body))
 	if err != nil {
-		return tincanrouter.UserRouterResult{}, fmt.Errorf("build router message request: %w", err)
+		return tincanrouter.RouteUserInputResult{}, fmt.Errorf("build router message request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return tincanrouter.UserRouterResult{}, fmt.Errorf("router message request failed: %w", err)
+		return tincanrouter.RouteUserInputResult{}, fmt.Errorf("router message request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return tincanrouter.UserRouterResult{}, fmt.Errorf("router message failed with status %d", resp.StatusCode)
+		return tincanrouter.RouteUserInputResult{}, fmt.Errorf("router message failed with status %d", resp.StatusCode)
 	}
 
 	var messageResponse openCodeMessageResponse
 	if err := json.NewDecoder(resp.Body).Decode(&messageResponse); err != nil {
-		return tincanrouter.UserRouterResult{}, fmt.Errorf("decode router response: %w", err)
+		return tincanrouter.RouteUserInputResult{}, fmt.Errorf("decode router response: %w", err)
 	}
 
 	var textBuilder strings.Builder
@@ -201,15 +201,15 @@ func (a *OpencodeAdapter) RunRouterPrompt(backend tincanconfig.AgentBackendDefin
 
 	raw := strings.TrimSpace(textBuilder.String())
 	if raw == "" {
-		return tincanrouter.UserRouterResult{}, fmt.Errorf("router returned empty response")
+		return tincanrouter.RouteUserInputResult{}, fmt.Errorf("router returned empty response")
 	}
 
-	var result tincanrouter.UserRouterResult
+	var result tincanrouter.RouteUserInputResult
 	if err := json.Unmarshal([]byte(raw), &result); err != nil {
-		return tincanrouter.UserRouterResult{}, fmt.Errorf("decode router json response: %w; raw=%s", err, raw)
+		return tincanrouter.RouteUserInputResult{}, fmt.Errorf("decode router json response: %w; raw=%s", err, raw)
 	}
 	if result.Action == "" {
-		return tincanrouter.UserRouterResult{}, fmt.Errorf("router response missing action")
+		return tincanrouter.RouteUserInputResult{}, fmt.Errorf("router response missing action")
 	}
 	result.RawTranscript = rawTranscript
 	return result, nil

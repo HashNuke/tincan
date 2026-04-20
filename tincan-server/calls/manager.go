@@ -1,6 +1,9 @@
 package calls
 
-import "sync"
+import (
+	"slices"
+	"sync"
+)
 
 type EventSink interface {
 	SendJSON(payload any) error
@@ -91,6 +94,22 @@ func (m *Manager) SessionIDForConversation(backendConversationID string) (string
 	defer m.mu.Unlock()
 	sessionID, ok := m.conversationSessions[backendConversationID]
 	return sessionID, ok
+}
+
+func (m *Manager) BackendConversationIDsForSession(transportSessionID string) []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	session, ok := m.sessions[transportSessionID]
+	if !ok {
+		return nil
+	}
+
+	backendConversationIDs := make([]string, 0, len(session.BackendConversationIDs))
+	for backendConversationID := range session.BackendConversationIDs {
+		backendConversationIDs = append(backendConversationIDs, backendConversationID)
+	}
+	slices.Sort(backendConversationIDs)
+	return backendConversationIDs
 }
 
 func (m *Manager) SendEvent(transportSessionID string, payload any) bool {
