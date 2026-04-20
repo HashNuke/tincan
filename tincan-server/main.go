@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -9,8 +10,12 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
+	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -69,11 +74,25 @@ type inferenceClient struct {
 	socketPath string
 }
 
+type inferenceSupervisor struct {
+	socketPath string
+	cmd        *exec.Cmd
+}
+
 func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8004"
 	}
+
+	inference := newInferenceSupervisor(inferenceSocketPath())
+	if err := inference.EnsureRunning(ctx); err != nil {
+		log.Fatalf("failed to start inference service: %v", err)
+	}
+	defer inference.Shutdown()
 
 	srv := newServer()
 	mux := http.NewServeMux()
@@ -84,7 +103,16 @@ func main() {
 
 	addr := "0.0.0.0:" + port
 	log.Printf("tincan-server listening on %s", addr)
-	if err := http.ListenAndServe(addr, mux); err != nil {
+	httpServer := &http.Server{Addr: addr, Handler: mux}
+
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = httpServer.Shutdown(shutdownCtx)
+	}()
+
+	if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("server failed: %v", err)
 	}
 }
@@ -208,6 +236,14 @@ func (s *server) handleUtteranceUpload(w http.ResponseWriter, r *http.Request, s
 	if contentType == "" {
 		contentType = "audio/wav"
 	}
+
+	if debugPath, err := saveUtteranceForDebug(sessionID, audioData); err == nil {
+		log.Printf("peer %s saved utterance debug file: %s", sessionID, debugPath)
+	} else {
+		log.Printf("peer %s failed to save utterance debug file: %v", sessionID, err)
+	}
+
+	log.Printf("peer %s utterance upload: bytes=%d content_type=%s", sessionID, len(audioData), contentType)
 
 	transcript, err := s.inference.transcribe(audioData, contentType)
 	if err != nil {
@@ -372,6 +408,23 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 }
 
 func (c *inferenceClient) transcribe(audioData []byte, contentType string) (string, error) {
+	var lastErr error
+	for attempt := 1; attempt <= 2; attempt += 1 {
+		transcript, err := c.transcribeOnce(audioData, contentType)
+		if err == nil {
+			return transcript, nil
+		}
+		lastErr = err
+		if err == io.EOF {
+			log.Printf("inference socket EOF on attempt %d; retrying once", attempt)
+			continue
+		}
+		return "", err
+	}
+	return "", lastErr
+}
+
+func (c *inferenceClient) transcribeOnce(audioData []byte, contentType string) (string, error) {
 	conn, err := net.Dial("unix", c.socketPath)
 	if err != nil {
 		return "", err
@@ -398,6 +451,10 @@ func (c *inferenceClient) transcribe(audioData []byte, contentType string) (stri
 	response, err := readInferenceMessage(conn)
 	if err != nil {
 		return "", err
+	}
+	log.Printf("inference response header: kind=%s action=%s model=%s content_type=%s body_length=%d message=%q", response.Header.Kind, response.Header.Action, response.Header.Model, response.Header.ContentType, response.Header.BodyLength, response.Header.Message)
+	if response.Header.Action == "stt" && len(response.Body) > 0 {
+		log.Printf("inference response body: %s", string(response.Body))
 	}
 
 	if response.Header.Kind == "error" {
@@ -472,383 +529,73 @@ func inferenceSocketPath() string {
 	return homeDir + "/Library/Application Support/tincan/run/inference.sock"
 }
 
-const speakPageHTML = `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Tincan Speak</title>
-  <style>
-    :root { color-scheme: dark; }
-    body {
-      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      margin: 0;
-      min-height: 100vh;
-      display: grid;
-      place-items: center;
-      background: #0a0d14;
-      color: #edf2ff;
-    }
-    main {
-      width: min(680px, calc(100vw - 32px));
-      padding: 28px;
-      border-radius: 20px;
-      background: linear-gradient(180deg, rgba(31, 42, 68, 0.95), rgba(16, 22, 37, 0.98));
-      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
-    }
-    h1 { margin: 0 0 8px; font-size: 28px; }
-    p { margin: 0 0 18px; color: #b9c4df; line-height: 1.5; }
-    .row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
-    button {
-      border: 0;
-      border-radius: 12px;
-      padding: 12px 16px;
-      background: #4f7cff;
-      color: white;
-      font: inherit;
-      cursor: pointer;
-    }
-    button:disabled { opacity: 0.55; cursor: default; }
-    .status {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      padding: 10px 12px;
-      border-radius: 999px;
-      background: rgba(255, 255, 255, 0.08);
-      color: #dfe8ff;
-      font-size: 14px;
-      margin-bottom: 16px;
-    }
-    .status::before {
-      content: "";
-      width: 10px;
-      height: 10px;
-      border-radius: 999px;
-      background: #8794b5;
-      box-shadow: 0 0 0 6px rgba(135, 148, 181, 0.15);
-    }
-    .status.live::before { background: #3ddc97; box-shadow: 0 0 0 6px rgba(61, 220, 151, 0.16); }
-    .status.talking::before { background: #ffb648; box-shadow: 0 0 0 6px rgba(255, 182, 72, 0.18); }
-    .meta {
-      font-size: 13px;
-      color: #93a2c8;
-      margin-top: 12px;
-      white-space: pre-wrap;
-    }
-    code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-  </style>
-</head>
-<body>
-  <main>
-    <h1>Speak Test</h1>
-    <p>Connects to the local Go WebRTC endpoint. Hold <code>Z</code> to send microphone audio, release to stop sending.</p>
-    <div id="status" class="status">Disconnected</div>
-    <div class="row">
-      <button id="connectButton">Connect</button>
-      <button id="disconnectButton" disabled>Disconnect</button>
-    </div>
-    <div class="meta" id="meta">Waiting to connect.</div>
-  </main>
-  <script>
-    const connectButton = document.getElementById('connectButton')
-    const disconnectButton = document.getElementById('disconnectButton')
-    const statusEl = document.getElementById('status')
-    const metaEl = document.getElementById('meta')
+func saveUtteranceForDebug(sessionID string, audioData []byte) (string, error) {
+	debugDir := filepath.Join("tmp", "utterances")
+	if err := os.MkdirAll(debugDir, 0o755); err != nil {
+		return "", err
+	}
 
-    let peerConnection = null
-    let localStream = null
-    let audioTrack = null
-    let audioSender = null
-    let isHoldingPushToTalk = false
-    let sessionID = null
-    let captureContext = null
-    let captureSource = null
-    let captureProcessor = null
-    let capturedChunks = []
-    let captureSampleRate = 48000
+	filePath := filepath.Join(debugDir, fmt.Sprintf("%s-%s.wav", sessionID, time.Now().UTC().Format("20060102T150405.000000000")))
+	if err := os.WriteFile(filePath, audioData, 0o644); err != nil {
+		return "", err
+	}
+	return filePath, nil
+}
 
-    function setStatus(text, klass = '') {
-      statusEl.textContent = text
-      statusEl.className = ('status ' + klass).trim()
-    }
+func newInferenceSupervisor(socketPath string) *inferenceSupervisor {
+	return &inferenceSupervisor{socketPath: socketPath}
+}
 
-    function setMeta(text) {
-      metaEl.textContent = text
-    }
+func (s *inferenceSupervisor) EnsureRunning(ctx context.Context) error {
+	if isSocketReady(s.socketPath) {
+		log.Printf("using existing inference service at %s", s.socketPath)
+		return nil
+	}
 
-    async function connect() {
-      if (peerConnection) return
+	command := exec.CommandContext(ctx, "swift", "run")
+	command.Dir = filepath.Join("..", "tincan-inference-macos")
+	command.Stdout = os.Stdout
+	command.Stderr = os.Stderr
 
-      setStatus('Requesting microphone…')
-      setMeta('Browser microphone permission is still required, even on localhost.')
+	if err := command.Start(); err != nil {
+		return err
+	}
+	log.Printf("started tincan-inference-macos with pid %d", command.Process.Pid)
+	s.cmd = command
 
-      localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false })
-      audioTrack = localStream.getAudioTracks()[0]
-      audioTrack.enabled = false
-      setStatus('Microphone ready')
-      setMeta('Microphone granted. Creating WebRTC peer connection…')
+	deadline := time.Now().Add(60 * time.Second)
+	for time.Now().Before(deadline) {
+		if isSocketReady(s.socketPath) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
 
-      peerConnection = new RTCPeerConnection({
-        iceServers: [{ urls: ['stun:stun.l.google.com:19302'] }],
-      })
+	return fmt.Errorf("inference socket did not become ready at %s", s.socketPath)
+}
 
-      for (const track of localStream.getTracks()) {
-        const sender = peerConnection.addTrack(track, localStream)
-        if (track.kind === 'audio') {
-          audioSender = sender
-        }
-      }
+func (s *inferenceSupervisor) Shutdown() {
+	if s.cmd == nil || s.cmd.Process == nil {
+		return
+	}
 
-      if (audioSender) {
-        await audioSender.replaceTrack(null)
-      }
+	_ = s.cmd.Process.Signal(syscall.SIGTERM)
+	_, _ = s.cmd.Process.Wait()
+	s.cmd = nil
+}
 
-      peerConnection.onicegatheringstatechange = () => {
-        if (!peerConnection) return
-        const state = peerConnection.iceGatheringState
-        if (state === 'gathering') {
-          setStatus('Gathering ICE…')
-          setMeta('Preparing local network candidates for the WebRTC connection…')
-        }
-      }
-
-      peerConnection.onconnectionstatechange = () => {
-        const state = peerConnection?.connectionState || 'closed'
-        if (state === 'connected') {
-          setStatus(isHoldingPushToTalk ? 'Connected, sending audio' : 'Connected', isHoldingPushToTalk ? 'talking' : 'live')
-        } else {
-          setStatus('Connection: ' + state)
-        }
-        setMeta('WebRTC state: ' + state)
-      }
-
-      const offer = await peerConnection.createOffer()
-      await peerConnection.setLocalDescription(offer)
-
-      setStatus('Connecting…')
-      setMeta('Sending WebRTC offer to the local Go server…')
-
-      await waitForIceGathering(peerConnection, 3000)
-
-      const response = await fetch('/webrtc/offer', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          sdp: peerConnection.localDescription.sdp,
-          type: peerConnection.localDescription.type,
-        }),
-      })
-
-      if (!response.ok) {
-        throw new Error('Offer request failed with ' + response.status)
-      }
-
-      const answer = await response.json()
-      await peerConnection.setRemoteDescription({ type: answer.type, sdp: answer.sdp })
-      sessionID = answer.session_id
-
-      connectButton.disabled = true
-      disconnectButton.disabled = false
-      setStatus('Connected', 'live')
-      setMeta('Connected. Session: ' + answer.session_id + '\nHold Z to transmit audio.')
-    }
-
-    async function disconnect() {
-      isHoldingPushToTalk = false
-      if (audioTrack) {
-        audioTrack.enabled = false
-      }
-      if (peerConnection) {
-        peerConnection.close()
-        peerConnection = null
-      }
-      if (localStream) {
-        for (const track of localStream.getTracks()) {
-          track.stop()
-        }
-        localStream = null
-      }
-      audioTrack = null
-      sessionID = null
-      if (captureProcessor) {
-        captureProcessor.disconnect()
-      }
-      if (captureSource) {
-        captureSource.disconnect()
-      }
-      if (captureContext) {
-        await captureContext.close()
-      }
-      connectButton.disabled = false
-      disconnectButton.disabled = true
-      setStatus('Disconnected')
-      setMeta('Disconnected.')
-    }
-
-    function updatePushToTalk(active) {
-      isHoldingPushToTalk = active
-      if (!audioTrack || !audioSender) return
-
-      const applyTrack = async () => {
-        try {
-          if (!sessionID) {
-            throw new Error('Missing session ID')
-          }
-
-          const controlResponse = await fetch('/session/' + encodeURIComponent(sessionID) + '/push-to-talk/' + (active ? 'start' : 'stop'), {
-            method: 'POST',
-          })
-          if (!controlResponse.ok) {
-            throw new Error('Push-to-talk control failed with ' + controlResponse.status)
-          }
-
-          if (active) {
-            startCapture()
-          }
-
-          await audioSender.replaceTrack(active ? audioTrack : null)
-          if (!active) {
-            await stopCaptureAndUpload()
-          }
-          if (!peerConnection || peerConnection.connectionState !== 'connected') return
-          setStatus(active ? 'Connected, sending audio' : 'Connected', active ? 'talking' : 'live')
-          setMeta(active ? 'Transmitting microphone audio while Z is held.' : 'Microphone connected but muted. Hold Z to transmit audio.')
-        } catch (error) {
-          console.error(error)
-          setMeta('Push-to-talk toggle failed: ' + (error instanceof Error ? error.message : String(error)))
-        }
-      }
-
-      void applyTrack()
-    }
-
-    function startCapture() {
-      capturedChunks.length = 0
-      if (!localStream) return
-
-      if (!captureContext) {
-        const AudioContextCtor = window.AudioContext || window.webkitAudioContext
-        captureContext = new AudioContextCtor({ sampleRate: captureSampleRate })
-        captureSource = captureContext.createMediaStreamSource(localStream)
-        captureProcessor = captureContext.createScriptProcessor(4096, 1, 1)
-        captureProcessor.onaudioprocess = (event) => {
-          if (!isHoldingPushToTalk) return
-          const channel = event.inputBuffer.getChannelData(0)
-          capturedChunks.push(new Float32Array(channel))
-        }
-        captureSource.connect(captureProcessor)
-        captureProcessor.connect(captureContext.destination)
-      }
-    }
-
-    async function stopCaptureAndUpload() {
-      if (!sessionID || capturedChunks.length === 0) return
-
-      const wavBytes = encodeWav(capturedChunks, captureSampleRate)
-      capturedChunks.length = 0
-
-      const response = await fetch('/session/' + encodeURIComponent(sessionID) + '/utterance', {
-        method: 'POST',
-        headers: {
-          'content-type': 'audio/wav',
-        },
-        body: wavBytes,
-      })
-
-      if (!response.ok) {
-        throw new Error('Utterance upload failed with ' + response.status)
-      }
-
-      const payload = await response.json()
-      setMeta('Transcript: ' + (payload.text || '(empty)'))
-    }
-
-    function encodeWav(chunks, sampleRate) {
-      const totalSamples = chunks.reduce((sum, chunk) => sum + chunk.length, 0)
-      const bytesPerSample = 2
-      const dataSize = totalSamples * bytesPerSample
-      const buffer = new ArrayBuffer(44 + dataSize)
-      const view = new DataView(buffer)
-
-      writeAscii(view, 0, 'RIFF')
-      view.setUint32(4, 36 + dataSize, true)
-      writeAscii(view, 8, 'WAVE')
-      writeAscii(view, 12, 'fmt ')
-      view.setUint32(16, 16, true)
-      view.setUint16(20, 1, true)
-      view.setUint16(22, 1, true)
-      view.setUint32(24, sampleRate, true)
-      view.setUint32(28, sampleRate * bytesPerSample, true)
-      view.setUint16(32, bytesPerSample, true)
-      view.setUint16(34, 16, true)
-      writeAscii(view, 36, 'data')
-      view.setUint32(40, dataSize, true)
-
-      let offset = 44
-      for (const chunk of chunks) {
-        for (let i = 0; i < chunk.length; i += 1) {
-          const sample = Math.max(-1, Math.min(1, chunk[i]))
-          view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true)
-          offset += 2
-        }
-      }
-
-      return buffer
-    }
-
-    function writeAscii(view, offset, value) {
-      for (let i = 0; i < value.length; i += 1) {
-        view.setUint8(offset + i, value.charCodeAt(i))
-      }
-    }
-
-    function waitForIceGathering(pc, timeoutMs) {
-      if (pc.iceGatheringState === 'complete') return Promise.resolve()
-      return new Promise((resolve) => {
-        const timeout = window.setTimeout(() => {
-          pc.removeEventListener('icegatheringstatechange', checkState)
-          resolve()
-        }, timeoutMs)
-
-        function checkState() {
-          if (pc.iceGatheringState === 'complete') {
-            window.clearTimeout(timeout)
-            pc.removeEventListener('icegatheringstatechange', checkState)
-            resolve()
-          }
-        }
-        pc.addEventListener('icegatheringstatechange', checkState)
-      })
-    }
-
-    connectButton.addEventListener('click', async () => {
-      connectButton.disabled = true
-      try {
-        await connect()
-      } catch (error) {
-        console.error(error)
-        await disconnect()
-        setMeta('Connect failed: ' + (error instanceof Error ? error.message : String(error)))
-      }
-    })
-
-    disconnectButton.addEventListener('click', async () => {
-      await disconnect()
-    })
-
-    window.addEventListener('keydown', (event) => {
-      if (event.repeat) return
-      if (event.key.toLowerCase() !== 'z') return
-      if (!peerConnection) return
-      updatePushToTalk(true)
-    })
-
-    window.addEventListener('keyup', (event) => {
-      if (event.key.toLowerCase() !== 'z') return
-      updatePushToTalk(false)
-    })
-  </script>
-</body>
-</html>
-`
+func isSocketReady(socketPath string) bool {
+	if socketPath == "" {
+		return false
+	}
+	conn, err := net.DialTimeout("unix", socketPath, 250*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}

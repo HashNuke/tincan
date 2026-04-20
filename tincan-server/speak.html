@@ -1,0 +1,617 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Tincan Speak</title>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: #0a0d14;
+      color: #edf2ff;
+    }
+    main {
+      width: min(680px, calc(100vw - 32px));
+      padding: 28px;
+      border-radius: 20px;
+      background: linear-gradient(180deg, rgba(31, 42, 68, 0.95), rgba(16, 22, 37, 0.98));
+      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+    }
+    h1 { margin: 0 0 8px; font-size: 28px; }
+    p { margin: 0 0 18px; color: #b9c4df; line-height: 1.5; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
+    button {
+      border: 0;
+      border-radius: 12px;
+      padding: 12px 16px;
+      background: #4f7cff;
+      color: white;
+      font: inherit;
+      cursor: pointer;
+    }
+    button:disabled { opacity: 0.55; cursor: default; }
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.08);
+      color: #dfe8ff;
+      font-size: 14px;
+      margin-bottom: 16px;
+    }
+    .status::before {
+      content: "";
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: #8794b5;
+      box-shadow: 0 0 0 6px rgba(135, 148, 181, 0.15);
+    }
+    .status.live::before { background: #3ddc97; box-shadow: 0 0 0 6px rgba(61, 220, 151, 0.16); }
+    .status.talking::before { background: #ffb648; box-shadow: 0 0 0 6px rgba(255, 182, 72, 0.18); }
+    .meta {
+      font-size: 13px;
+      color: #93a2c8;
+      margin-top: 12px;
+      white-space: pre-wrap;
+    }
+    .history {
+      margin-top: 24px;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      padding-top: 20px;
+    }
+    .history h2 {
+      margin: 0 0 12px;
+      font-size: 18px;
+    }
+    .history-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .history-item {
+      padding: 14px;
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+    }
+    .history-top {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    .history-time {
+      font-size: 12px;
+      color: #93a2c8;
+    }
+    .history-body {
+      font-size: 14px;
+      color: #dfe8ff;
+      white-space: pre-wrap;
+      line-height: 1.5;
+      margin-bottom: 10px;
+    }
+    .history-meta {
+      font-size: 12px;
+      color: #93a2c8;
+      white-space: pre-wrap;
+    }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Speak Test</h1>
+    <p>Connects to the local Go WebRTC endpoint. Hold <code>Z</code> to send microphone audio, release to stop sending.</p>
+    <div id="status" class="status">Disconnected</div>
+    <div class="row">
+      <button id="connectButton">Connect</button>
+      <button id="disconnectButton" disabled>Disconnect</button>
+      <button id="talkButton" disabled>Start Speaking</button>
+    </div>
+    <div class="meta" id="meta">Waiting to connect.</div>
+    <section class="history">
+      <h2>Utterance History</h2>
+      <div id="historyList" class="history-list">
+        <div class="history-item">
+          <div class="history-body">No utterances yet.</div>
+        </div>
+      </div>
+    </section>
+  </main>
+  <script>
+    const connectButton = document.getElementById('connectButton')
+    const disconnectButton = document.getElementById('disconnectButton')
+    const talkButton = document.getElementById('talkButton')
+    const statusEl = document.getElementById('status')
+    const metaEl = document.getElementById('meta')
+    const historyListEl = document.getElementById('historyList')
+
+    let peerConnection = null
+    let localStream = null
+    let audioTrack = null
+    let audioSender = null
+    let isHoldingPushToTalk = false
+    let sessionID = null
+    let recordedChunks = []
+    let mediaRecorderRef = { current: null }
+    let utteranceHistory = []
+
+    function setStatus(text, klass = '') {
+      statusEl.textContent = text
+      statusEl.className = ('status ' + klass).trim()
+    }
+
+    function setMeta(text) {
+      metaEl.textContent = text
+    }
+
+    function addHistoryEntry(entry) {
+      utteranceHistory.unshift(entry)
+      renderHistory()
+    }
+
+    function renderHistory() {
+      if (utteranceHistory.length === 0) {
+        historyListEl.innerHTML = '<div class="history-item"><div class="history-body">No utterances yet.</div></div>'
+        return
+      }
+
+      historyListEl.innerHTML = ''
+      for (const entry of utteranceHistory) {
+        const item = document.createElement('div')
+        item.className = 'history-item'
+
+        const top = document.createElement('div')
+        top.className = 'history-top'
+
+        const time = document.createElement('div')
+        time.className = 'history-time'
+        time.textContent = entry.timestamp
+
+        const playButton = document.createElement('button')
+        playButton.textContent = 'Play'
+        playButton.addEventListener('click', () => {
+          const audio = new Audio(entry.playbackURL)
+          void audio.play()
+        })
+
+        top.appendChild(time)
+        top.appendChild(playButton)
+
+        const body = document.createElement('div')
+        body.className = 'history-body'
+        body.textContent = entry.transcript || '(empty transcript)'
+
+        const meta = document.createElement('div')
+        meta.className = 'history-meta'
+        meta.textContent = 'Recorded: ' + entry.recordedType + '\nUploaded: ' + entry.uploadedType + '\nBytes: ' + entry.uploadedBytes
+
+        item.appendChild(top)
+        item.appendChild(body)
+        item.appendChild(meta)
+        historyListEl.appendChild(item)
+      }
+    }
+
+    async function connect() {
+      if (peerConnection) return
+
+      setStatus('Requesting microphone…')
+      setMeta('Browser microphone permission is still required, even on localhost.')
+
+      localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+      audioTrack = localStream.getAudioTracks()[0]
+      mediaRecorderRef.current = createMediaRecorder(localStream)
+      setStatus('Microphone ready')
+      setMeta('Microphone granted. Creating WebRTC peer connection…')
+
+      peerConnection = new RTCPeerConnection({
+        iceServers: [{ urls: ['stun:stun.l.google.com:19302'] }],
+      })
+
+      for (const track of localStream.getTracks()) {
+        const sender = peerConnection.addTrack(track, localStream)
+        if (track.kind === 'audio') {
+          audioSender = sender
+        }
+      }
+
+      if (audioSender) {
+        await audioSender.replaceTrack(null)
+      }
+
+      peerConnection.onicegatheringstatechange = () => {
+        if (!peerConnection) return
+        const state = peerConnection.iceGatheringState
+        if (state === 'gathering') {
+          setStatus('Gathering ICE…')
+          setMeta('Preparing local network candidates for the WebRTC connection…')
+        }
+      }
+
+      peerConnection.onconnectionstatechange = () => {
+        const state = peerConnection?.connectionState || 'closed'
+        if (state === 'connected') {
+          setStatus(isHoldingPushToTalk ? 'Connected, sending audio' : 'Connected', isHoldingPushToTalk ? 'talking' : 'live')
+        } else {
+          setStatus('Connection: ' + state)
+        }
+        setMeta('WebRTC state: ' + state)
+      }
+
+      const offer = await peerConnection.createOffer()
+      await peerConnection.setLocalDescription(offer)
+
+      setStatus('Connecting…')
+      setMeta('Sending WebRTC offer to the local Go server…')
+
+      await waitForIceGathering(peerConnection, 3000)
+
+      const response = await fetch('/webrtc/offer', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          sdp: peerConnection.localDescription.sdp,
+          type: peerConnection.localDescription.type,
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error('Offer request failed with ' + response.status)
+      }
+
+      const answer = await response.json()
+      await peerConnection.setRemoteDescription({ type: answer.type, sdp: answer.sdp })
+      sessionID = answer.session_id
+
+      connectButton.disabled = true
+      disconnectButton.disabled = false
+      talkButton.disabled = false
+      talkButton.textContent = 'Start Speaking'
+      setStatus('Connected', 'live')
+      setMeta('Connected. Session: ' + answer.session_id + '\nHold Z to transmit audio.')
+    }
+
+    async function disconnect() {
+      isHoldingPushToTalk = false
+      if (peerConnection) {
+        peerConnection.close()
+        peerConnection = null
+      }
+      if (localStream) {
+        for (const track of localStream.getTracks()) {
+          track.stop()
+        }
+        localStream = null
+      }
+      audioTrack = null
+      sessionID = null
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        mediaRecorderRef.current.stop()
+      }
+      mediaRecorderRef.current = null
+      connectButton.disabled = false
+      disconnectButton.disabled = true
+      talkButton.disabled = true
+      talkButton.textContent = 'Start Speaking'
+      setStatus('Disconnected')
+      setMeta('Disconnected.')
+    }
+
+    function updatePushToTalk(active) {
+      isHoldingPushToTalk = active
+      if (!audioTrack || !audioSender) return
+
+      const applyTrack = async () => {
+        try {
+          if (!sessionID) {
+            throw new Error('Missing session ID')
+          }
+
+          const controlResponse = await fetch('/session/' + encodeURIComponent(sessionID) + '/push-to-talk/' + (active ? 'start' : 'stop'), {
+            method: 'POST',
+          })
+          if (!controlResponse.ok) {
+            throw new Error('Push-to-talk control failed with ' + controlResponse.status)
+          }
+
+          if (active) {
+            startCapture()
+          }
+
+          await audioSender.replaceTrack(active ? audioTrack : null)
+          if (!peerConnection || peerConnection.connectionState !== 'connected') return
+
+          if (active) {
+            setStatus('Connected, sending audio', 'talking')
+            setMeta('Transmitting microphone audio while Z is held.')
+            return
+          }
+
+          setStatus('Connected', 'live')
+          setMeta('Uploaded utterance. Waiting for transcription…')
+          void stopCaptureAndUpload()
+        } catch (error) {
+          console.error(error)
+          setStatus('Connected', 'live')
+          setMeta('Push-to-talk toggle failed: ' + (error instanceof Error ? error.message : String(error)))
+        }
+      }
+
+      void applyTrack()
+    }
+
+    function setSpeaking(active) {
+      if (!peerConnection) return
+      if (active === isHoldingPushToTalk) return
+      talkButton.textContent = active ? 'Stop Speaking' : 'Start Speaking'
+      updatePushToTalk(active)
+    }
+
+    function startCapture() {
+      recordedChunks.length = 0
+      const recorder = mediaRecorderRef.current
+      if (!recorder) return
+      if (recorder.state === 'inactive') {
+        recorder.start()
+      }
+    }
+
+    async function stopCaptureAndUpload() {
+      if (!sessionID || !mediaRecorderRef.current) {
+        setMeta('Microphone connected but muted. Hold Z to transmit audio.')
+        return
+      }
+
+      const blob = await stopRecorderAndCollectBlob()
+      if (!blob || blob.size === 0) {
+        setMeta('Recorded audio was empty.')
+        return
+      }
+
+      const wavBytes = await convertBlobToWav(blob)
+      const playbackURL = URL.createObjectURL(new Blob([wavBytes], { type: 'audio/wav' }))
+      const historyEntry = {
+        timestamp: new Date().toLocaleTimeString(),
+        recordedType: blob.type || 'audio/webm',
+        uploadedType: 'audio/wav',
+        uploadedBytes: wavBytes.byteLength,
+        transcript: '',
+        playbackURL,
+      }
+
+      try {
+        const response = await fetch('/session/' + encodeURIComponent(sessionID) + '/utterance', {
+          method: 'POST',
+          headers: {
+            'content-type': 'audio/wav',
+          },
+          body: wavBytes,
+        })
+
+        if (!response.ok) {
+          throw new Error('Utterance upload failed with ' + response.status)
+        }
+
+        const payload = await response.json()
+        historyEntry.transcript = payload.text || ''
+        addHistoryEntry(historyEntry)
+        setMeta('Transcript: ' + (payload.text || '(empty)') + '\nRecorded content type: ' + (blob.type || 'audio/webm') + '\nUploaded content type: audio/wav\nUploaded bytes: ' + wavBytes.byteLength)
+      } catch (error) {
+        console.error(error)
+        historyEntry.transcript = '(transcription failed)'
+        addHistoryEntry(historyEntry)
+        setMeta('Transcription failed: ' + (error instanceof Error ? error.message : String(error)))
+      }
+    }
+
+    async function convertBlobToWav(blob) {
+      const arrayBuffer = await blob.arrayBuffer()
+      const AudioContextCtor = window.AudioContext || window.webkitAudioContext
+      const context = new AudioContextCtor()
+      try {
+        const audioBuffer = await context.decodeAudioData(arrayBuffer.slice(0))
+        return encodeAudioBufferToWav(audioBuffer, 16000)
+      } finally {
+        await context.close()
+      }
+    }
+
+    function encodeAudioBufferToWav(audioBuffer, targetSampleRate) {
+      const merged = mixToMono(audioBuffer)
+      const resampled = audioBuffer.sampleRate === targetSampleRate ? merged : resampleBuffer(merged, audioBuffer.sampleRate, targetSampleRate)
+      const normalized = normalizeBuffer(resampled)
+      return encodePCM16Wav(normalized, targetSampleRate)
+    }
+
+    function mixToMono(audioBuffer) {
+      const channelCount = audioBuffer.numberOfChannels
+      const length = audioBuffer.length
+      const mono = new Float32Array(length)
+
+      for (let channel = 0; channel < channelCount; channel += 1) {
+        const input = audioBuffer.getChannelData(channel)
+        for (let i = 0; i < length; i += 1) {
+          mono[i] += input[i] / channelCount
+        }
+      }
+
+      return mono
+    }
+
+    function encodePCM16Wav(samples, sampleRate) {
+      const bytesPerSample = 2
+      const dataSize = samples.length * bytesPerSample
+      const buffer = new ArrayBuffer(44 + dataSize)
+      const view = new DataView(buffer)
+
+      writeAscii(view, 0, 'RIFF')
+      view.setUint32(4, 36 + dataSize, true)
+      writeAscii(view, 8, 'WAVE')
+      writeAscii(view, 12, 'fmt ')
+      view.setUint32(16, 16, true)
+      view.setUint16(20, 1, true)
+      view.setUint16(22, 1, true)
+      view.setUint32(24, sampleRate, true)
+      view.setUint32(28, sampleRate * bytesPerSample, true)
+      view.setUint16(32, bytesPerSample, true)
+      view.setUint16(34, 16, true)
+      writeAscii(view, 36, 'data')
+      view.setUint32(40, dataSize, true)
+
+      let offset = 44
+      for (let i = 0; i < samples.length; i += 1) {
+        const sample = Math.max(-1, Math.min(1, samples[i]))
+        view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true)
+        offset += 2
+      }
+
+      return buffer
+    }
+
+    function resampleBuffer(input, sourceRate, targetRate) {
+      const ratio = sourceRate / targetRate
+      const outputLength = Math.max(1, Math.round(input.length / ratio))
+      const output = new Float32Array(outputLength)
+
+      let outputIndex = 0
+      let inputIndex = 0
+      while (outputIndex < outputLength) {
+        const nextInputIndex = Math.min(input.length, Math.round((outputIndex + 1) * ratio))
+        let sum = 0
+        let count = 0
+        for (; inputIndex < nextInputIndex; inputIndex += 1) {
+          sum += input[inputIndex]
+          count += 1
+        }
+        output[outputIndex] = count > 0 ? sum / count : 0
+        outputIndex += 1
+      }
+      return output
+    }
+
+    function normalizeBuffer(input) {
+      let max = 0
+      for (let i = 0; i < input.length; i += 1) {
+        max = Math.max(max, Math.abs(input[i]))
+      }
+      if (max <= 0 || max >= 0.95) {
+        return input
+      }
+      const gain = 0.95 / max
+      const output = new Float32Array(input.length)
+      for (let i = 0; i < input.length; i += 1) {
+        output[i] = input[i] * gain
+      }
+      return output
+    }
+
+    function writeAscii(view, offset, value) {
+      for (let i = 0; i < value.length; i += 1) {
+        view.setUint8(offset + i, value.charCodeAt(i))
+      }
+    }
+
+    function stopRecorderAndCollectBlob() {
+      return new Promise((resolve) => {
+        const recorder = mediaRecorderRef.current
+        if (!recorder || recorder.state === 'inactive') {
+          resolve(null)
+          return
+        }
+
+        recorder.addEventListener('stop', function handleStop() {
+          recorder.removeEventListener('stop', handleStop)
+          resolve(new Blob(recordedChunks, { type: recorder.mimeType || 'audio/webm' }))
+        }, { once: true })
+
+        recorder.stop()
+      })
+    }
+
+    function createMediaRecorder(stream) {
+      const options = [
+        'audio/webm;codecs=opus',
+        'audio/webm',
+        'audio/mp4',
+      ]
+
+      let mimeType = ''
+      for (const candidate of options) {
+        if (window.MediaRecorder && MediaRecorder.isTypeSupported(candidate)) {
+          mimeType = candidate
+          break
+        }
+      }
+
+      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream)
+      recorder.addEventListener('dataavailable', (event) => {
+        if (event.data && event.data.size > 0) {
+          recordedChunks.push(event.data)
+        }
+      })
+      return recorder
+    }
+
+    function waitForIceGathering(pc, timeoutMs) {
+      if (pc.iceGatheringState === 'complete') return Promise.resolve()
+      return new Promise((resolve) => {
+        const timeout = window.setTimeout(() => {
+          pc.removeEventListener('icegatheringstatechange', checkState)
+          resolve()
+        }, timeoutMs)
+
+        function checkState() {
+          if (pc.iceGatheringState === 'complete') {
+            window.clearTimeout(timeout)
+            pc.removeEventListener('icegatheringstatechange', checkState)
+            resolve()
+          }
+        }
+        pc.addEventListener('icegatheringstatechange', checkState)
+      })
+    }
+
+    connectButton.addEventListener('click', async () => {
+      connectButton.disabled = true
+      try {
+        await connect()
+      } catch (error) {
+        console.error(error)
+        await disconnect()
+        setMeta('Connect failed: ' + (error instanceof Error ? error.message : String(error)))
+      }
+    })
+
+    disconnectButton.addEventListener('click', async () => {
+      await disconnect()
+    })
+
+    talkButton.addEventListener('click', () => {
+      setSpeaking(!isHoldingPushToTalk)
+    })
+
+    window.addEventListener('keydown', (event) => {
+      if (event.repeat) return
+      if (event.key.toLowerCase() !== 'z') return
+      if (!peerConnection) return
+      setSpeaking(true)
+    })
+
+    window.addEventListener('keyup', (event) => {
+      if (event.key.toLowerCase() !== 'z') return
+      setSpeaking(false)
+    })
+  </script>
+</body>
+</html>

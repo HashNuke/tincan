@@ -190,10 +190,13 @@ final class InferenceSocketServer: @unchecked Sendable {
             return errorResponse(for: request, message: "STT request must use an audio/* content type")
         }
 
+        print("stt request id=\(request.header.requestID) bytes=\(request.body.count) contentType=\(request.header.contentType)")
+
         let transcriptText = try await sttService.transcribe(
             audioData: request.body,
             fileExtension: fileExtension(for: request.header.contentType)
         )
+        print("stt result id=\(request.header.requestID) length=\(transcriptText.count) text=\(String(reflecting: transcriptText))")
         let body = try jsonEncoder.encode(["text": transcriptText])
         let header = InferenceEnvelope(
             kind: .result,
@@ -349,11 +352,19 @@ actor ParakeetSTTService {
             .appendingPathExtension(fileExtension)
 
         try audioData.write(to: temporaryFileURL)
-        defer { try? FileManager.default.removeItem(at: temporaryFileURL) }
+        print("stt temp file path=\(temporaryFileURL.path) bytes=\(audioData.count)")
 
         let manager = try await asrManager()
         let result = try await manager.transcribe(temporaryFileURL)
-        return result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if trimmed.isEmpty {
+            print("stt empty transcript, preserving temp file at \(temporaryFileURL.path)")
+        } else {
+            try? FileManager.default.removeItem(at: temporaryFileURL)
+        }
+
+        return trimmed
     }
 
     private func asrManager() async throws -> AsrManager {
@@ -366,9 +377,11 @@ actor ParakeetSTTService {
             return manager
         case .idle:
             let task = Task { () throws -> AsrManager in
+                print("loading Parakeet models")
                 let models = try await AsrModels.downloadAndLoad()
                 let manager = AsrManager()
                 try await manager.loadModels(models)
+                print("Parakeet models ready")
                 return manager
             }
 
