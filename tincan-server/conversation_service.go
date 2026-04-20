@@ -1,12 +1,17 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+
+	"tincan-server/agent_adapters"
+	"tincan-server/conversations"
+)
 
 type ConversationService struct {
 	profiles      *AgentProfileStore
 	backends      *AgentBackendStore
-	conversations *ConversationStore
-	agentAdapters map[string]AgentAdapter
+	conversations *conversations.Store
+	agentAdapters map[string]agent_adapters.Adapter
 }
 
 type ConversationCreateInput struct {
@@ -26,11 +31,11 @@ type ConversationCreateResult struct {
 	Status                string `json:"status"`
 }
 
-func NewConversationService(profiles *AgentProfileStore, backends *AgentBackendStore, conversations *ConversationStore, agentAdapters map[string]AgentAdapter) *ConversationService {
+func NewConversationService(profiles *AgentProfileStore, backends *AgentBackendStore, conversationsStore *conversations.Store, agentAdapters map[string]agent_adapters.Adapter) *ConversationService {
 	return &ConversationService{
 		profiles:      profiles,
 		backends:      backends,
-		conversations: conversations,
+		conversations: conversationsStore,
 		agentAdapters: agentAdapters,
 	}
 }
@@ -66,7 +71,7 @@ func (s *ConversationService) CreateConversation(input ConversationCreateInput) 
 		return ConversationCreateResult{}, fmt.Errorf("start backend conversation: %w", err)
 	}
 
-	conversation, err := s.conversations.CreateConversation(Conversation{
+	conversation, err := s.conversations.CreateConversation(conversations.Conversation{
 		DisplayHandle:         fmt.Sprintf("%s#%d", profile.Name, conversationNumber),
 		AgentProfileName:      profile.Name,
 		ConversationNumber:    conversationNumber,

@@ -1,4 +1,4 @@
-package main
+package agent_adapters
 
 import (
 	"bytes"
@@ -7,6 +7,9 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	tincanconfig "tincan-server/config"
+	tincanrouter "tincan-server/router"
 )
 
 type OpencodeAdapter struct {
@@ -50,7 +53,7 @@ func (a *OpencodeAdapter) Backend() string {
 	return "opencode"
 }
 
-func (a *OpencodeAdapter) ValidateBackend(name string, backend AgentBackendDefinition) error {
+func (a *OpencodeAdapter) ValidateBackend(name string, backend tincanconfig.AgentBackendDefinition) error {
 	if backend.Options.ConnectionType == "" {
 		return fmt.Errorf("agent backend %q requires options.connection_type for opencode", name)
 	}
@@ -60,15 +63,15 @@ func (a *OpencodeAdapter) ValidateBackend(name string, backend AgentBackendDefin
 	return nil
 }
 
-func (a *OpencodeAdapter) StartConversation(profile AgentProfile, backend AgentBackendDefinition, title string, message string) (AgentConversationStartResult, error) {
+func (a *OpencodeAdapter) StartConversation(profile tincanconfig.AgentProfile, backend tincanconfig.AgentBackendDefinition, title string, message string) (ConversationStartResult, error) {
 	if err := a.ValidateBackend(profile.AgentBackend, backend); err != nil {
-		return AgentConversationStartResult{}, err
+		return ConversationStartResult{}, err
 	}
 	if title == "" {
-		return AgentConversationStartResult{}, fmt.Errorf("start conversation requires non-empty title")
+		return ConversationStartResult{}, fmt.Errorf("start conversation requires non-empty title")
 	}
 	if message == "" {
-		return AgentConversationStartResult{}, fmt.Errorf("start conversation requires non-empty message")
+		return ConversationStartResult{}, fmt.Errorf("start conversation requires non-empty message")
 	}
 
 	httpClient := a.httpClient
@@ -78,12 +81,12 @@ func (a *OpencodeAdapter) StartConversation(profile AgentProfile, backend AgentB
 
 	baseURL, err := url.Parse(backend.Options.BaseURL)
 	if err != nil {
-		return AgentConversationStartResult{}, fmt.Errorf("parse opencode base url: %w", err)
+		return ConversationStartResult{}, fmt.Errorf("parse opencode base url: %w", err)
 	}
 
 	session, err := a.createSession(httpClient, *baseURL, profile.WorkingDirectory, title)
 	if err != nil {
-		return AgentConversationStartResult{}, err
+		return ConversationStartResult{}, err
 	}
 
 	promptURL := *baseURL
@@ -94,7 +97,7 @@ func (a *OpencodeAdapter) StartConversation(profile AgentProfile, backend AgentB
 
 	modelRef, err := parseOpenCodeModel(backend.Options.Model)
 	if err != nil {
-		return AgentConversationStartResult{}, err
+		return ConversationStartResult{}, err
 	}
 
 	promptBody, err := json.Marshal(openCodePromptAsyncRequest{
@@ -103,34 +106,34 @@ func (a *OpencodeAdapter) StartConversation(profile AgentProfile, backend AgentB
 		Parts: []openCodePromptPart{{Type: "text", Text: message}},
 	})
 	if err != nil {
-		return AgentConversationStartResult{}, fmt.Errorf("marshal prompt request: %w", err)
+		return ConversationStartResult{}, fmt.Errorf("marshal prompt request: %w", err)
 	}
 
 	promptReq, err := http.NewRequest(http.MethodPost, promptURL.String(), bytes.NewReader(promptBody))
 	if err != nil {
-		return AgentConversationStartResult{}, fmt.Errorf("build prompt request: %w", err)
+		return ConversationStartResult{}, fmt.Errorf("build prompt request: %w", err)
 	}
 	promptReq.Header.Set("Content-Type", "application/json")
 
 	promptResp, err := httpClient.Do(promptReq)
 	if err != nil {
-		return AgentConversationStartResult{}, fmt.Errorf("opencode prompt_async request failed: %w", err)
+		return ConversationStartResult{}, fmt.Errorf("opencode prompt_async request failed: %w", err)
 	}
 	defer promptResp.Body.Close()
 
 	if promptResp.StatusCode != http.StatusNoContent {
-		return AgentConversationStartResult{}, fmt.Errorf("opencode prompt_async failed with status %d", promptResp.StatusCode)
+		return ConversationStartResult{}, fmt.Errorf("opencode prompt_async failed with status %d", promptResp.StatusCode)
 	}
 
-	return AgentConversationStartResult{
+	return ConversationStartResult{
 		BackendConversationID: session.ID,
 		Status:                "running",
 	}, nil
 }
 
-func (a *OpencodeAdapter) RouteUser(backend AgentBackendDefinition, input UserRouterInput) (UserRouterResult, error) {
+func (a *OpencodeAdapter) RouteUser(backend tincanconfig.AgentBackendDefinition, input tincanrouter.UserRouterInput) (tincanrouter.UserRouterResult, error) {
 	if err := a.ValidateBackend("__router__", backend); err != nil {
-		return UserRouterResult{}, err
+		return tincanrouter.UserRouterResult{}, err
 	}
 
 	httpClient := a.httpClient
@@ -140,13 +143,13 @@ func (a *OpencodeAdapter) RouteUser(backend AgentBackendDefinition, input UserRo
 
 	baseURL, err := url.Parse(backend.Options.BaseURL)
 	if err != nil {
-		return UserRouterResult{}, fmt.Errorf("parse opencode base url: %w", err)
+		return tincanrouter.UserRouterResult{}, fmt.Errorf("parse opencode base url: %w", err)
 	}
 
 	workingDirectory := "/Users/akash/code/apple/tincan"
 	session, err := a.createSession(httpClient, *baseURL, workingDirectory, "Router")
 	if err != nil {
-		return UserRouterResult{}, err
+		return tincanrouter.UserRouterResult{}, err
 	}
 
 	messageURL := baseURL.ResolveReference(&url.URL{Path: strings.TrimRight(baseURL.Path, "/") + "/session/" + session.ID + "/message"})
@@ -156,7 +159,7 @@ func (a *OpencodeAdapter) RouteUser(backend AgentBackendDefinition, input UserRo
 
 	modelRef, err := parseOpenCodeModel(backend.Options.Model)
 	if err != nil {
-		return UserRouterResult{}, err
+		return tincanrouter.UserRouterResult{}, err
 	}
 
 	prompt := buildUserRouterPrompt(input)
@@ -166,28 +169,28 @@ func (a *OpencodeAdapter) RouteUser(backend AgentBackendDefinition, input UserRo
 		Parts: []openCodePromptPart{{Type: "text", Text: prompt}},
 	})
 	if err != nil {
-		return UserRouterResult{}, fmt.Errorf("marshal router prompt: %w", err)
+		return tincanrouter.UserRouterResult{}, fmt.Errorf("marshal router prompt: %w", err)
 	}
 
 	req, err := http.NewRequest(http.MethodPost, messageURL.String(), bytes.NewReader(body))
 	if err != nil {
-		return UserRouterResult{}, fmt.Errorf("build router message request: %w", err)
+		return tincanrouter.UserRouterResult{}, fmt.Errorf("build router message request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return UserRouterResult{}, fmt.Errorf("router message request failed: %w", err)
+		return tincanrouter.UserRouterResult{}, fmt.Errorf("router message request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return UserRouterResult{}, fmt.Errorf("router message failed with status %d", resp.StatusCode)
+		return tincanrouter.UserRouterResult{}, fmt.Errorf("router message failed with status %d", resp.StatusCode)
 	}
 
 	var messageResponse openCodeMessageResponse
 	if err := json.NewDecoder(resp.Body).Decode(&messageResponse); err != nil {
-		return UserRouterResult{}, fmt.Errorf("decode router response: %w", err)
+		return tincanrouter.UserRouterResult{}, fmt.Errorf("decode router response: %w", err)
 	}
 
 	var textBuilder strings.Builder
@@ -199,15 +202,15 @@ func (a *OpencodeAdapter) RouteUser(backend AgentBackendDefinition, input UserRo
 
 	raw := strings.TrimSpace(textBuilder.String())
 	if raw == "" {
-		return UserRouterResult{}, fmt.Errorf("router returned empty response")
+		return tincanrouter.UserRouterResult{}, fmt.Errorf("router returned empty response")
 	}
 
-	var result UserRouterResult
+	var result tincanrouter.UserRouterResult
 	if err := json.Unmarshal([]byte(raw), &result); err != nil {
-		return UserRouterResult{}, fmt.Errorf("decode router json response: %w; raw=%s", err, raw)
+		return tincanrouter.UserRouterResult{}, fmt.Errorf("decode router json response: %w; raw=%s", err, raw)
 	}
 	if result.Action == "" {
-		return UserRouterResult{}, fmt.Errorf("router response missing action")
+		return tincanrouter.UserRouterResult{}, fmt.Errorf("router response missing action")
 	}
 	result.RawTranscript = input.Transcript
 	return result, nil
@@ -259,7 +262,7 @@ func parseOpenCodeModel(raw string) (*openCodeModelRef, error) {
 	return &openCodeModelRef{ProviderID: parts[0], ModelID: parts[1]}, nil
 }
 
-func buildUserRouterPrompt(input UserRouterInput) string {
+func buildUserRouterPrompt(input tincanrouter.UserRouterInput) string {
 	return strings.TrimSpace(`You are the Tincan router. Decide what to do with the user's transcript.
 
 Return JSON only. Do not wrap in markdown.

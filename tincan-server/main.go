@@ -21,6 +21,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/pion/interceptor"
 	"github.com/pion/webrtc/v4"
+	"tincan-server/agent_adapters"
+	"tincan-server/conversations"
+	tincanrouter "tincan-server/router"
 )
 
 type server struct {
@@ -31,8 +34,8 @@ type server struct {
 	inference           *inferenceClient
 	profiles            *AgentProfileStore
 	backends            *AgentBackendStore
-	conversations       *ConversationStore
-	agentAdapters       map[string]AgentAdapter
+	conversations       *conversations.Store
+	agentAdapters       map[string]agent_adapters.Adapter
 	conversationService *ConversationService
 	router              *Router
 }
@@ -144,12 +147,12 @@ func newServer() (*server, error) {
 		return nil, fmt.Errorf("init agent backends: %w", err)
 	}
 
-	conversationStore, err := NewConversationStore()
+	conversationStore, err := conversations.NewStore()
 	if err != nil {
 		return nil, fmt.Errorf("init conversation store: %w", err)
 	}
 
-	agentAdapters := DefaultAgentAdapters()
+	agentAdapters := agent_adapters.Default()
 	for _, profile := range profiles.List() {
 		backend, ok := backends.Get(profile.AgentBackend)
 		if !ok {
@@ -363,7 +366,7 @@ func (s *server) handleUtteranceUpload(w http.ResponseWriter, r *http.Request, s
 
 	log.Printf("peer %s transcript: %s", sessionID, transcript)
 
-	routerResult, err := s.router.RouteUserTranscript(UserRouterInput{Transcript: transcript})
+	routerResult, err := s.router.RouteUserTranscript(tincanrouter.UserRouterInput{Transcript: transcript})
 	if err != nil {
 		log.Printf("peer %s router failed: %v", sessionID, err)
 		http.Error(w, fmt.Sprintf("router failed: %v", err), http.StatusBadGateway)

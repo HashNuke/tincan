@@ -1,10 +1,16 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+
+	"tincan-server/agent_adapters"
+	tincanconfig "tincan-server/config"
+	tincanrouter "tincan-server/router"
+)
 
 type Router struct {
-	backend AgentBackendDefinition
-	adapter AgentAdapter
+	backend tincanconfig.AgentBackendDefinition
+	adapter agent_adapters.Adapter
 }
 
 type UserRouterInput struct {
@@ -21,14 +27,14 @@ type UserRouterResult struct {
 	RawTranscript      string `json:"raw_transcript"`
 }
 
-func NewRouter(backend AgentBackendDefinition, adapter AgentAdapter) *Router {
+func NewRouter(backend tincanconfig.AgentBackendDefinition, adapter agent_adapters.Adapter) *Router {
 	return &Router{backend: backend, adapter: adapter}
 }
 
-func (r *Router) RouteUserTranscript(input UserRouterInput) (UserRouterResult, error) {
+func (r *Router) RouteUserTranscript(input tincanrouter.UserRouterInput) (tincanrouter.UserRouterResult, error) {
 	result, err := r.adapter.RouteUser(r.backend, input)
 	if err != nil {
-		return UserRouterResult{}, fmt.Errorf("route transcript: %w", err)
+		return tincanrouter.UserRouterResult{}, fmt.Errorf("route transcript: %w", err)
 	}
 	return result, nil
 }

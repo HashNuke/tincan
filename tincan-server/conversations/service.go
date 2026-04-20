@@ -1,4 +1,4 @@
-package main
+package conversations
 
 import (
 	"database/sql"
@@ -8,30 +8,14 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-
 	_ "modernc.org/sqlite"
 )
 
-type ConversationStore struct {
+type Store struct {
 	db *sql.DB
 }
 
-type Conversation struct {
-	ID                   string
-	DisplayHandle        string
-	AgentProfileName     string
-	ConversationNumber   int
-	AgentBackend         string
-	WorkingDirectory     string
-	BackendConversationID string
-	Status               string
-	CreatedAt            time.Time
-	UpdatedAt            time.Time
-	LastMessageAt        sql.NullTime
-	EndedAt              sql.NullTime
-}
-
-func NewConversationStore() (*ConversationStore, error) {
+func NewStore() (*Store, error) {
 	dataDir := filepath.Join("data")
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create data dir: %w", err)
@@ -43,7 +27,7 @@ func NewConversationStore() (*ConversationStore, error) {
 		return nil, fmt.Errorf("open sqlite db: %w", err)
 	}
 
-	store := &ConversationStore{db: db}
+	store := &Store{db: db}
 	if err := store.initSchema(); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -52,14 +36,14 @@ func NewConversationStore() (*ConversationStore, error) {
 	return store, nil
 }
 
-func (s *ConversationStore) Close() error {
+func (s *Store) Close() error {
 	if s == nil || s.db == nil {
 		return nil
 	}
 	return s.db.Close()
 }
 
-func (s *ConversationStore) initSchema() error {
+func (s *Store) initSchema() error {
 	const schema = `
 CREATE TABLE IF NOT EXISTS conversations (
   id TEXT PRIMARY KEY,
@@ -86,7 +70,7 @@ CREATE INDEX IF NOT EXISTS idx_conversations_backend_id ON conversations(backend
 	return nil
 }
 
-func (s *ConversationStore) NextConversationNumber(agentProfileName string) (int, error) {
+func (s *Store) NextConversationNumber(agentProfileName string) (int, error) {
 	const query = `
 SELECT conversation_number, status
 FROM conversations
@@ -121,7 +105,7 @@ WHERE agent_profile_name = ?
 	return next, nil
 }
 
-func (s *ConversationStore) CreateConversation(conversation Conversation) (Conversation, error) {
+func (s *Store) CreateConversation(conversation Conversation) (Conversation, error) {
 	now := time.Now().UTC()
 	conversation.ID = uuid.NewString()
 	conversation.CreatedAt = now
