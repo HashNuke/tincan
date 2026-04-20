@@ -9,7 +9,7 @@
 /* Begin PBXBuildFile section */
 		389AF1652F954C930031FFE3 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = 389AF1642F954C930031FFE3 /* FluidAudio */; };
 		389AF1672F954C930031FFE3 /* fluidaudiocli in Frameworks */ = {isa = PBXBuildFile; productRef = 389AF1662F954C930031FFE3 /* fluidaudiocli */; };
-		A10B2C3D4E5F678900000001 /* LinphoneShim in Frameworks */ = {isa = PBXBuildFile; productRef = A10B2C3D4E5F678900000002 /* LinphoneShim */; };
+		A10B2C3D4E5F678900000001 /* linphonesw in Frameworks */ = {isa = PBXBuildFile; productRef = A10B2C3D4E5F678900000002 /* linphonesw */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -73,7 +73,7 @@
 			files = (
 				389AF1652F954C930031FFE3 /* FluidAudio in Frameworks */,
 				389AF1672F954C930031FFE3 /* fluidaudiocli in Frameworks */,
-				A10B2C3D4E5F678900000001 /* LinphoneShim in Frameworks */,
+				A10B2C3D4E5F678900000001 /* linphonesw in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -136,7 +136,7 @@
 			packageProductDependencies = (
 				389AF1642F954C930031FFE3 /* FluidAudio */,
 				389AF1662F954C930031FFE3 /* fluidaudiocli */,
-				A10B2C3D4E5F678900000002 /* LinphoneShim */,
+				A10B2C3D4E5F678900000002 /* linphonesw */,
 			);
 			productName = tincan;
 			productReference = 389AF12E2F95073C0031FFE3 /* tincan.app */;
@@ -700,10 +700,10 @@
 			package = 389AF1632F954C930031FFE3 /* XCRemoteSwiftPackageReference "FluidAudio" */;
 			productName = fluidaudiocli;
 		};
-		A10B2C3D4E5F678900000002 /* LinphoneShim */ = {
+		A10B2C3D4E5F678900000002 /* linphonesw */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = A10B2C3D4E5F678900000003 /* XCLocalSwiftPackageReference "linphone-multiplatform" */;
-			productName = LinphoneShim;
+			productName = linphonesw;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

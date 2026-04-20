@@ -1,6 +1,6 @@
 #if os(macOS) || os(iOS)
 import Foundation
-import LinphoneShim
+import linphonesw
 
 protocol LiblinphoneCallClientDelegate: AnyObject {
     func liblinphoneCallClient(_ client: LiblinphoneCallClient, didLog message: String)
