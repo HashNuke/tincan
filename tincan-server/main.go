@@ -1,23 +1,29 @@
 package main
 
 import (
+	"encoding/binary"
 	"encoding/json"
+	"fmt"
+	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/pion/interceptor"
 	"github.com/pion/webrtc/v4"
 )
 
 type server struct {
-	mu       sync.Mutex
-	sessions map[string]*sessionState
-	api      *webrtc.API
-	config   webrtc.Configuration
+	mu        sync.Mutex
+	sessions  map[string]*sessionState
+	api       *webrtc.API
+	config    webrtc.Configuration
+	inference *inferenceClient
 }
 
 type sessionState struct {
@@ -34,6 +40,33 @@ type webRTCAnswerResponse struct {
 	SessionID string `json:"session_id"`
 	SDP       string `json:"sdp"`
 	Type      string `json:"type"`
+}
+
+type inferenceEnvelope struct {
+	Kind        string `json:"kind"`
+	RequestID   string `json:"request_id"`
+	Action      string `json:"action"`
+	Model       string `json:"model"`
+	ContentType string `json:"content_type"`
+	BodyLength  int    `json:"body_length"`
+	SampleRate  int    `json:"sample_rate,omitempty"`
+	Channels    int    `json:"channels,omitempty"`
+	Voice       string `json:"voice,omitempty"`
+	TextFormat  string `json:"text_format,omitempty"`
+	Message     string `json:"message,omitempty"`
+}
+
+type inferenceMessage struct {
+	Header inferenceEnvelope
+	Body   []byte
+}
+
+type sttResult struct {
+	Text string `json:"text"`
+}
+
+type inferenceClient struct {
+	socketPath string
 }
 
 func main() {
@@ -73,8 +106,9 @@ func newServer() *server {
 	)
 
 	return &server{
-		sessions: make(map[string]*sessionState),
-		api:      api,
+		sessions:  make(map[string]*sessionState),
+		api:       api,
+		inference: &inferenceClient{socketPath: inferenceSocketPath()},
 		config: webrtc.Configuration{
 			ICEServers: []webrtc.ICEServer{
 				{URLs: []string{"stun:stun.l.google.com:19302"}},
@@ -107,6 +141,11 @@ func (s *server) handleSessionControl(w http.ResponseWriter, r *http.Request) {
 
 	path := strings.TrimPrefix(r.URL.Path, "/session/")
 	parts := strings.Split(path, "/")
+	if len(parts) == 2 && parts[1] == "utterance" {
+		s.handleUtteranceUpload(w, r, parts[0])
+		return
+	}
+
 	if len(parts) != 3 || parts[1] != "push-to-talk" {
 		http.NotFound(w, r)
 		return
@@ -138,6 +177,47 @@ func (s *server) handleSessionControl(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("peer %s push-to-talk %s", sessionID, action)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *server) handleUtteranceUpload(w http.ResponseWriter, r *http.Request, sessionID string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	s.mu.Lock()
+	_, ok := s.sessions[sessionID]
+	s.mu.Unlock()
+	if !ok {
+		http.Error(w, "unknown session", http.StatusNotFound)
+		return
+	}
+
+	defer r.Body.Close()
+	audioData, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "failed to read utterance body", http.StatusBadRequest)
+		return
+	}
+	if len(audioData) == 0 {
+		http.Error(w, "expected non-empty utterance audio", http.StatusBadRequest)
+		return
+	}
+
+	contentType := r.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = "audio/wav"
+	}
+
+	transcript, err := s.inference.transcribe(audioData, contentType)
+	if err != nil {
+		log.Printf("peer %s transcription failed: %v", sessionID, err)
+		http.Error(w, fmt.Sprintf("transcription failed: %v", err), http.StatusBadGateway)
+		return
+	}
+
+	log.Printf("peer %s transcript: %s", sessionID, transcript)
+	writeJSON(w, http.StatusOK, map[string]any{"text": transcript})
 }
 
 func (s *server) handleOffer(w http.ResponseWriter, r *http.Request) {
@@ -291,6 +371,107 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	}
 }
 
+func (c *inferenceClient) transcribe(audioData []byte, contentType string) (string, error) {
+	conn, err := net.Dial("unix", c.socketPath)
+	if err != nil {
+		return "", err
+	}
+	defer conn.Close()
+
+	requestID := uuid.NewString()
+	request := inferenceMessage{
+		Header: inferenceEnvelope{
+			Kind:        "request",
+			RequestID:   requestID,
+			Action:      "stt",
+			Model:       "nvidia-parakeet",
+			ContentType: contentType,
+			BodyLength:  len(audioData),
+		},
+		Body: audioData,
+	}
+
+	if err := writeInferenceMessage(conn, request); err != nil {
+		return "", err
+	}
+
+	response, err := readInferenceMessage(conn)
+	if err != nil {
+		return "", err
+	}
+
+	if response.Header.Kind == "error" {
+		return "", fmt.Errorf(response.Header.Message)
+	}
+
+	if response.Header.Kind != "result" || response.Header.Action != "stt" {
+		return "", fmt.Errorf("unexpected inference response: %+v", response.Header)
+	}
+
+	var result sttResult
+	if err := json.Unmarshal(response.Body, &result); err != nil {
+		return "", err
+	}
+	return result.Text, nil
+}
+
+func writeInferenceMessage(writer io.Writer, message inferenceMessage) error {
+	headerBytes, err := json.Marshal(message.Header)
+	if err != nil {
+		return err
+	}
+
+	var headerLength [4]byte
+	binary.BigEndian.PutUint32(headerLength[:], uint32(len(headerBytes)))
+	if _, err := writer.Write(headerLength[:]); err != nil {
+		return err
+	}
+	if _, err := writer.Write(headerBytes); err != nil {
+		return err
+	}
+	if len(message.Body) > 0 {
+		if _, err := writer.Write(message.Body); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func readInferenceMessage(reader io.Reader) (inferenceMessage, error) {
+	var headerLengthBytes [4]byte
+	if _, err := io.ReadFull(reader, headerLengthBytes[:]); err != nil {
+		return inferenceMessage{}, err
+	}
+
+	headerLength := binary.BigEndian.Uint32(headerLengthBytes[:])
+	headerBytes := make([]byte, int(headerLength))
+	if _, err := io.ReadFull(reader, headerBytes); err != nil {
+		return inferenceMessage{}, err
+	}
+
+	var header inferenceEnvelope
+	if err := json.Unmarshal(headerBytes, &header); err != nil {
+		return inferenceMessage{}, err
+	}
+
+	body := make([]byte, header.BodyLength)
+	if header.BodyLength > 0 {
+		if _, err := io.ReadFull(reader, body); err != nil {
+			return inferenceMessage{}, err
+		}
+	}
+
+	return inferenceMessage{Header: header, Body: body}, nil
+}
+
+func inferenceSocketPath() string {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return homeDir + "/Library/Application Support/tincan/run/inference.sock"
+}
+
 const speakPageHTML = `<!doctype html>
 <html lang="en">
 <head>
@@ -381,6 +562,11 @@ const speakPageHTML = `<!doctype html>
     let audioSender = null
     let isHoldingPushToTalk = false
     let sessionID = null
+    let captureContext = null
+    let captureSource = null
+    let captureProcessor = null
+    let capturedChunks = []
+    let captureSampleRate = 48000
 
     function setStatus(text, klass = '') {
       statusEl.textContent = text
@@ -485,6 +671,15 @@ const speakPageHTML = `<!doctype html>
       }
       audioTrack = null
       sessionID = null
+      if (captureProcessor) {
+        captureProcessor.disconnect()
+      }
+      if (captureSource) {
+        captureSource.disconnect()
+      }
+      if (captureContext) {
+        await captureContext.close()
+      }
       connectButton.disabled = false
       disconnectButton.disabled = true
       setStatus('Disconnected')
@@ -508,7 +703,14 @@ const speakPageHTML = `<!doctype html>
             throw new Error('Push-to-talk control failed with ' + controlResponse.status)
           }
 
+          if (active) {
+            startCapture()
+          }
+
           await audioSender.replaceTrack(active ? audioTrack : null)
+          if (!active) {
+            await stopCaptureAndUpload()
+          }
           if (!peerConnection || peerConnection.connectionState !== 'connected') return
           setStatus(active ? 'Connected, sending audio' : 'Connected', active ? 'talking' : 'live')
           setMeta(active ? 'Transmitting microphone audio while Z is held.' : 'Microphone connected but muted. Hold Z to transmit audio.')
@@ -519,6 +721,86 @@ const speakPageHTML = `<!doctype html>
       }
 
       void applyTrack()
+    }
+
+    function startCapture() {
+      capturedChunks.length = 0
+      if (!localStream) return
+
+      if (!captureContext) {
+        const AudioContextCtor = window.AudioContext || window.webkitAudioContext
+        captureContext = new AudioContextCtor({ sampleRate: captureSampleRate })
+        captureSource = captureContext.createMediaStreamSource(localStream)
+        captureProcessor = captureContext.createScriptProcessor(4096, 1, 1)
+        captureProcessor.onaudioprocess = (event) => {
+          if (!isHoldingPushToTalk) return
+          const channel = event.inputBuffer.getChannelData(0)
+          capturedChunks.push(new Float32Array(channel))
+        }
+        captureSource.connect(captureProcessor)
+        captureProcessor.connect(captureContext.destination)
+      }
+    }
+
+    async function stopCaptureAndUpload() {
+      if (!sessionID || capturedChunks.length === 0) return
+
+      const wavBytes = encodeWav(capturedChunks, captureSampleRate)
+      capturedChunks.length = 0
+
+      const response = await fetch('/session/' + encodeURIComponent(sessionID) + '/utterance', {
+        method: 'POST',
+        headers: {
+          'content-type': 'audio/wav',
+        },
+        body: wavBytes,
+      })
+
+      if (!response.ok) {
+        throw new Error('Utterance upload failed with ' + response.status)
+      }
+
+      const payload = await response.json()
+      setMeta('Transcript: ' + (payload.text || '(empty)'))
+    }
+
+    function encodeWav(chunks, sampleRate) {
+      const totalSamples = chunks.reduce((sum, chunk) => sum + chunk.length, 0)
+      const bytesPerSample = 2
+      const dataSize = totalSamples * bytesPerSample
+      const buffer = new ArrayBuffer(44 + dataSize)
+      const view = new DataView(buffer)
+
+      writeAscii(view, 0, 'RIFF')
+      view.setUint32(4, 36 + dataSize, true)
+      writeAscii(view, 8, 'WAVE')
+      writeAscii(view, 12, 'fmt ')
+      view.setUint32(16, 16, true)
+      view.setUint16(20, 1, true)
+      view.setUint16(22, 1, true)
+      view.setUint32(24, sampleRate, true)
+      view.setUint32(28, sampleRate * bytesPerSample, true)
+      view.setUint16(32, bytesPerSample, true)
+      view.setUint16(34, 16, true)
+      writeAscii(view, 36, 'data')
+      view.setUint32(40, dataSize, true)
+
+      let offset = 44
+      for (const chunk of chunks) {
+        for (let i = 0; i < chunk.length; i += 1) {
+          const sample = Math.max(-1, Math.min(1, chunk[i]))
+          view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true)
+          offset += 2
+        }
+      }
+
+      return buffer
+    }
+
+    function writeAscii(view, offset, value) {
+      for (let i = 0; i < value.length; i += 1) {
+        view.setUint8(offset + i, value.charCodeAt(i))
+      }
     }
 
     function waitForIceGathering(pc, timeoutMs) {
