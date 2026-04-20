@@ -130,6 +130,7 @@ func main() {
 		}
 	}()
 	mux := http.NewServeMux()
+	mux.HandleFunc("/health", srv.handleHealth)
 	mux.HandleFunc("/healthz", srv.handleHealth)
 	mux.HandleFunc("/speak", srv.handleSpeakPage)
 	mux.HandleFunc("/debug/audio/processing", srv.handleProcessingAudio)
