@@ -12,10 +12,16 @@ final class MacCallSessionViewModel: ObservableObject {
     @Published private(set) var isTransitioningCallState = false
 
     private let linphoneClient = LiblinphoneCallClient()
+    private let audioPipeline = AudioTurnPipeline()
     private let tonePlayer = CallTonePlayer.shared
+
+    private var sessionClient: BackendSessionClient?
+    private var sessionID: String?
+    private var eventTask: Task<Void, Never>?
 
     init() {
         linphoneClient.delegate = self
+        audioPipeline.setDelegate(self)
         appendLog("Ready")
     }
 
@@ -35,14 +41,36 @@ final class MacCallSessionViewModel: ObservableObject {
                 return
             }
 
+            guard let serverURL = URL(string: BackendConnectionConfig.serverBaseURLString) else {
+                callStateDescription = "Invalid server URL"
+                isTransitioningCallState = false
+                return
+            }
+
+            let client = BackendSessionClient(serverBaseURL: serverURL)
+
             do {
+                let sid = try await client.registerSession()
+                sessionID = sid
+                sessionClient = client
+                appendLog("Session registered: \(sid)")
+
                 try linphoneClient.start()
+                try await audioPipeline.start()
+
+                subscribeToServerEvents(client: client, sessionID: sid)
+
                 callStateDescription = "Connected"
                 isCallActive = true
                 tonePlayer.playConnectTone()
             } catch {
                 callStateDescription = "Call start failed"
-                appendLog("Failed to start Liblinphone: \(error.localizedDescription)")
+                appendLog("Failed to start: \(error.localizedDescription)")
+                if let sid = sessionID {
+                    await client.deregisterSession(sid)
+                }
+                sessionID = nil
+                sessionClient = nil
             }
 
             isTransitioningCallState = false
@@ -53,11 +81,35 @@ final class MacCallSessionViewModel: ObservableObject {
         guard isCallActive || isTransitioningCallState else { return }
         isTransitioningCallState = true
         Task {
+            eventTask?.cancel()
+            eventTask = nil
+
+            await audioPipeline.stop()
             linphoneClient.stop()
+
+            if let client = sessionClient, let sid = sessionID {
+                await client.deregisterSession(sid)
+            }
+            sessionID = nil
+            sessionClient = nil
+
             callStateDescription = "Disconnected"
             isCallActive = false
             tonePlayer.playDisconnectTone()
             isTransitioningCallState = false
+        }
+    }
+
+    private func subscribeToServerEvents(client: BackendSessionClient, sessionID: String) {
+        eventTask = Task {
+            for await event in client.eventStream(sessionID: sessionID) {
+                switch event {
+                case .playAudio(let text, _):
+                    appendLog("Server: \(text)")
+                case .notify(let text, _):
+                    appendLog("Notify: \(text)")
+                }
+            }
         }
     }
 
@@ -71,6 +123,7 @@ final class MacCallSessionViewModel: ObservableObject {
             return false
         }
     }
+
     private func appendLog(_ message: String) {
         let timestamp = Date.now.formatted(date: .omitted, time: .standard)
         logLines.insert("[\(timestamp)] \(message)", at: 0)
@@ -83,6 +136,25 @@ final class MacCallSessionViewModel: ObservableObject {
 extension MacCallSessionViewModel: LiblinphoneCallClientDelegate {
     func liblinphoneCallClient(_ client: LiblinphoneCallClient, didLog message: String) {
         appendLog(message)
+    }
+}
+
+extension MacCallSessionViewModel: AudioTurnPipelineOutput {
+    func audioTurnPipelineDidLog(_ message: String) {
+        appendLog(message)
+    }
+
+    func audioTurnPipelineDidProduceSegment(_ data: Data, duration: TimeInterval) {
+        guard let client = sessionClient, let sid = sessionID else { return }
+        Task {
+            do {
+                let response = try await client.uploadUtterance(sessionID: sid, audioWAV: data)
+                lastServerTranscript = response.text
+                appendLog("Transcript: \(response.text)")
+            } catch {
+                appendLog("Upload failed: \(error.localizedDescription)")
+            }
+        }
     }
 }
 #endif

@@ -26,12 +26,12 @@ private struct IOSCallView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Backend URL")
                             .font(.headline)
-                        TextField(BackendConnectionConfig.inferenceURLString, text: $viewModel.backendURLString)
+                        TextField(BackendConnectionConfig.serverBaseURLString, text: $viewModel.backendURLString)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                             .keyboardType(.URL)
                             .textFieldStyle(.roundedBorder)
-                        Text("Device builds should use `\(BackendConnectionConfig.inferenceURLString)`. `localhost` only works on the same machine.")
+                        Text("Enter the tincan server base URL, e.g. `\(BackendConnectionConfig.serverBaseURLString)`. `localhost` only works on the same machine.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }

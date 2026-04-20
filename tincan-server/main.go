@@ -40,16 +40,6 @@ type server struct {
 	router              *Router
 }
 
-type webRTCOfferRequest struct {
-	SDP  string `json:"sdp"`
-	Type string `json:"type"`
-}
-
-type webRTCAnswerResponse struct {
-	SessionID string `json:"session_id"`
-	SDP       string `json:"sdp"`
-	Type      string `json:"type"`
-}
 
 type openCodeHookEvent struct {
 	EventType    string `json:"event_type"`

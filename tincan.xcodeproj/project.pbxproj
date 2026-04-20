@@ -671,6 +671,13 @@
 		};
 /* End XCConfigurationList section */
 
+/* Begin XCLocalSwiftPackageReference section */
+		A10B2C3D4E5F678900000003 /* XCLocalSwiftPackageReference "linphone-multiplatform" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "linphone-multiplatform";
+		};
+/* End XCLocalSwiftPackageReference section */
+
 /* Begin XCRemoteSwiftPackageReference section */
 		389AF1632F954C930031FFE3 /* XCRemoteSwiftPackageReference "FluidAudio" */ = {
 			isa = XCRemoteSwiftPackageReference;
@@ -681,13 +688,6 @@
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
-
-/* Begin XCLocalSwiftPackageReference section */
-		A10B2C3D4E5F678900000003 /* XCLocalSwiftPackageReference "linphone-multiplatform" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = linphone-multiplatform;
-		};
-/* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
 		389AF1642F954C930031FFE3 /* FluidAudio */ = {

@@ -14,14 +14,19 @@ final class CallSessionViewModel: ObservableObject {
 
     private let callKitController = CallKitController()
     private let audioPipeline = AudioTurnPipeline()
-    private let inferenceClient = BackendInferenceClient()
     private let tonePlayer = CallTonePlayer.shared
 
+    private var sessionClient: BackendSessionClient?
+    private var sessionID: String?
+    private var eventTask: Task<Void, Never>?
+
     private static let backendURLKey = "backend_url"
-    private static let defaultBackendURL = BackendConnectionConfig.inferenceURLString
+    private static let defaultBackendURL = BackendConnectionConfig.serverBaseURLString
     private static let legacyDefaultBackendURLs: Set<String> = [
         "http://127.0.0.1:52734/infer",
         "http://127.0.0.1:8004/infer",
+        BackendConnectionConfig.inferenceURLString,
+        BackendConnectionConfig.loopbackInferenceURLString,
     ]
 
     init() {
@@ -91,19 +96,20 @@ final class CallSessionViewModel: ObservableObject {
         }
     }
 
-    private func uploadSegment(_ data: Data, duration: TimeInterval) {
-        guard let url = URL(string: backendURLString) else {
-            appendLog("Backend URL is invalid")
-            return
-        }
+    private func makeSessionClient() -> BackendSessionClient? {
+        guard let url = URL(string: backendURLString) else { return nil }
+        return BackendSessionClient(serverBaseURL: url)
+    }
 
-        Task {
-            do {
-                let result = try await inferenceClient.infer(audioWAV: data, endpoint: url)
-                lastServerTranscript = result.transcript
-                appendLog("Backend transcript: \(result.transcript)")
-            } catch {
-                appendLog("Upload failed: \(error.localizedDescription)")
+    private func subscribeToServerEvents(client: BackendSessionClient, sessionID: String) {
+        eventTask = Task {
+            for await event in client.eventStream(sessionID: sessionID) {
+                switch event {
+                case .playAudio(let text, _):
+                    appendLog("Server: \(text)")
+                case .notify(let text, _):
+                    appendLog("Notify: \(text)")
+                }
             }
         }
     }
@@ -118,14 +124,32 @@ extension CallSessionViewModel: CallKitControllerDelegate {
 
     func callKitControllerDidActivateAudio(_ controller: CallKitController) {
         Task {
+            guard let client = makeSessionClient() else {
+                callStateDescription = "Invalid server URL"
+                appendLog("Server URL is invalid: \(backendURLString)")
+                isTransitioningCallState = false
+                return
+            }
+
             do {
+                let sid = try await client.registerSession()
+                sessionID = sid
+                sessionClient = client
+                appendLog("Session registered: \(sid)")
+
                 try await audioPipeline.start()
+                subscribeToServerEvents(client: client, sessionID: sid)
                 callStateDescription = "Listening"
                 isCallActive = true
                 tonePlayer.playConnectTone()
             } catch {
                 callStateDescription = "Audio start failed"
-                appendLog("Failed to start audio pipeline: \(error.localizedDescription)")
+                appendLog("Failed to start: \(error.localizedDescription)")
+                if let sid = sessionID {
+                    await client.deregisterSession(sid)
+                }
+                sessionID = nil
+                sessionClient = nil
             }
 
             isTransitioningCallState = false
@@ -134,7 +158,17 @@ extension CallSessionViewModel: CallKitControllerDelegate {
 
     func callKitControllerDidDeactivateAudio(_ controller: CallKitController) {
         Task {
+            eventTask?.cancel()
+            eventTask = nil
+
             await audioPipeline.stop()
+
+            if let client = sessionClient, let sid = sessionID {
+                await client.deregisterSession(sid)
+            }
+            sessionID = nil
+            sessionClient = nil
+
             callStateDescription = "Idle"
             isCallActive = false
             tonePlayer.playDisconnectTone()
@@ -156,7 +190,16 @@ extension CallSessionViewModel: AudioTurnPipelineOutput {
     }
 
     func audioTurnPipelineDidProduceSegment(_ data: Data, duration: TimeInterval) {
-        uploadSegment(data, duration: duration)
+        guard let client = sessionClient, let sid = sessionID else { return }
+        Task {
+            do {
+                let response = try await client.uploadUtterance(sessionID: sid, audioWAV: data)
+                lastServerTranscript = response.text
+                appendLog("Transcript: \(response.text)")
+            } catch {
+                appendLog("Upload failed: \(error.localizedDescription)")
+            }
+        }
     }
 }
 #endif

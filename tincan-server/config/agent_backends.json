@@ -3,8 +3,8 @@
     "type": "opencode",
     "options": {
       "connection_type": "server",
-      "model": "openai/gpt-5.4",
-      "model_variant": "high",
+      "model": "openai/gpt-5.3-codex-spark",
+      "model_variant": "medium",
       "base_url": "http://127.0.0.1:4096",
       "agent": "build",
       "extra_args": []
@@ -24,8 +24,8 @@
     "type": "opencode",
     "options": {
       "connection_type": "server",
-      "model": "openai/gpt-5.4",
-      "model_variant": "high",
+      "model": "openai/gpt-5.3-codex-spark",
+      "model_variant": "medium",
       "base_url": "http://127.0.0.1:4096",
       "agent": "build",
       "extra_args": []
