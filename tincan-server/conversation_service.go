@@ -10,9 +10,9 @@ type ConversationService struct {
 }
 
 type ConversationCreateInput struct {
-	ProfileName string
+	ProfileName       string
 	ConversationTitle string
-	Message     string
+	Message           string
 }
 
 type ConversationCreateResult struct {

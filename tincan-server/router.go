@@ -12,13 +12,13 @@ type UserRouterInput struct {
 }
 
 type UserRouterResult struct {
-	Action            string `json:"action"`
-	Message           string `json:"message,omitempty"`
-	Agent             string `json:"agent,omitempty"`
+	Action             string `json:"action"`
+	Message            string `json:"message,omitempty"`
+	Agent              string `json:"agent,omitempty"`
 	ConversationHandle string `json:"conversation_handle,omitempty"`
-	ConversationTitle string `json:"conversation_title,omitempty"`
-	ImmediateFeedback string `json:"immediate_feedback,omitempty"`
-	RawTranscript     string `json:"raw_transcript"`
+	ConversationTitle  string `json:"conversation_title,omitempty"`
+	ImmediateFeedback  string `json:"immediate_feedback,omitempty"`
+	RawTranscript      string `json:"raw_transcript"`
 }
 
 func NewRouter(backend AgentBackendDefinition, adapter AgentAdapter) *Router {
