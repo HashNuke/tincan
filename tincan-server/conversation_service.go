@@ -4,6 +4,7 @@ import "fmt"
 
 type ConversationService struct {
 	profiles      *AgentProfileStore
+	backends      *AgentBackendStore
 	conversations *ConversationStore
 	agentAdapters map[string]AgentAdapter
 }
@@ -25,9 +26,10 @@ type ConversationCreateResult struct {
 	Status                string `json:"status"`
 }
 
-func NewConversationService(profiles *AgentProfileStore, conversations *ConversationStore, agentAdapters map[string]AgentAdapter) *ConversationService {
+func NewConversationService(profiles *AgentProfileStore, backends *AgentBackendStore, conversations *ConversationStore, agentAdapters map[string]AgentAdapter) *ConversationService {
 	return &ConversationService{
 		profiles:      profiles,
+		backends:      backends,
 		conversations: conversations,
 		agentAdapters: agentAdapters,
 	}
@@ -39,9 +41,14 @@ func (s *ConversationService) CreateConversation(input ConversationCreateInput) 
 		return ConversationCreateResult{}, fmt.Errorf("unknown agent profile %q", input.ProfileName)
 	}
 
-	adapter, ok := s.agentAdapters[profile.AgentBackend]
+	backend, ok := s.backends.Get(profile.AgentBackend)
 	if !ok {
-		return ConversationCreateResult{}, fmt.Errorf("no agent adapter for backend %q", profile.AgentBackend)
+		return ConversationCreateResult{}, fmt.Errorf("unknown agent backend %q", profile.AgentBackend)
+	}
+
+	adapter, ok := s.agentAdapters[backend.Type]
+	if !ok {
+		return ConversationCreateResult{}, fmt.Errorf("no agent adapter for backend type %q", backend.Type)
 	}
 
 	conversationNumber, err := s.conversations.NextConversationNumber(profile.Name)
@@ -54,7 +61,7 @@ func (s *ConversationService) CreateConversation(input ConversationCreateInput) 
 		title = "Untitled conversation"
 	}
 
-	adapterResult, err := adapter.StartConversation(profile, title, input.Message)
+	adapterResult, err := adapter.StartConversation(profile, backend, title, input.Message)
 	if err != nil {
 		return ConversationCreateResult{}, fmt.Errorf("start backend conversation: %w", err)
 	}

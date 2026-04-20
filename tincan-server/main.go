@@ -30,6 +30,7 @@ type server struct {
 	config              webrtc.Configuration
 	inference           *inferenceClient
 	profiles            *AgentProfileStore
+	backends            *AgentBackendStore
 	conversations       *ConversationStore
 	agentAdapters       map[string]AgentAdapter
 	conversationService *ConversationService
@@ -138,6 +139,11 @@ func newServer() (*server, error) {
 		return nil, fmt.Errorf("init agent profiles: %w", err)
 	}
 
+	backends, err := NewAgentBackendStore()
+	if err != nil {
+		return nil, fmt.Errorf("init agent backends: %w", err)
+	}
+
 	conversationStore, err := NewConversationStore()
 	if err != nil {
 		return nil, fmt.Errorf("init conversation store: %w", err)
@@ -145,13 +151,29 @@ func newServer() (*server, error) {
 
 	agentAdapters := DefaultAgentAdapters()
 	for _, profile := range profiles.List() {
-		adapter, ok := agentAdapters[profile.AgentBackend]
+		backend, ok := backends.Get(profile.AgentBackend)
 		if !ok {
-			return nil, fmt.Errorf("no agent adapter registered for backend %q", profile.AgentBackend)
+			return nil, fmt.Errorf("unknown agent backend %q referenced by profile %q", profile.AgentBackend, profile.Name)
 		}
-		if err := adapter.ValidateProfile(profile); err != nil {
+		adapter, ok := agentAdapters[backend.Type]
+		if !ok {
+			return nil, fmt.Errorf("no agent adapter registered for backend type %q", backend.Type)
+		}
+		if err := adapter.ValidateBackend(profile.AgentBackend, backend); err != nil {
 			return nil, err
 		}
+	}
+
+	routerBackend, ok := backends.Get("__router__")
+	if !ok {
+		return nil, fmt.Errorf("missing __router__ backend definition")
+	}
+	routerAdapter, ok := agentAdapters[routerBackend.Type]
+	if !ok {
+		return nil, fmt.Errorf("no agent adapter registered for router backend type %q", routerBackend.Type)
+	}
+	if err := routerAdapter.ValidateBackend("__router__", routerBackend); err != nil {
+		return nil, fmt.Errorf("validate router backend: %w", err)
 	}
 
 	mediaEngine := &webrtc.MediaEngine{}
@@ -174,10 +196,11 @@ func newServer() (*server, error) {
 		api:                 api,
 		inference:           &inferenceClient{socketPath: inferenceSocketPath()},
 		profiles:            profiles,
+		backends:            backends,
 		conversations:       conversationStore,
 		agentAdapters:       agentAdapters,
-		conversationService: NewConversationService(profiles, conversationStore, agentAdapters),
-		router:              NewRouter(profiles),
+		conversationService: NewConversationService(profiles, backends, conversationStore, agentAdapters),
+		router:              NewRouter(routerBackend, routerAdapter),
 		config: webrtc.Configuration{
 			ICEServers: []webrtc.ICEServer{
 				{URLs: []string{"stun:stun.l.google.com:19302"}},
@@ -340,7 +363,12 @@ func (s *server) handleUtteranceUpload(w http.ResponseWriter, r *http.Request, s
 
 	log.Printf("peer %s transcript: %s", sessionID, transcript)
 
-	routerResult := s.router.RouteUserTranscript(UserRouterInput{Transcript: transcript})
+	routerResult, err := s.router.RouteUserTranscript(UserRouterInput{Transcript: transcript})
+	if err != nil {
+		log.Printf("peer %s router failed: %v", sessionID, err)
+		http.Error(w, fmt.Sprintf("router failed: %v", err), http.StatusBadGateway)
+		return
+	}
 	log.Printf("peer %s router action: %s agent=%q handle=%q feedback=%q", sessionID, routerResult.Action, routerResult.Agent, routerResult.ConversationHandle, routerResult.ImmediateFeedback)
 
 	responsePayload := map[string]any{
