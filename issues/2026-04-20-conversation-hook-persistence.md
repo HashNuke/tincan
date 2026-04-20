@@ -20,7 +20,7 @@ Implemented the first persistence and hook callback slice:
 - added a Vapor route at `POST /hooks/opencode`
 - the hook route looks up conversations by `backend_conversation_id`
 - `session.status`, `session.idle`, and `session.error` events now update stored conversation state
-- added a repo-local OpenCode plugin file at `opencode-plugins/tincan-conversation-hooks.js`
+- added a repo-local OpenCode plugin file at `agent-plugins/opencode/tincan.js`
 
 ## Notes
 
