@@ -1,2 +1,2 @@
 #!/usr/bin/env zsh
-uv run python -m backend.server --host 0.0.0.0 --port 8004
+air -c tincan-server/.air.toml
