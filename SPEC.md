@@ -159,24 +159,45 @@ Each live coding session should feel like a distinct participant in the call.
 
 Every session should have:
 
-- a stable spoken/display name for that session
+- a profile-scoped display label for that session
 - a stable TTS voice for that session
-- a backing agent profile that determines how it behaves
+- a backing agent profile that determines its persona and home working directory
 
-### Naming
+### Profile With Home Directory
 
-Agent profiles have stable base names, such as:
+An agent profile represents a named agent persona plus its execution home.
+It tells the backend both who the agent is and where that family of chats should run.
 
-- `atlas`
-- `aida`
+Each profile should define at least:
 
-Live sessions derive human-facing names from the profile plus a counter, such as:
+- a stable profile key
+- a human-facing agent name
+- a home working directory
+- the backend/harness configuration for sessions started in that directory
+- the default TTS voice for chats in that profile
 
-- `atlas#41`
-- `aida#12`
+Examples:
 
-The numeric suffix may be recycled daily for human-facing labels.
-These names are display identifiers, not primary keys.
+- `emma` -> home directory `/some/path`
+- `atlas` -> home directory `~/sources/opencode`
+
+Once the backend chooses a profile, it also chooses the working directory context for the chat.
+
+### Chat Numbering
+
+Chats inside a profile may be assigned simple profile-scoped display numbers:
+
+- `emma#1`
+- `emma#2`
+- `atlas#3`
+
+The fully qualified display label should remain profile-scoped to avoid collisions across agents.
+
+These numbers are convenience labels, not durable identifiers.
+They do not need to increase monotonically and they do not define session identity.
+
+The backend may assign whichever number is currently available for that profile, excluding numbers already in use by active conversations.
+Archived or expired conversations may release their display numbers back into the available pool.
 
 ### Internal IDs
 
@@ -186,9 +207,10 @@ Examples:
 
 - UUID
 - backend session ID
-- date-scoped session key such as `2026-04-19/atlas/41`
+- opaque database/storage ID
 
-The internal ID must not depend on the recycled display counter.
+The display label such as `emma#2` must not be treated as the primary key.
+It is only a human-facing handle that can be reassigned later after a conversation expires or is archived.
 
 ### Voice
 
@@ -197,9 +219,9 @@ Profile-level default voices are preferred over random session voices.
 
 Why:
 
-- users can learn that "Atlas sounds like Atlas"
+- users can build a consistent association between an agent and how its chats sound
 - session identity stays understandable during long usage
-- the suffix already provides enough novelty
+- the numeric suffix is enough to distinguish multiple parallel chats for the same agent
 
 ## Pluggable Coding Agents
 
@@ -208,10 +230,19 @@ It should support pluggable agent backends through profiles and adapters.
 
 ### Agent Profile
 
-An agent profile is a reusable template that defines:
+An agent profile is a reusable template for an agent persona plus its execution home.
+Agent profiles are defined on the server side of the backend.
+For now, the source of truth should be a JSON file managed by the server.
 
-- base name
+This means profiles should be treated as data records loaded at runtime, not compile-time configuration.
+
+It defines:
+
+- stable profile key
+- agent name
+- home working directory
 - backend/harness type
+- backend-specific options
 - model or model family
 - endpoint configuration
 - default system prompt/preset
@@ -220,12 +251,37 @@ An agent profile is a reusable template that defines:
 
 Examples:
 
-- `atlas` -> Codex + GPT-5.4
-- `aida` -> GLM 5.1 + another coding harness
+- `emma` -> OpenCode Server profile rooted at `/some/path`
+- `atlas` -> Codex profile rooted at `~/sources/opencode`
+
+The important rule is that backend choice comes from the agent profile.
+Switching a profile from OpenCode Server to Codex or another coding agent should be a profile configuration change, not a rewrite of the main tincan flow.
+
+### Profile Persistence
+
+For v1, agent profiles should come from a JSON file on the server side of the backend.
+
+Each stored profile record should include at least:
+
+- stable profile key
+- display name
+- home working directory
+- backend type
+- backend-specific options blob or structured fields
+- default model selection
+- default system prompt or preset
+- default TTS voice
+- archived/active state
+- optional metadata such as created-at and updated-at timestamps
+
+The system may later move these records into a database, but the initial assumption is a server-owned JSON file that tincan reads on startup and reloads when appropriate.
 
 ### Agent Adapter
 
 Each provider/harness integration should conform to a common adapter surface.
+
+The adapter should be selected from the profile's backend type and backend-specific options.
+That means OpenCode Server, Codex, or any future coding agent backend can plug into the same conversation flow.
 
 Representative operations:
 
@@ -236,17 +292,190 @@ Representative operations:
 - stream events
 - fetch metadata/status
 
+For the immediate OpenCode Server path, tincan should still keep this behind a small internal adapter boundary.
+That lets v1 ship with OpenCode first while preserving the ability to swap or add other coding-agent backends later through profile options.
+
 ### Agent Session
 
 A live agent session is an instance of a profile.
 It binds together:
 
 - profile
+- profile home working directory
 - immutable session ID
+- profile-scoped chat number
 - display label
 - conversation history
 - backend routing information
 - current voice/persona state
+
+The key distinction is:
+
+- the profile decides the agent identity and home working directory context
+- the session number identifies one chat within that agent profile
+
+## Backend Modules
+
+The backend should be separated into small modules.
+The goal is to keep the main tincan flow simple while isolating backend-specific behavior behind narrow interfaces.
+
+### Desired Module Boundaries
+
+The backend should be split into the following responsibilities:
+
+- `AgentProfileStore`
+  - loads agent profiles from the server-side JSON file
+  - resolves profile key to home working directory, default model, backend type, and backend-specific settings
+  - supports list, fetch, and later reload/update operations for profiles
+
+- `ConversationStore`
+  - stores tincan conversation records
+  - maps a tincan conversation to the backing OpenCode session ID
+  - tracks lifecycle state such as `starting`, `running`, `completed`, `failed`, or `archived`
+
+- `Router`
+  - decides whether to continue a current conversation, target an existing session, or create a new one
+  - returns a constrained routing action only
+
+- `AgentSessionService`
+  - orchestrates conversation startup and turn delivery
+  - asks the adapter to create or resume a backing session
+  - updates the conversation store as session state changes
+
+- `AgentAdapter`
+  - common interface for creating sessions, sending turns, fetching status, and stopping sessions
+  - selected from the profile's backend type
+
+- `OpenCodeServerManager`
+  - OpenCode-specific helper that ensures an OpenCode server exists for a given profile home directory
+  - manages process startup, attachment details, and health checks
+  - treats the profile home directory as the OpenCode project root
+
+- `OpenCodeClient`
+  - OpenCode-specific API client
+  - creates sessions
+  - sends messages
+  - fetches session status
+  - later may consume event streams
+
+- `ConversationMonitor`
+  - watches active OpenCode sessions
+  - updates tincan when a backing session becomes idle, completed, aborted, or failed
+  - can start with polling before later moving to SSE
+
+### What Stays Out Of Scope
+
+To keep the first increment tight, v1 should not try to solve all of these at once:
+
+- a fully generic multi-provider orchestration layer
+- a plugin framework for third-party agent backends
+- a broad event bus across the whole app
+- deep client UI syncing for every intermediate agent event
+
+The only required abstraction is the narrow adapter boundary around agent-session operations.
+OpenCode-specific helpers are acceptable as the first implementation, as long as the rest of the backend talks to them through the adapter selected by the agent profile.
+
+### First Increment
+
+The first useful increment is OpenCode Server support through that adapter boundary:
+
+1. resolve the target agent profile
+2. ensure an OpenCode server is available for that profile's home working directory
+3. create a backing OpenCode session for that project if needed
+4. send the transcript as a message to that session
+5. track that session until it becomes completed, idle, aborted, or failed
+6. update the tincan conversation state accordingly
+
+This is the smallest end-to-end improvement over `opencode run`.
+It introduces persistent conversations and lifecycle tracking without requiring a large redesign, while still keeping room for Codex or other backends later.
+
+### Polling Before Streaming
+
+The initial `ConversationMonitor` should use status polling.
+It is simpler to implement and enough to detect when a conversation has ended.
+
+Server-sent events from OpenCode can be added later after the core conversation lifecycle is working reliably.
+
+## Routing
+
+Routing should be backend-driven and candidate-based.
+The backend should not depend on strict transcript normalization before routing.
+
+### Why
+
+Speech transcripts are messy.
+Users may say things like `Emma twelve`, `talk to Atlas`, or `start a new Emma chat`, and ASR may render these inconsistently.
+
+Trying to fully normalize all spoken variants into exact structured references is not the v1 strategy.
+Instead, the backend should give a small routing model the raw transcript plus the live routing table and ask it to choose from a constrained action set.
+
+### Routing Inputs
+
+The router should receive:
+
+- the raw transcript for the current turn
+- the currently focused session, if any
+- the list of active agent profiles
+- the list of active sessions
+- each session's display handle, such as `emma#12`
+- each session's backing profile
+- a short summary of each active session
+- optional profile aliases or pronunciation hints
+
+### Routing Outputs
+
+The router should only be allowed to return one of a small set of actions:
+
+- `route_to_session(session_id)`
+- `route_to_profile(profile_id)`
+- `create_new_session(profile_id)`
+- `continue_current_session`
+- `ask_clarifying_question`
+
+The router should also return:
+
+- confidence
+- brief reason
+
+If confidence is below a configured threshold, the backend should ask a clarifying question instead of guessing.
+
+### Routing Policy
+
+The intended v1 flow is:
+
+1. transcribe the utterance
+2. gather active profiles, active sessions, current focus, and short session summaries
+3. call a small routing model with the raw transcript and those candidates
+4. accept only one action from the constrained routing schema
+5. execute the selected routing action deterministically in the backend
+
+This means the model helps interpret noisy speech, but it does not get broad autonomy.
+It only chooses among known destinations and a very small set of allowed actions.
+
+### Non-Goals For V1 Routing
+
+v1 routing should not:
+
+- rely on a large hand-built transcript normalization layer
+- use embeddings as the sole routing mechanism
+- use a general-purpose autonomous agent to decide routing
+- let the routing model directly operate tools or mutate sessions without backend validation
+
+Embeddings may still be useful later for candidate ranking or topic matching, but they are not the primary routing authority in v1.
+
+### Example Routing Cases
+
+- `tell Emma twelve to keep working on the Vapor auth bug`
+  - likely result: `route_to_session(session_id for emma#12)`
+
+- `ask Atlas about the audio pipeline`
+  - likely result: `route_to_profile(atlas)` or `route_to_session` if there is one obvious active Atlas session
+
+- `start a fresh Emma chat for the UI`
+  - likely result: `create_new_session(emma)`
+
+- `keep going on that bug`
+  - likely result: `continue_current_session` if there is a clear current focus, otherwise `ask_clarifying_question`
 
 ## TTS
 
@@ -281,9 +510,10 @@ The app may later support multiple TTS engines, but v1 only needs enough local T
 ### New Agent Session
 
 1. backend decides a new session is needed
-2. backend allocates a new internal session ID
-3. app assigns the matching display handle, such as `atlas#41`
-4. session keeps the same name and voice until it ends
+2. backend selects the target profile, which also selects the home working directory
+3. backend allocates an available display number within that profile
+4. app assigns the matching display handle, such as `emma#4`
+5. session keeps the same label and voice until it ends
 
 ## Privacy and Safety Expectations
 
@@ -304,7 +534,6 @@ These are not yet fully resolved:
 - how aggressively should uncertain speech be dropped versus buffered
 - how should the app expose manual override when verification is repeatedly wrong
 - what is the right threshold and UX for re-enrollment
-- should agent routing be purely backend-driven, or can the user address a profile by name in speech
 - how much local STT, if any, should exist for instant captions or confirmations
 
 ## Initial v1 Summary
@@ -316,7 +545,8 @@ The current v1 direction is:
 - pluggable coding-agent profiles
 - OpenCode-driven execution through `opencode run`
 - OpenCode plugin hooks forwarding session events back to the tincan backend
-- stable session identities like `atlas#41`
+- stable profile-scoped session identities like `emma#4`
+- backend candidate-based routing using a small routing model over raw transcripts
 - no speaker identification in the first shipping cut
 - transcript-in, CLI-run-out as the first end-to-end verification path
 
