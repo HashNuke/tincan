@@ -23,3 +23,5 @@ The `tincan-server` subdir has the orchestration server. This is a Swift app bas
 * OpenCode source code is available in ~/sources/opencode
 * OpenCode server docs - https://opencode.ai/docs/server.md
 * `opencode run` docs - https://opencode.ai/docs/cli/
+
+When git committing, always commit with a changelog-like commit description.
