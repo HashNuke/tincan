@@ -5,12 +5,14 @@ struct AgentProfile: Content, Sendable, Equatable {
     let name: String
     let workingDirectory: String
     let agentBackend: AgentBackend
+    let summarizer: String
     let agentBackendOptions: AgentBackendOptions
 
     enum CodingKeys: String, CodingKey {
         case name
         case workingDirectory = "working_directory"
         case agentBackend = "agent_backend"
+        case summarizer
         case agentBackendOptions = "agent_backend_options"
     }
 }
@@ -75,6 +77,10 @@ actor AgentProfileStore {
 
             guard !profile.agentBackendOptions.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 throw Abort(.internalServerError, reason: "Agent profile model must not be empty")
+            }
+
+            guard !profile.summarizer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw Abort(.internalServerError, reason: "Agent profile summarizer must not be empty")
             }
 
             guard seenNames.insert(profile.name).inserted else {

@@ -64,6 +64,7 @@ struct TincanServerTests {
         #expect(payload[0].name == "emma")
         #expect(payload[0].workingDirectory == "/Users/akash/code/apple/tincan")
         #expect(payload[0].agentBackend == .opencodeServer)
+        #expect(payload[0].summarizer == "no-summary")
         #expect(payload[0].agentBackendOptions.model == "openai/gpt-5.4")
         #expect(payload[1].name == "atlas")
         #expect(payload[1].agentBackend == .codex)
@@ -211,6 +212,8 @@ struct TincanServerTests {
                 #expect(payload.agentBackend == "opencode-server")
                 #expect(payload.backendConversationID == "oc-session-1")
                 #expect(payload.status == "running")
+                #expect(payload.summary == "Fix the server bug")
+                #expect(payload.announcementText == "Hello, I'm emma#1. I am working on Fix the server bug")
             })
 
             let stored = try await Conversation.query(on: app.db)
@@ -260,6 +263,7 @@ struct TincanServerTests {
                 let payload = try response.content.decode(ConversationCreateResponse.self)
                 #expect(payload.displayHandle == "emma#2")
                 #expect(payload.conversationNumber == 2)
+                #expect(payload.summary == "Do another task")
             })
         }
     }
