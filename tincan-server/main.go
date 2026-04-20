@@ -20,8 +20,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/pion/interceptor"
-	"github.com/pion/webrtc/v4"
 	"tincan-server/agent_adapters"
 	"tincan-server/calls"
 	"tincan-server/conversations"
@@ -31,9 +29,8 @@ import (
 
 type server struct {
 	mu                  sync.Mutex
-	api                 *webrtc.API
-	config              webrtc.Configuration
 	callManager         *calls.Manager
+	linphoneServer      *calls.LinphoneServer
 	inference           *inferenceClient
 	profiles            *AgentProfileStore
 	backends            *AgentBackendStore
@@ -41,22 +38,6 @@ type server struct {
 	agentAdapters       map[string]agent_adapters.Adapter
 	conversationService *ConversationService
 	router              *Router
-}
-
-type rtcDataChannelSink struct {
-	channel *webrtc.DataChannel
-}
-
-func (s rtcDataChannelSink) SendJSON(payload any) error {
-	data, err := json.Marshal(payload)
-	if err != nil {
-		return err
-	}
-	return s.channel.SendText(string(data))
-}
-
-func (s rtcDataChannelSink) Ready() bool {
-	return s.channel != nil && s.channel.ReadyState() == webrtc.DataChannelStateOpen
 }
 
 type webRTCOfferRequest struct {
@@ -157,7 +138,7 @@ func main() {
 	mux.HandleFunc("/updates/", srv.handleUpdateActions)
 	mux.HandleFunc("/hooks/opencode", srv.handleOpenCodeHook)
 	mux.HandleFunc("/session/", srv.handleSessionControl)
-	mux.HandleFunc("/webrtc/offer", srv.handleOffer)
+	srv.linphoneServer.RegisterRoutes(mux)
 
 	addr := "0.0.0.0:" + port
 	log.Printf("tincan-server listening on %s", addr)
@@ -220,36 +201,22 @@ func newServer() (*server, error) {
 		return nil, fmt.Errorf("validate router backend: %w", err)
 	}
 
-	mediaEngine := &webrtc.MediaEngine{}
-	if err := mediaEngine.RegisterDefaultCodecs(); err != nil {
-		return nil, fmt.Errorf("register codecs: %w", err)
+	callManager := calls.NewManager()
+	linphoneServer, err := calls.NewLinphoneServer(callManager)
+	if err != nil {
+		return nil, fmt.Errorf("init linphone server: %w", err)
 	}
-
-	interceptorRegistry := &interceptor.Registry{}
-	if err := webrtc.RegisterDefaultInterceptors(mediaEngine, interceptorRegistry); err != nil {
-		return nil, fmt.Errorf("register interceptors: %w", err)
-	}
-
-	api := webrtc.NewAPI(
-		webrtc.WithMediaEngine(mediaEngine),
-		webrtc.WithInterceptorRegistry(interceptorRegistry),
-	)
 
 	return &server{
-		api:                 api,
 		inference:           &inferenceClient{socketPath: inferenceSocketPath()},
-		callManager:         calls.NewManager(),
+		callManager:         callManager,
+		linphoneServer:      linphoneServer,
 		profiles:            profiles,
 		backends:            backends,
 		conversations:       conversationStore,
 		agentAdapters:       agentAdapters,
 		conversationService: NewConversationService(profiles, backends, conversationStore, agentAdapters),
 		router:              NewRouter(routerBackend, routerAdapter, profiles),
-		config: webrtc.Configuration{
-			ICEServers: []webrtc.ICEServer{
-				{URLs: []string{"stun:stun.l.google.com:19302"}},
-			},
-		},
 	}, nil
 }
 
@@ -402,11 +369,7 @@ func (s *server) handleOpenCodeHook(w http.ResponseWriter, r *http.Request) {
 
 	sessionID, hasSession := s.callManager.SessionIDForConversation(conversation.BackendConversationID)
 	if hasSession {
-		s.sendSessionEvent(sessionID, map[string]any{
-			"type":      "notify",
-			"text":      conversation.DisplayHandle + " has an update.",
-			"audio_url": "/debug/audio/processing",
-		})
+		s.sendSessionEvent(sessionID, calls.NewNotifyEvent(conversation.DisplayHandle+" has an update.", "/debug/audio/processing"))
 	}
 
 	w.WriteHeader(http.StatusNoContent)
@@ -511,11 +474,7 @@ func (s *server) handleUtteranceUpload(w http.ResponseWriter, r *http.Request, s
 			log.Printf("peer %s immediate feedback tts failed: %v", sessionID, err)
 		} else {
 			responsePayload["feedback_audio_url"] = feedbackAudioURL
-			s.sendSessionEvent(sessionID, map[string]any{
-				"type": "play_audio",
-				"url":  feedbackAudioURL,
-				"text": routerResult.ImmediateFeedback,
-			})
+			s.sendSessionEvent(sessionID, calls.NewPlayAudioEvent(routerResult.ImmediateFeedback, feedbackAudioURL))
 		}
 	}
 
@@ -633,145 +592,10 @@ func mustMarshalJSON(v any) string {
 	return string(data)
 }
 
-func (s *server) handleOffer(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	defer r.Body.Close()
-
-	var offer webRTCOfferRequest
-	if err := json.NewDecoder(r.Body).Decode(&offer); err != nil {
-		http.Error(w, "invalid json body", http.StatusBadRequest)
-		return
-	}
-
-	if offer.Type != "offer" || offer.SDP == "" {
-		http.Error(w, "expected offer with non-empty sdp", http.StatusBadRequest)
-		return
-	}
-
-	peerConnection, err := s.api.NewPeerConnection(s.config)
-	if err != nil {
-		log.Printf("new peer connection failed: %v", err)
-		http.Error(w, "failed to create peer connection", http.StatusInternalServerError)
-		return
-	}
-
-	sessionID := newSessionID()
-	s.storePeer(sessionID, peerConnection)
-	s.attachPeerLogging(sessionID, peerConnection)
-
-	if _, err = peerConnection.AddTransceiverFromKind(
-		webrtc.RTPCodecTypeAudio,
-		webrtc.RTPTransceiverInit{Direction: webrtc.RTPTransceiverDirectionRecvonly},
-	); err != nil {
-		s.closeAndDeletePeer(sessionID)
-		log.Printf("add audio transceiver failed: %v", err)
-		http.Error(w, "failed to add audio transceiver", http.StatusInternalServerError)
-		return
-	}
-
-	remoteDescription := webrtc.SessionDescription{
-		Type: webrtc.SDPTypeOffer,
-		SDP:  offer.SDP,
-	}
-	if err = peerConnection.SetRemoteDescription(remoteDescription); err != nil {
-		s.closeAndDeletePeer(sessionID)
-		log.Printf("set remote description failed: %v", err)
-		http.Error(w, "failed to set remote description", http.StatusBadRequest)
-		return
-	}
-
-	answer, err := peerConnection.CreateAnswer(nil)
-	if err != nil {
-		s.closeAndDeletePeer(sessionID)
-		log.Printf("create answer failed: %v", err)
-		http.Error(w, "failed to create answer", http.StatusInternalServerError)
-		return
-	}
-
-	gatherComplete := webrtc.GatheringCompletePromise(peerConnection)
-	if err = peerConnection.SetLocalDescription(answer); err != nil {
-		s.closeAndDeletePeer(sessionID)
-		log.Printf("set local description failed: %v", err)
-		http.Error(w, "failed to set local description", http.StatusInternalServerError)
-		return
-	}
-
-	<-gatherComplete
-
-	localDescription := peerConnection.LocalDescription()
-	if localDescription == nil {
-		s.closeAndDeletePeer(sessionID)
-		http.Error(w, "missing local description", http.StatusInternalServerError)
-		return
-	}
-
-	writeJSON(w, http.StatusOK, webRTCAnswerResponse{
-		SessionID: sessionID,
-		SDP:       localDescription.SDP,
-		Type:      localDescription.Type.String(),
-	})
-}
-
-func (s *server) attachPeerLogging(sessionID string, peerConnection *webrtc.PeerConnection) {
-	peerConnection.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
-		log.Printf("peer %s connection state: %s", sessionID, state.String())
-		if state == webrtc.PeerConnectionStateFailed ||
-			state == webrtc.PeerConnectionStateClosed ||
-			state == webrtc.PeerConnectionStateDisconnected {
-			s.closeAndDeletePeer(sessionID)
-		}
-	})
-
-	peerConnection.OnTrack(func(track *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
-		log.Printf("peer %s received %s track with codec %s; ignoring media for now", sessionID, track.Kind().String(), track.Codec().MimeType)
-		go func() {
-			for {
-				packet, _, err := track.ReadRTP()
-				if err != nil {
-					log.Printf("peer %s track reader stopped: %v", sessionID, err)
-					return
-				}
-				log.Printf(
-					"peer %s audio packet: ssrc=%d payload_type=%d sequence=%d timestamp=%d marker=%t payload_bytes=%d",
-					sessionID,
-					packet.SSRC,
-					packet.PayloadType,
-					packet.SequenceNumber,
-					packet.Timestamp,
-					packet.Marker,
-					len(packet.Payload),
-				)
-			}
-		}()
-	})
-	peerConnection.OnDataChannel(func(dataChannel *webrtc.DataChannel) {
-		log.Printf("peer %s opened data channel %q", sessionID, dataChannel.Label())
-		if dataChannel.Label() == "events" {
-			s.callManager.SetEventSink(sessionID, rtcDataChannelSink{channel: dataChannel})
-		}
-	})
-}
-
-func (s *server) storePeer(sessionID string, peerConnection *webrtc.PeerConnection) {
-	s.callManager.RegisterSession(sessionID)
-}
-
-func (s *server) closeAndDeletePeer(sessionID string) {
-	s.callManager.RemoveSession(sessionID)
-}
-
 func (s *server) sendSessionEvent(sessionID string, payload any) {
 	if ok := s.callManager.SendEvent(sessionID, payload); !ok {
 		log.Printf("peer %s failed to send session event", sessionID)
 	}
-}
-
-func newSessionID() string {
-	return time.Now().UTC().Format("20060102T150405.000000000")
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
