@@ -11,13 +11,11 @@ final class MacCallSessionViewModel: ObservableObject {
     @Published private(set) var isCallActive = false
     @Published private(set) var isTransitioningCallState = false
 
-    private let audioPipeline = AudioTurnPipeline()
-    private let inferenceClient = BackendInferenceClient()
+    private let linphoneClient = LiblinphoneCallClient()
     private let tonePlayer = CallTonePlayer.shared
-    private let backendURL = URL(string: BackendConnectionConfig.loopbackInferenceURLString)
 
     init() {
-        audioPipeline.setDelegate(self)
+        linphoneClient.delegate = self
         appendLog("Ready")
     }
 
@@ -38,13 +36,13 @@ final class MacCallSessionViewModel: ObservableObject {
             }
 
             do {
-                try await audioPipeline.start()
-                callStateDescription = "Listening"
+                try linphoneClient.start()
+                callStateDescription = "Connected"
                 isCallActive = true
                 tonePlayer.playConnectTone()
             } catch {
-                callStateDescription = "Audio start failed"
-                appendLog("Failed to start audio pipeline: \(error.localizedDescription)")
+                callStateDescription = "Call start failed"
+                appendLog("Failed to start Liblinphone: \(error.localizedDescription)")
             }
 
             isTransitioningCallState = false
@@ -55,7 +53,7 @@ final class MacCallSessionViewModel: ObservableObject {
         guard isCallActive || isTransitioningCallState else { return }
         isTransitioningCallState = true
         Task {
-            await audioPipeline.stop()
+            linphoneClient.stop()
             callStateDescription = "Disconnected"
             isCallActive = false
             tonePlayer.playDisconnectTone()
@@ -73,24 +71,6 @@ final class MacCallSessionViewModel: ObservableObject {
             return false
         }
     }
-
-    private func uploadSegment(_ data: Data, duration: TimeInterval) {
-        guard let backendURL else {
-            appendLog("Backend URL is invalid")
-            return
-        }
-
-        Task {
-            do {
-                let result = try await inferenceClient.infer(audioWAV: data, endpoint: backendURL)
-                lastServerTranscript = result.transcript
-                appendLog("Backend transcript: \(result.transcript)")
-            } catch {
-                appendLog("Upload failed: \(error.localizedDescription)")
-            }
-        }
-    }
-
     private func appendLog(_ message: String) {
         let timestamp = Date.now.formatted(date: .omitted, time: .standard)
         logLines.insert("[\(timestamp)] \(message)", at: 0)
@@ -100,13 +80,9 @@ final class MacCallSessionViewModel: ObservableObject {
     }
 }
 
-extension MacCallSessionViewModel: AudioTurnPipelineOutput {
-    func audioTurnPipelineDidLog(_ message: String) {
+extension MacCallSessionViewModel: LiblinphoneCallClientDelegate {
+    func liblinphoneCallClient(_ client: LiblinphoneCallClient, didLog message: String) {
         appendLog(message)
-    }
-
-    func audioTurnPipelineDidProduceSegment(_ data: Data, duration: TimeInterval) {
-        uploadSegment(data, duration: duration)
     }
 }
 #endif
