@@ -15,6 +15,7 @@ Added `docs/router-spec.md` documenting:
 - the explicit wake or command phrase model
 - the requirement that new conversations must be explicitly requested
 - the router output schema for `new_conversation`, `message`, `read_conversation_update`, `ask_clarifying_question`, and `ignore`
+- the explicit meaning and example usage for each user-router action, including `switch_context`
 - the normalized `conversation_update` model and pending update buffer behavior
 - the fact that the router owns short spoken feedback and update summary text
 - the JSONL append-only router log for committed voice commands

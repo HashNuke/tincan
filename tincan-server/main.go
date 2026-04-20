@@ -32,6 +32,8 @@ type server struct {
 	profiles  *AgentProfileStore
 	conversations *ConversationStore
 	agentAdapters map[string]AgentAdapter
+	conversationService *ConversationService
+	router    *Router
 }
 
 type sessionState struct {
@@ -48,22 +50,6 @@ type webRTCAnswerResponse struct {
 	SessionID string `json:"session_id"`
 	SDP       string `json:"sdp"`
 	Type      string `json:"type"`
-}
-
-type createConversationRequest struct {
-	ProfileName string `json:"profile_name"`
-	Message     string `json:"message"`
-}
-
-type createConversationResponse struct {
-	ID                    string `json:"id"`
-	DisplayHandle         string `json:"display_handle"`
-	ConversationNumber    int    `json:"conversation_number"`
-	AgentProfileName      string `json:"agent_profile_name"`
-	AgentBackend          string `json:"agent_backend"`
-	WorkingDirectory      string `json:"working_directory"`
-	BackendConversationID string `json:"backend_conversation_id"`
-	Status                string `json:"status"`
 }
 
 type inferenceEnvelope struct {
@@ -125,7 +111,6 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", srv.handleHealth)
 	mux.HandleFunc("/speak", srv.handleSpeakPage)
-	mux.HandleFunc("/conversations", srv.handleCreateConversation)
 	mux.HandleFunc("/session/", srv.handleSessionControl)
 	mux.HandleFunc("/webrtc/offer", srv.handleOffer)
 
@@ -189,6 +174,8 @@ func newServer() (*server, error) {
 		profiles: profiles,
 		conversations: conversationStore,
 		agentAdapters: agentAdapters,
+		conversationService: NewConversationService(profiles, conversationStore, agentAdapters),
+		router:    NewRouter(profiles),
 		config: webrtc.Configuration{
 			ICEServers: []webrtc.ICEServer{
 				{URLs: []string{"stun:stun.l.google.com:19302"}},
@@ -212,70 +199,6 @@ func (s *server) handleSpeakPage(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write([]byte(speakPageHTML))
-}
-
-func (s *server) handleCreateConversation(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	defer r.Body.Close()
-
-	var request createConversationRequest
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		http.Error(w, "invalid json body", http.StatusBadRequest)
-		return
-	}
-
-	profile, ok := s.profiles.Get(request.ProfileName)
-	if !ok {
-		http.Error(w, "unknown agent profile", http.StatusNotFound)
-		return
-	}
-
-	adapter, ok := s.agentAdapters[profile.AgentBackend]
-	if !ok {
-		http.Error(w, "no agent adapter for profile backend", http.StatusBadRequest)
-		return
-	}
-
-	conversationNumber, err := s.conversations.NextConversationNumber(profile.Name)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("failed to allocate conversation number: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	adapterResult, err := adapter.StartConversation(profile, request.Message)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("failed to start backend conversation: %v", err), http.StatusBadGateway)
-		return
-	}
-
-	conversation, err := s.conversations.CreateConversation(Conversation{
-		DisplayHandle:         fmt.Sprintf("%s#%d", profile.Name, conversationNumber),
-		AgentProfileName:      profile.Name,
-		ConversationNumber:    conversationNumber,
-		AgentBackend:          profile.AgentBackend,
-		WorkingDirectory:      profile.WorkingDirectory,
-		BackendConversationID: adapterResult.BackendConversationID,
-		Status:                adapterResult.Status,
-	})
-	if err != nil {
-		http.Error(w, fmt.Sprintf("failed to persist conversation: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	writeJSON(w, http.StatusOK, createConversationResponse{
-		ID:                    conversation.ID,
-		DisplayHandle:         conversation.DisplayHandle,
-		ConversationNumber:    conversation.ConversationNumber,
-		AgentProfileName:      conversation.AgentProfileName,
-		AgentBackend:          conversation.AgentBackend,
-		WorkingDirectory:      conversation.WorkingDirectory,
-		BackendConversationID: conversation.BackendConversationID,
-		Status:                conversation.Status,
-	})
 }
 
 func (s *server) handleSessionControl(w http.ResponseWriter, r *http.Request) {
@@ -370,7 +293,31 @@ func (s *server) handleUtteranceUpload(w http.ResponseWriter, r *http.Request, s
 	}
 
 	log.Printf("peer %s transcript: %s", sessionID, transcript)
-	writeJSON(w, http.StatusOK, map[string]any{"text": transcript})
+
+	routerResult := s.router.RouteUserTranscript(UserRouterInput{Transcript: transcript})
+	log.Printf("peer %s router action: %s agent=%q handle=%q feedback=%q", sessionID, routerResult.Action, routerResult.Agent, routerResult.ConversationHandle, routerResult.ImmediateFeedback)
+
+	responsePayload := map[string]any{
+		"text": transcript,
+		"router": routerResult,
+	}
+
+	if routerResult.Action == "new_conversation" {
+		conversation, err := s.conversationService.CreateConversation(ConversationCreateInput{
+			ProfileName:       routerResult.Agent,
+			ConversationTitle: routerResult.ConversationTitle,
+			Message:           routerResult.Message,
+		})
+		if err != nil {
+			log.Printf("peer %s conversation creation failed: %v", sessionID, err)
+			http.Error(w, fmt.Sprintf("conversation creation failed: %v", err), http.StatusBadGateway)
+			return
+		}
+		log.Printf("peer %s created conversation: handle=%s backend_id=%s status=%s", sessionID, conversation.DisplayHandle, conversation.BackendConversationID, conversation.Status)
+		responsePayload["conversation"] = conversation
+	}
+
+	writeJSON(w, http.StatusOK, responsePayload)
 }
 
 func (s *server) handleOffer(w http.ResponseWriter, r *http.Request) {

@@ -181,8 +181,111 @@ Recommended action values:
 - `new_conversation`
 - `message`
 - `read_conversation_update`
+- `switch_context`
 - `ask_clarifying_question`
 - `ignore`
+
+## User Router Actions
+
+The user-facing router should support these actions.
+
+### `new_conversation`
+
+Use this when the user explicitly wants a fresh conversation.
+
+Examples:
+
+- `start a new Emma conversation to fix the auth bug`
+- `new chat with Atlas for the audio pipeline`
+- `create a new Emma session for this task`
+
+Meaning:
+
+- select the target agent profile
+- create a new conversation
+- usually switch current context to that new conversation
+
+### `message`
+
+Use this when the user wants to send content to an existing conversation.
+
+Examples:
+
+- `tell emma 12 to keep going on the auth bug`
+- `send this to atlas 3`
+- `ask emma 12 to update the tests`
+
+Meaning:
+
+- resolve the target conversation handle
+- send the message to the existing backend conversation
+
+### `read_conversation_update`
+
+Use this when the user wants to hear the details of a pending conversation update.
+
+Examples:
+
+- `go ahead emma 12`
+- `yes go ahead`
+- `read atlas 15`
+- `what did emma 12 say?`
+
+Meaning:
+
+- select the pending update to read
+- return the fuller queued update text for TTS
+- this action may also imply switching current context to that conversation
+
+### `switch_context`
+
+Use this when the user wants to make another conversation the current focus without necessarily sending a new message yet.
+
+Examples:
+
+- `switch to emma 12`
+- `focus atlas 15`
+- `let's go back to emma 12`
+
+Meaning:
+
+- update current conversation context
+- do not necessarily send a backend message yet
+- useful before follow-up speech such as `continue with the tests`
+
+### `ask_clarifying_question`
+
+Use this when the user intent is ambiguous and the server should not guess.
+
+Examples:
+
+- `talk to emma about the auth bug`
+  - ambiguous if there are multiple Emma conversations
+- `yes go ahead`
+  - ambiguous if there are multiple pending updates
+- `continue working on that`
+  - ambiguous if there is no clear current context
+
+Meaning:
+
+- router cannot safely choose the next action
+- server should respond with a clarification prompt instead of guessing
+
+### `ignore`
+
+Use this when the transcript should not trigger any action.
+
+Examples:
+
+- empty or near-empty transcript
+- filler only such as `uh` or `hmm`
+- obvious accidental capture or noise
+
+Meaning:
+
+- no conversation action
+- no queue mutation
+- optionally no user-facing response
 
 ## Immediate Feedback And Update Text
 
