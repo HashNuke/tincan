@@ -265,4 +265,44 @@ struct TincanServerTests {
             })
         }
     }
+
+    @Test("Committed command creates conversation through call session path")
+    func committedCommandCreatesConversation() async throws {
+        try await withApp { app in
+            app.openCodeClient = mockOpenCodeClient(createdSessionID: "oc-session-3")
+
+            try await app.testing().test(.POST, "call-session/committed-command", beforeRequest: { request in
+                try request.content.encode(
+                    CommittedCommandRequest(rawTranscript: "start a new emma conversation to fix the Vapor auth bug")
+                )
+            }, afterResponse: { response async throws in
+                #expect(response.status == .ok)
+
+                let payload = try response.content.decode(CommittedCommandResponse.self)
+                #expect(payload.router.action == "new_conversation")
+                #expect(payload.router.agent == "emma")
+                #expect(payload.router.message == "fix the Vapor auth bug")
+                #expect(payload.router.immediateFeedback == "Starting a new emma conversation.")
+                #expect(payload.conversation?.displayHandle == "emma#1")
+                #expect(payload.conversation?.backendConversationID == "oc-session-3")
+            })
+        }
+    }
+
+    @Test("Committed command asks for clarification when no explicit create intent exists")
+    func committedCommandAsksForClarification() async throws {
+        try await withApp { app in
+            try await app.testing().test(.POST, "call-session/committed-command", beforeRequest: { request in
+                try request.content.encode(
+                    CommittedCommandRequest(rawTranscript: "tell emma to fix the Vapor auth bug")
+                )
+            }, afterResponse: { response async throws in
+                #expect(response.status == .ok)
+
+                let payload = try response.content.decode(CommittedCommandResponse.self)
+                #expect(payload.router.action == "ask_clarifying_question")
+                #expect(payload.conversation == nil)
+            })
+        }
+    }
 }

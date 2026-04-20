@@ -60,6 +60,7 @@ func routes(_ app: Application) throws {
         )
     }
 
+    try app.register(collection: CallSessionController())
     try app.register(collection: ConversationController())
 }
 
