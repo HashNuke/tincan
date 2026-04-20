@@ -4,6 +4,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	tincanconfig "tincan-server/config"
 )
@@ -39,10 +40,11 @@ func NewAgentProfileStore() (*AgentProfileStore, error) {
 		if profile.AgentBackend == "" {
 			return nil, fmt.Errorf("agent profile %q agent_backend must not be empty", profile.Name)
 		}
-		if _, exists := profiles[profile.Name]; exists {
+		normalizedName := normalizeAgentProfileName(profile.Name)
+		if _, exists := profiles[normalizedName]; exists {
 			return nil, fmt.Errorf("duplicate agent profile %q", profile.Name)
 		}
-		profiles[profile.Name] = profile
+		profiles[normalizedName] = profile
 	}
 
 	return &AgentProfileStore{profiles: profiles}, nil
@@ -83,8 +85,12 @@ func (s *AgentProfileStore) List() []tincanconfig.AgentProfile {
 }
 
 func (s *AgentProfileStore) Get(name string) (tincanconfig.AgentProfile, bool) {
-	profile, ok := s.profiles[name]
+	profile, ok := s.profiles[normalizeAgentProfileName(name)]
 	return profile, ok
+}
+
+func normalizeAgentProfileName(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
 }
 
 func (s *AgentBackendStore) Get(name string) (tincanconfig.AgentBackendDefinition, bool) {

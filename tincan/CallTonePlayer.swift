@@ -22,14 +22,22 @@ final class CallTonePlayer: NSObject, AVAudioPlayerDelegate {
         ])
     }
 
-    private func playTone(sequence: [ToneSegment]) {
+    func playAudioData(_ audioData: Data) {
         do {
-            let audioData = try ToneWaveform.render(sequence: sequence)
             let player = try AVAudioPlayer(data: audioData)
             player.delegate = self
             player.prepareToPlay()
             activePlayers.append(player)
             player.play()
+        } catch {
+            assertionFailure("Failed to play audio data: \(error.localizedDescription)")
+        }
+    }
+
+    private func playTone(sequence: [ToneSegment]) {
+        do {
+            let audioData = try ToneWaveform.render(sequence: sequence)
+            playAudioData(audioData)
         } catch {
             assertionFailure("Failed to play call tone: \(error.localizedDescription)")
         }

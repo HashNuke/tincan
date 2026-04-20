@@ -359,7 +359,14 @@ func (s *server) handleOpenCodeHook(w http.ResponseWriter, r *http.Request) {
 
 	sessionID, hasSession := s.callManager.SessionIDForConversation(conversation.BackendConversationID)
 	if hasSession {
-		s.sendSessionEvent(sessionID, calls.NewNotifyEvent(conversation.DisplayHandle+" has an update.", "/debug/audio/processing"))
+		notificationText := conversation.DisplayHandle + " has an update."
+		audioURL := "/debug/audio/processing"
+		if generatedAudioURL, err := s.generateFeedbackAudio(notificationText); err != nil {
+			log.Printf("failed to generate update notification audio for %s: %v", conversation.DisplayHandle, err)
+		} else {
+			audioURL = generatedAudioURL
+		}
+		s.sendSessionEvent(sessionID, calls.NewNotifyEvent(notificationText, audioURL))
 	}
 
 	w.WriteHeader(http.StatusNoContent)
@@ -492,7 +499,7 @@ func (s *server) handleUtteranceUpload(w http.ResponseWriter, r *http.Request, s
 				log.Printf("peer %s failed to persist conversation notes for %s: %v", sessionID, conversation.DisplayHandle, err)
 			}
 		}
-		s.callManager.LinkConversation(sessionID, conversation.BackendConversationID)
+		s.callManager.LinkConversation(sessionID, conversation.BackendConversationID, conversation.DisplayHandle)
 		responsePayload["conversation"] = conversation
 	}
 
@@ -514,15 +521,24 @@ func (s *server) buildRouteUserInputRequest(sessionID string, transcript string)
 	}
 	request.PendingUpdateHandles = pendingUpdateHandles
 
-	currentConversation, ok, err := s.conversations.GetMostRecentConversationByBackendConversationIDs(s.callManager.BackendConversationIDsForSession(sessionID))
+	currentConversationHandle, hasCurrentHandle := s.callManager.CurrentConversationHandleForSession(sessionID)
+	currentBackendConversationID, hasCurrentBackendConversationID := s.callManager.CurrentBackendConversationIDForSession(sessionID)
+	if !hasCurrentHandle && !hasCurrentBackendConversationID {
+		return request, nil
+	}
+	request.CurrentConversationHandle = currentConversationHandle
+
+	if !hasCurrentBackendConversationID {
+		return request, nil
+	}
+
+	currentConversation, ok, err := s.conversations.GetConversationByBackendConversationID(currentBackendConversationID)
 	if err != nil {
 		return tincanrouter.RouteUserInputRequest{}, err
 	}
 	if !ok {
 		return request, nil
 	}
-
-	request.CurrentConversationHandle = currentConversation.DisplayHandle
 
 	note, ok, err := s.conversations.GetConversationNotes(currentConversation.ID)
 	if err != nil {

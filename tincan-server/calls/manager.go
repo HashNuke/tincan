@@ -78,7 +78,7 @@ func (m *Manager) SetEventSink(transportSessionID string, sink EventSink) bool {
 	return true
 }
 
-func (m *Manager) LinkConversation(transportSessionID string, backendConversationID string) {
+func (m *Manager) LinkConversation(transportSessionID string, backendConversationID string, conversationHandle string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	session, ok := m.sessions[transportSessionID]
@@ -86,6 +86,8 @@ func (m *Manager) LinkConversation(transportSessionID string, backendConversatio
 		return
 	}
 	session.BackendConversationIDs[backendConversationID] = struct{}{}
+	session.State.CurrentBackendConversationID = backendConversationID
+	session.State.CurrentConversationHandle = conversationHandle
 	m.conversationSessions[backendConversationID] = transportSessionID
 }
 
@@ -110,6 +112,26 @@ func (m *Manager) BackendConversationIDsForSession(transportSessionID string) []
 	}
 	slices.Sort(backendConversationIDs)
 	return backendConversationIDs
+}
+
+func (m *Manager) CurrentBackendConversationIDForSession(transportSessionID string) (string, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	session, ok := m.sessions[transportSessionID]
+	if !ok || session.State.CurrentBackendConversationID == "" {
+		return "", false
+	}
+	return session.State.CurrentBackendConversationID, true
+}
+
+func (m *Manager) CurrentConversationHandleForSession(transportSessionID string) (string, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	session, ok := m.sessions[transportSessionID]
+	if !ok || session.State.CurrentConversationHandle == "" {
+		return "", false
+	}
+	return session.State.CurrentConversationHandle, true
 }
 
 func (m *Manager) SendEvent(transportSessionID string, payload any) bool {

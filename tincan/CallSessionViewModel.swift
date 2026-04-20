@@ -105,13 +105,41 @@ final class CallSessionViewModel: ObservableObject {
         eventTask = Task {
             for await event in client.eventStream(sessionID: sessionID) {
                 switch event {
-                case .playAudio(let text, _):
+                case .playAudio(let text, let urlPath):
                     appendLog("Server: \(text)")
-                case .notify(let text, _):
+                    await playServerAudioIfPresent(urlPath, client: client, fallbackLogPrefix: "Server audio")
+                case .notify(let text, let audioURLPath):
                     appendLog("Notify: \(text)")
+                    await playServerAudioIfPresent(audioURLPath, client: client, fallbackLogPrefix: "Notify audio")
                 }
             }
         }
+    }
+
+    private func playServerAudioIfPresent(_ path: String?, client: BackendSessionClient, fallbackLogPrefix: String) async {
+        guard let path, !path.isEmpty else { return }
+        guard let audioURL = makeServerAudioURL(path: path, client: client) else {
+            appendLog("\(fallbackLogPrefix) URL was invalid: \(path)")
+            return
+        }
+
+        do {
+            let (audioData, response) = try await URLSession.shared.data(from: audioURL)
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                appendLog("\(fallbackLogPrefix) fetch failed")
+                return
+            }
+            tonePlayer.playAudioData(audioData)
+        } catch {
+            appendLog("\(fallbackLogPrefix) fetch failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func makeServerAudioURL(path: String, client: BackendSessionClient) -> URL? {
+        if let url = URL(string: path), url.scheme != nil {
+            return url
+        }
+        return URL(string: path, relativeTo: client.serverBaseURL)?.absoluteURL
     }
 }
 
@@ -196,6 +224,7 @@ extension CallSessionViewModel: AudioTurnPipelineOutput {
                 let response = try await client.uploadUtterance(sessionID: sid, audioWAV: data)
                 lastServerTranscript = response.text
                 appendLog("Transcript: \(response.text)")
+                await playServerAudioIfPresent(response.feedbackAudioURL, client: client, fallbackLogPrefix: "Immediate feedback audio")
             } catch {
                 appendLog("Upload failed: \(error.localizedDescription)")
             }

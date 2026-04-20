@@ -1,8 +1,10 @@
 package calls
 
 type SessionState struct {
-	TransportSessionID string
-	PushToTalk         bool
+	TransportSessionID           string
+	PushToTalk                   bool
+	CurrentBackendConversationID string
+	CurrentConversationHandle    string
 }
 
 type PlayAudioEvent struct {
