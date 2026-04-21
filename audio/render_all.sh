@@ -10,6 +10,8 @@ fi
 
 for script in "$ROOT"/*.ck; do
   [ -e "$script" ] || continue
-  echo "rendering $(basename "$script")"
+  output="${script%.ck}.wav"
+  input_name="$(basename "$script")"
   chuck --silent "$script"
+  echo "Rendered $input_name as $output"
 done
