@@ -5,8 +5,8 @@
 Gain master => dac;
 master => WvOut2 capture => blackhole;
 (me.dir() + "processing_signal_chime.wav", IO.INT24) => capture.wavFilename;
-0.9 => capture.fileGain;
-0.18 => master.gain;
+1.0 => capture.fileGain;
+1.90 => master.gain;
 
 fun void blip(float freq, float amp, dur hold, dur releaseTime)
 {
@@ -22,7 +22,7 @@ fun void blip(float freq, float amp, dur hold, dur releaseTime)
     freq * 1.8 => color.freq;
     3.2 => color.Q;
 
-    amp => voice.gain;
+    amp * 1.65 => voice.gain;
     env.set(4::ms, 12::ms, 0.18, releaseTime);
     env.keyOn();
     hold => now;
@@ -31,13 +31,13 @@ fun void blip(float freq, float amp, dur hold, dur releaseTime)
 }
 
 60::ms => now;
-spork ~ blip(739.99, 0.42, 60::ms, 100::ms);
+spork ~ blip(739.99, 0.62, 60::ms, 100::ms);
 240::ms => now;
-spork ~ blip(622.25, 0.38, 55::ms, 100::ms);
+spork ~ blip(622.25, 0.56, 55::ms, 100::ms);
 240::ms => now;
-spork ~ blip(830.61, 0.40, 60::ms, 100::ms);
+spork ~ blip(830.61, 0.60, 60::ms, 100::ms);
 240::ms => now;
-spork ~ blip(932.33, 0.36, 60::ms, 100::ms);
+spork ~ blip(932.33, 0.54, 60::ms, 100::ms);
 1420::ms => now;
 
 capture.closeFile();

@@ -5,8 +5,8 @@
 Gain master => dac;
 master => WvOut2 capture => blackhole;
 (me.dir() + "processing_air_taps.wav", IO.INT24) => capture.wavFilename;
-0.9 => capture.fileGain;
-0.18 => master.gain;
+1.0 => capture.fileGain;
+2.10 => master.gain;
 
 fun void tap(float freq, float amp, dur hold, dur releaseTime)
 {
@@ -22,7 +22,7 @@ fun void tap(float freq, float amp, dur hold, dur releaseTime)
     freq * 1.6 => color.freq;
     4.0 => color.Q;
 
-    amp => voice.gain;
+    amp * 1.70 => voice.gain;
     env.set(5::ms, 18::ms, 0.20, releaseTime);
     env.keyOn();
     hold => now;
@@ -31,13 +31,13 @@ fun void tap(float freq, float amp, dur hold, dur releaseTime)
 }
 
 70::ms => now;
-spork ~ tap(880.00, 0.55, 70::ms, 120::ms);
+spork ~ tap(880.00, 0.78, 70::ms, 120::ms);
 260::ms => now;
-spork ~ tap(1046.50, 0.48, 70::ms, 120::ms);
+spork ~ tap(1046.50, 0.70, 70::ms, 120::ms);
 260::ms => now;
-spork ~ tap(987.77, 0.44, 65::ms, 120::ms);
+spork ~ tap(987.77, 0.64, 65::ms, 120::ms);
 280::ms => now;
-spork ~ tap(1318.51, 0.50, 70::ms, 130::ms);
+spork ~ tap(1318.51, 0.72, 70::ms, 130::ms);
 1130::ms => now;
 
 capture.closeFile();
