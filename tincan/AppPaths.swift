@@ -1,12 +1,35 @@
 import Foundation
 
 enum AppPaths {
-    static let projectRoot: URL = {
+    nonisolated static let projectRoot: URL = {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
     }()
 
-    static let backendDirectory = projectRoot.appendingPathComponent("backend", isDirectory: true)
-    static let backendServerModule = "backend.server"
+    nonisolated static let appSupportDirectory: URL = {
+        let baseURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        let directory = baseURL.appendingPathComponent("tincan", isDirectory: true)
+        try? FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true,
+            attributes: nil
+        )
+        return directory
+    }()
+
+    nonisolated static let temporaryDirectory: URL = {
+        let directory = appSupportDirectory.appendingPathComponent("tmp", isDirectory: true)
+        try? FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true,
+            attributes: nil
+        )
+        return directory
+    }()
+
+    nonisolated static let ownerProfileURL = appSupportDirectory.appendingPathComponent("owner-voice-profile.json")
+    nonisolated static let backendDirectory = projectRoot.appendingPathComponent("backend", isDirectory: true)
+    nonisolated static let backendServerModule = "backend.server"
 }

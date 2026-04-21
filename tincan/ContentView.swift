@@ -126,6 +126,38 @@ private struct MacBackendView: View {
             }
 
             VStack(alignment: .leading, spacing: 10) {
+                Text("Speaker Identity")
+                    .font(.headline)
+
+                Text(callSession.identityStatusDescription)
+                    .font(.title3.weight(.semibold))
+
+                Text(callSession.ownerProfileDescription)
+                    .foregroundStyle(.secondary)
+
+                if !callSession.lastChallengeTranscript.isEmpty {
+                    LabeledContent("Last Heard") {
+                        Text(callSession.lastChallengeTranscript)
+                            .font(.footnote.monospaced())
+                            .textSelection(.enabled)
+                    }
+                }
+
+                HStack(spacing: 12) {
+                    Button("Identify Speaker") {
+                        callSession.beginSpeakerIdentification()
+                    }
+                    .disabled(!callSession.isCallActive)
+
+                    Button("Reset Voice") {
+                        callSession.resetSpeakerProfile()
+                    }
+                }
+            }
+            .padding(16)
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
+
+            VStack(alignment: .leading, spacing: 10) {
                 Text("Server Diagnostics")
                     .font(.headline)
 
@@ -162,7 +194,7 @@ private struct MacBackendView: View {
             .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
         }
         .padding(24)
-        .frame(minWidth: 560, minHeight: 220)
+        .frame(minWidth: 620, minHeight: 360)
     }
 }
 #endif

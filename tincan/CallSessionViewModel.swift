@@ -217,11 +217,11 @@ extension CallSessionViewModel: AudioTurnPipelineOutput {
         appendLog(message)
     }
 
-    func audioTurnPipelineDidProduceSegment(_ data: Data, duration: TimeInterval) {
+    func audioTurnPipelineDidCaptureSegment(_ segment: CapturedSpeechSegment) {
         guard let client = sessionClient, let sid = sessionID else { return }
         Task {
             do {
-                let response = try await client.uploadUtterance(sessionID: sid, audioWAV: data)
+                let response = try await client.uploadUtterance(sessionID: sid, audioWAV: segment.wavData)
                 lastServerTranscript = response.text
                 appendLog("Transcript: \(response.text)")
             } catch {

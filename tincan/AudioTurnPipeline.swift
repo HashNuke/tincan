@@ -7,7 +7,7 @@ import Foundation
 @MainActor
 protocol AudioTurnPipelineOutput: AnyObject {
     func audioTurnPipelineDidLog(_ message: String)
-    func audioTurnPipelineDidProduceSegment(_ data: Data, duration: TimeInterval)
+    func audioTurnPipelineDidCaptureSegment(_ segment: CapturedSpeechSegment)
 }
 
 final class AudioTurnPipeline {
@@ -113,8 +113,8 @@ private actor TurnEventSink {
         await delegate?.audioTurnPipelineDidLog(message)
     }
 
-    func emitSegment(_ data: Data, duration: TimeInterval) async {
-        await delegate?.audioTurnPipelineDidProduceSegment(data, duration: duration)
+    func emitSegment(_ segment: CapturedSpeechSegment) async {
+        await delegate?.audioTurnPipelineDidCaptureSegment(segment)
     }
 }
 
@@ -214,8 +214,16 @@ private actor VadTurnDetector {
         }
 
         let wavData = try AudioWAV.data(from: turnSamples, sampleRate: Double(VadManager.sampleRate))
-        await sink.emitLog("Sending \(duration.formatted(.number.precision(.fractionLength(2))))s turn to backend")
-        await sink.emitSegment(wavData, duration: duration)
+        let segment = CapturedSpeechSegment(
+            samples: turnSamples,
+            wavData: wavData,
+            sampleRate: VadManager.sampleRate,
+            duration: duration
+        )
+        await sink.emitLog(
+            "Prepared \(duration.formatted(.number.precision(.fractionLength(2))))s speech segment for classification"
+        )
+        await sink.emitSegment(segment)
     }
 
     private func pruneProcessedAudio(_ localEnd: Int) {
