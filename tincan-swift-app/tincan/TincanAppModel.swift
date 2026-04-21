@@ -8,7 +8,6 @@ final class TincanAppModel: ObservableObject {
 #endif
 
 #if os(macOS)
-    let backendHost = BackendServerController()
     let macCallSession = MacCallSessionViewModel()
 #endif
 }

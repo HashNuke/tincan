@@ -7,7 +7,7 @@ struct ContentView: View {
 #if os(iOS)
         IOSCallView(viewModel: appModel.callSession)
 #elseif os(macOS)
-        MacBackendView(controller: appModel.backendHost, callSession: appModel.macCallSession)
+        MacCallView(callSession: appModel.macCallSession)
 #else
         Text("tincan is currently configured for iOS and macOS.")
             .padding()
@@ -90,43 +90,56 @@ private struct IOSCallView: View {
 #endif
 
 #if os(macOS)
-private struct MacBackendView: View {
-    @ObservedObject var controller: BackendServerController
+private struct MacCallView: View {
     @ObservedObject var callSession: MacCallSessionViewModel
+
+    private var callSummary: String {
+        if callSession.isCallActive {
+            return "The mic is live and tincan is routing your speech to the backend."
+        }
+
+        return "Start a call when you're ready to talk to your coding agent."
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text("tincan")
-                .font(.largeTitle.weight(.bold))
+            VStack(alignment: .leading, spacing: 4) {
+                Text("tincan")
+                    .font(.largeTitle.weight(.bold))
 
-            HStack(spacing: 12) {
-                Button("Call") {
-                    callSession.startCall()
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(callSession.isCallActive)
-
-                Button("Disconnect") {
-                    callSession.endCall()
-                }
-                .buttonStyle(.bordered)
-                .disabled(!callSession.isCallActive)
-
-                Spacer()
-
-                Text(callSession.callStateDescription)
-                    .font(.title3.weight(.semibold))
-            }
-
-            if let latestCallLog = callSession.logLines.first {
-                Text(latestCallLog)
-                    .font(.footnote.monospaced())
+                Text("Call into your coding agent from this Mac.")
                     .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
             }
 
             VStack(alignment: .leading, spacing: 10) {
-                Text("Speaker Identity")
+                Text("Call")
+                    .font(.headline)
+
+                Text(callSession.callStateDescription)
+                    .font(.title2.weight(.semibold))
+
+                Text(callSummary)
+                    .foregroundStyle(.secondary)
+
+                HStack(spacing: 12) {
+                    Button("Start Call") {
+                        callSession.startCall()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(callSession.isCallActive)
+
+                    Button("End Call") {
+                        callSession.endCall()
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(!callSession.isCallActive)
+                }
+            }
+            .padding(16)
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Speaker")
                     .font(.headline)
 
                 Text(callSession.identityStatusDescription)
@@ -134,14 +147,6 @@ private struct MacBackendView: View {
 
                 Text(callSession.ownerProfileDescription)
                     .foregroundStyle(.secondary)
-
-                if !callSession.lastChallengeTranscript.isEmpty {
-                    LabeledContent("Last Heard") {
-                        Text(callSession.lastChallengeTranscript)
-                            .font(.footnote.monospaced())
-                            .textSelection(.enabled)
-                    }
-                }
 
                 HStack(spacing: 12) {
                     Button("Identify Speaker") {
@@ -157,44 +162,23 @@ private struct MacBackendView: View {
             .padding(16)
             .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
 
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Server Diagnostics")
-                    .font(.headline)
+            if !callSession.lastServerTranscript.isEmpty {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Last Transcript")
+                        .font(.headline)
 
-                Text(controller.statusDescription)
-                    .font(.title3.weight(.semibold))
-
-                if let primaryEndpoint = controller.primaryEndpoint {
-                    LabeledContent("Endpoint") {
-                        Text(primaryEndpoint)
-                            .textSelection(.enabled)
-                            .font(.footnote.monospaced())
-                    }
-                }
-
-                HStack(spacing: 12) {
-                    Button("Refresh") {
-                        controller.refresh()
-                    }
-
-                    Text(controller.loopbackHealthEndpoint)
-                        .font(.footnote.monospaced())
-                        .foregroundStyle(.secondary)
+                    Text(callSession.lastServerTranscript)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding()
+                        .background(Color(nsColor: .windowBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
                         .textSelection(.enabled)
                 }
-
-                if let latestLog = controller.logLines.first {
-                    Text(latestLog)
-                        .font(.footnote.monospaced())
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
+                .padding(16)
+                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
             }
-            .padding(16)
-            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
         }
         .padding(24)
-        .frame(minWidth: 620, minHeight: 360)
+        .frame(minWidth: 560, minHeight: 320)
     }
 }
 #endif

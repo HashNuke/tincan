@@ -222,7 +222,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				389AF1632F954C930031FFE3 /* XCRemoteSwiftPackageReference "FluidAudio" */,
-				A10B2C3D4E5F678900000003 /* XCLocalSwiftPackageReference "linphone-multiplatform" */,
+				A10B2C3D4E5F678900000003 /* XCLocalSwiftPackageReference "../linphone-multiplatform" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 389AF12F2F95073C0031FFE3 /* Products */;
@@ -672,7 +672,7 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		A10B2C3D4E5F678900000003 /* XCLocalSwiftPackageReference "linphone-multiplatform" */ = {
+		A10B2C3D4E5F678900000003 /* XCLocalSwiftPackageReference "../linphone-multiplatform" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = "../linphone-multiplatform";
 		};
@@ -702,7 +702,7 @@
 		};
 		A10B2C3D4E5F678900000002 /* linphonesw */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = A10B2C3D4E5F678900000003 /* XCLocalSwiftPackageReference "linphone-multiplatform" */;
+			package = A10B2C3D4E5F678900000003 /* XCLocalSwiftPackageReference "../linphone-multiplatform" */;
 			productName = linphonesw;
 		};
 /* End XCSwiftPackageProductDependency section */
