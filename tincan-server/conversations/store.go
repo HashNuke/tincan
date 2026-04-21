@@ -68,6 +68,167 @@ func (s *Store) CreateConversation(conversation Conversation) (Conversation, err
 	return conversation, nil
 }
 
+func (s *Store) ListConversationSummaries(params ListConversationSummariesParams) (ListConversationSummariesResult, error) {
+	pageSize := params.PageSize
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+
+	var cursorUpdatedAt any
+	var cursorID any
+	if params.Cursor != nil {
+		cursorTime := params.Cursor.UpdatedAt.UTC()
+		cursorUpdatedAt = cursorTime
+		cursorID = params.Cursor.ID
+	}
+
+	type conversationSummaryRow struct {
+		ID               string `gorm:"column:id"`
+		Handle           string `gorm:"column:handle"`
+		AgentProfileName string `gorm:"column:agent_profile_name"`
+		AgentBackend     string `gorm:"column:agent_backend"`
+		WorkingDirectory string `gorm:"column:working_directory"`
+		Status           string `gorm:"column:status"`
+		UpdatedAt        string `gorm:"column:updated_at"`
+		PreviewText      string `gorm:"column:preview_text"`
+		HasPendingUpdate bool   `gorm:"column:has_pending_update"`
+	}
+
+	const query = `
+WITH latest_updates AS (
+  SELECT
+    cu.conversation_id,
+    cu.summary_text,
+    cu.detail_text,
+    cu.updated_at
+  FROM conversation_updates cu
+  WHERE cu.id = (
+    SELECT cu2.id
+    FROM conversation_updates cu2
+    WHERE cu2.conversation_id = cu.conversation_id
+    ORDER BY cu2.updated_at DESC, cu2.id DESC
+    LIMIT 1
+  )
+),
+pending_updates AS (
+  SELECT DISTINCT conversation_id
+  FROM conversation_updates
+  WHERE status = 'pending'
+),
+conversation_summaries AS (
+  SELECT
+    c.id,
+    c.display_handle AS handle,
+    c.agent_profile_name,
+    c.agent_backend,
+    c.working_directory,
+    c.status,
+    CASE
+      WHEN lu.updated_at IS NOT NULL AND c.last_message_at IS NOT NULL THEN
+        CASE
+          WHEN lu.updated_at >= c.last_message_at THEN lu.updated_at
+          ELSE c.last_message_at
+        END
+      WHEN lu.updated_at IS NOT NULL THEN
+        CASE
+          WHEN lu.updated_at >= c.updated_at THEN lu.updated_at
+          ELSE c.updated_at
+        END
+      WHEN c.last_message_at IS NOT NULL THEN
+        CASE
+          WHEN c.last_message_at >= c.updated_at THEN c.last_message_at
+          ELSE c.updated_at
+        END
+      ELSE c.updated_at
+    END AS updated_at,
+    COALESCE(NULLIF(lu.summary_text, ''), NULLIF(lu.detail_text, ''), '') AS preview_text,
+    CASE
+      WHEN pu.conversation_id IS NOT NULL THEN TRUE
+      ELSE FALSE
+    END AS has_pending_update
+  FROM conversations c
+  LEFT JOIN latest_updates lu ON lu.conversation_id = c.id
+  LEFT JOIN pending_updates pu ON pu.conversation_id = c.id
+)
+SELECT
+  id,
+  handle,
+  agent_profile_name,
+  agent_backend,
+  working_directory,
+  status,
+  updated_at,
+  preview_text,
+  has_pending_update
+FROM conversation_summaries
+WHERE (
+  ? IS NULL OR
+  updated_at < ? OR
+  (updated_at = ? AND id < ?)
+)
+ORDER BY updated_at DESC, id DESC
+LIMIT ?
+`
+
+	var rows []conversationSummaryRow
+	if err := s.db.Raw(query, cursorUpdatedAt, cursorUpdatedAt, cursorUpdatedAt, cursorID, pageSize+1).Scan(&rows).Error; err != nil {
+		return ListConversationSummariesResult{}, fmt.Errorf("list conversation summaries: %w", err)
+	}
+
+	conversations := make([]ConversationSummary, 0, min(len(rows), pageSize))
+	for _, row := range rows {
+		updatedAt, err := parseConversationSummaryTime(row.UpdatedAt)
+		if err != nil {
+			return ListConversationSummariesResult{}, fmt.Errorf("parse conversation summary updated_at %q: %w", row.UpdatedAt, err)
+		}
+		conversations = append(conversations, ConversationSummary{
+			ID:               row.ID,
+			Handle:           row.Handle,
+			AgentProfileName: row.AgentProfileName,
+			AgentBackend:     row.AgentBackend,
+			WorkingDirectory: row.WorkingDirectory,
+			Status:           row.Status,
+			UpdatedAt:        updatedAt,
+			PreviewText:      row.PreviewText,
+			HasPendingUpdate: row.HasPendingUpdate,
+		})
+	}
+
+	result := ListConversationSummariesResult{
+		Conversations: conversations,
+	}
+	if len(result.Conversations) <= pageSize {
+		return result, nil
+	}
+
+	result.Conversations = result.Conversations[:pageSize]
+	last := result.Conversations[len(result.Conversations)-1]
+	result.NextCursor = &ConversationSummaryCursor{
+		UpdatedAt: last.UpdatedAt.UTC(),
+		ID:        last.ID,
+	}
+	return result, nil
+}
+
+func parseConversationSummaryTime(raw string) (time.Time, error) {
+	layouts := []string{
+		time.RFC3339Nano,
+		"2006-01-02 15:04:05.999999999-07:00",
+		"2006-01-02 15:04:05.999999999Z07:00",
+		"2006-01-02 15:04:05-07:00",
+		"2006-01-02 15:04:05Z07:00",
+		"2006-01-02 15:04:05.999999999",
+		"2006-01-02 15:04:05",
+	}
+	for _, layout := range layouts {
+		parsed, err := time.Parse(layout, raw)
+		if err == nil {
+			return parsed.UTC(), nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("unsupported time format")
+}
+
 func (s *Store) ListConversationHandles() ([]string, error) {
 	var conversations []Conversation
 	if err := s.db.Select("display_handle").Order("created_at desc").Find(&conversations).Error; err != nil {

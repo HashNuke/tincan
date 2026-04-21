@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"sync"
 )
 
 const (
@@ -15,10 +17,14 @@ const (
 )
 
 type AgentProfileStore struct {
+	mu       sync.RWMutex
+	filePath string
 	profiles map[string]AgentProfile
 }
 
 type AgentBackendStore struct {
+	mu       sync.RWMutex
+	filePath string
 	backends map[string]AgentBackendDefinition
 }
 
@@ -56,7 +62,10 @@ func NewAgentProfileStore(dataDir string) (*AgentProfileStore, error) {
 		profiles[normalizedName] = profile
 	}
 
-	return &AgentProfileStore{profiles: profiles}, nil
+	return &AgentProfileStore{
+		filePath: profilesPath,
+		profiles: profiles,
+	}, nil
 }
 
 func NewAgentBackendStore(dataDir string) (*AgentBackendStore, error) {
@@ -92,10 +101,16 @@ func NewAgentBackendStore(dataDir string) (*AgentBackendStore, error) {
 		backends[name] = backend
 	}
 
-	return &AgentBackendStore{backends: backends}, nil
+	return &AgentBackendStore{
+		filePath: backendsPath,
+		backends: backends,
+	}, nil
 }
 
 func (s *AgentProfileStore) List() []AgentProfile {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	result := make([]AgentProfile, 0, len(s.profiles))
 	for _, profile := range s.profiles {
 		result = append(result, profile)
@@ -104,6 +119,9 @@ func (s *AgentProfileStore) List() []AgentProfile {
 }
 
 func (s *AgentBackendStore) List() map[string]AgentBackendDefinition {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	result := make(map[string]AgentBackendDefinition, len(s.backends))
 	for name, backend := range s.backends {
 		result[name] = backend
@@ -112,6 +130,9 @@ func (s *AgentBackendStore) List() map[string]AgentBackendDefinition {
 }
 
 func (s *AgentProfileStore) Get(name string) (AgentProfile, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	profile, ok := s.profiles[normalizeAgentProfileName(name)]
 	return profile, ok
 }
@@ -121,16 +142,231 @@ func normalizeAgentProfileName(name string) string {
 }
 
 func (s *AgentBackendStore) Get(name string) (AgentBackendDefinition, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	backend, ok := s.backends[name]
 	return backend, ok
 }
 
 func (s *AgentBackendStore) BackendBaseURL(name string) (string, bool) {
-	backend, ok := s.backends[name]
+	backend, ok := s.Get(name)
 	if !ok {
 		return "", false
 	}
 	return backend.Options.BaseURL, true
+}
+
+func (s *AgentProfileStore) Create(profile AgentProfile) (AgentProfile, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	validated, normalizedName, err := validateAgentProfile(profile)
+	if err != nil {
+		return AgentProfile{}, err
+	}
+	if _, exists := s.profiles[normalizedName]; exists {
+		return AgentProfile{}, fmt.Errorf("agent profile %q already exists", validated.Name)
+	}
+
+	nextProfiles := cloneProfilesMap(s.profiles)
+	nextProfiles[normalizedName] = validated
+	if err := writeAgentProfilesFile(s.filePath, nextProfiles); err != nil {
+		return AgentProfile{}, err
+	}
+	s.profiles = nextProfiles
+	return validated, nil
+}
+
+func (s *AgentProfileStore) Update(existingName string, profile AgentProfile) (AgentProfile, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	normalizedExistingName := normalizeAgentProfileName(existingName)
+	if _, exists := s.profiles[normalizedExistingName]; !exists {
+		return AgentProfile{}, fmt.Errorf("agent profile %q not found", existingName)
+	}
+
+	validated, normalizedName, err := validateAgentProfile(profile)
+	if err != nil {
+		return AgentProfile{}, err
+	}
+	if normalizedName != normalizedExistingName {
+		return AgentProfile{}, fmt.Errorf("agent profile name in body must match request path")
+	}
+
+	nextProfiles := cloneProfilesMap(s.profiles)
+	nextProfiles[normalizedExistingName] = validated
+	if err := writeAgentProfilesFile(s.filePath, nextProfiles); err != nil {
+		return AgentProfile{}, err
+	}
+	s.profiles = nextProfiles
+	return validated, nil
+}
+
+func (s *AgentProfileStore) Delete(name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	normalizedName := normalizeAgentProfileName(name)
+	if _, exists := s.profiles[normalizedName]; !exists {
+		return fmt.Errorf("agent profile %q not found", name)
+	}
+
+	nextProfiles := cloneProfilesMap(s.profiles)
+	delete(nextProfiles, normalizedName)
+	if err := writeAgentProfilesFile(s.filePath, nextProfiles); err != nil {
+		return err
+	}
+	s.profiles = nextProfiles
+	return nil
+}
+
+func (s *AgentBackendStore) Create(name string, backend AgentBackendDefinition) (AgentBackendDefinition, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	validatedName, validatedBackend, err := validateAgentBackend(name, backend)
+	if err != nil {
+		return AgentBackendDefinition{}, err
+	}
+	if _, exists := s.backends[validatedName]; exists {
+		return AgentBackendDefinition{}, fmt.Errorf("agent backend %q already exists", validatedName)
+	}
+
+	nextBackends := cloneBackendsMap(s.backends)
+	nextBackends[validatedName] = validatedBackend
+	if err := writeAgentBackendsFile(s.filePath, nextBackends); err != nil {
+		return AgentBackendDefinition{}, err
+	}
+	s.backends = nextBackends
+	return validatedBackend, nil
+}
+
+func (s *AgentBackendStore) Update(existingName string, backend AgentBackendDefinition) (AgentBackendDefinition, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, exists := s.backends[existingName]; !exists {
+		return AgentBackendDefinition{}, fmt.Errorf("agent backend %q not found", existingName)
+	}
+
+	validatedName, validatedBackend, err := validateAgentBackend(existingName, backend)
+	if err != nil {
+		return AgentBackendDefinition{}, err
+	}
+	if validatedName != existingName {
+		return AgentBackendDefinition{}, fmt.Errorf("agent backend name in body must match request path")
+	}
+
+	nextBackends := cloneBackendsMap(s.backends)
+	nextBackends[existingName] = validatedBackend
+	if err := writeAgentBackendsFile(s.filePath, nextBackends); err != nil {
+		return AgentBackendDefinition{}, err
+	}
+	s.backends = nextBackends
+	return validatedBackend, nil
+}
+
+func (s *AgentBackendStore) Delete(name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, exists := s.backends[name]; !exists {
+		return fmt.Errorf("agent backend %q not found", name)
+	}
+
+	nextBackends := cloneBackendsMap(s.backends)
+	delete(nextBackends, name)
+	if err := writeAgentBackendsFile(s.filePath, nextBackends); err != nil {
+		return err
+	}
+	s.backends = nextBackends
+	return nil
+}
+
+func validateAgentProfile(profile AgentProfile) (AgentProfile, string, error) {
+	profile.Name = strings.TrimSpace(profile.Name)
+	profile.WorkingDirectory = strings.TrimSpace(profile.WorkingDirectory)
+	profile.AgentBackend = strings.TrimSpace(profile.AgentBackend)
+	if profile.Name == "" {
+		return AgentProfile{}, "", fmt.Errorf("agent profile name must not be empty")
+	}
+	if profile.WorkingDirectory == "" {
+		return AgentProfile{}, "", fmt.Errorf("agent profile %q working_directory must not be empty", profile.Name)
+	}
+	if profile.AgentBackend == "" {
+		return AgentProfile{}, "", fmt.Errorf("agent profile %q agent_backend must not be empty", profile.Name)
+	}
+	return profile, normalizeAgentProfileName(profile.Name), nil
+}
+
+func validateAgentBackend(name string, backend AgentBackendDefinition) (string, AgentBackendDefinition, error) {
+	name = strings.TrimSpace(name)
+	backend.Type = strings.TrimSpace(backend.Type)
+	backend.Options.ConnectionType = strings.TrimSpace(backend.Options.ConnectionType)
+	backend.Options.Model = strings.TrimSpace(backend.Options.Model)
+	backend.Options.ModelVariant = strings.TrimSpace(backend.Options.ModelVariant)
+	backend.Options.BaseURL = strings.TrimSpace(backend.Options.BaseURL)
+	backend.Options.Agent = strings.TrimSpace(backend.Options.Agent)
+	if name == "" {
+		return "", AgentBackendDefinition{}, fmt.Errorf("agent backend name must not be empty")
+	}
+	if backend.Type == "" {
+		return "", AgentBackendDefinition{}, fmt.Errorf("agent backend %q type must not be empty", name)
+	}
+	if backend.Options.Agent == "" {
+		backend.Options.Agent = "build"
+	}
+	return name, backend, nil
+}
+
+func writeAgentProfilesFile(filePath string, profiles map[string]AgentProfile) error {
+	list := make([]AgentProfile, 0, len(profiles))
+	for _, profile := range profiles {
+		list = append(list, profile)
+	}
+	sort.Slice(list, func(i int, j int) bool {
+		return strings.ToLower(list[i].Name) < strings.ToLower(list[j].Name)
+	})
+	return writeJSONFile(filePath, list)
+}
+
+func writeAgentBackendsFile(filePath string, backends map[string]AgentBackendDefinition) error {
+	return writeJSONFile(filePath, backends)
+}
+
+func writeJSONFile(filePath string, value any) error {
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal config file %s: %w", filePath, err)
+	}
+	data = append(data, '\n')
+
+	tempPath := filePath + ".tmp"
+	if err := os.WriteFile(tempPath, data, 0o644); err != nil {
+		return fmt.Errorf("write config file %s: %w", tempPath, err)
+	}
+	if err := os.Rename(tempPath, filePath); err != nil {
+		return fmt.Errorf("replace config file %s: %w", filePath, err)
+	}
+	return nil
+}
+
+func cloneProfilesMap(source map[string]AgentProfile) map[string]AgentProfile {
+	cloned := make(map[string]AgentProfile, len(source))
+	for name, profile := range source {
+		cloned[name] = profile
+	}
+	return cloned
+}
+
+func cloneBackendsMap(source map[string]AgentBackendDefinition) map[string]AgentBackendDefinition {
+	cloned := make(map[string]AgentBackendDefinition, len(source))
+	for name, backend := range source {
+		cloned[name] = backend
+	}
+	return cloned
 }
 
 func configDirectoryPath(dataDir string) string {

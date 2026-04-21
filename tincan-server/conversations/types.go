@@ -49,3 +49,30 @@ type ConversationNote struct {
 func (ConversationNote) TableName() string {
 	return "conversation_notes"
 }
+
+type ConversationSummary struct {
+	ID               string    `json:"id"`
+	Handle           string    `json:"handle"`
+	AgentProfileName string    `json:"agent_profile_name"`
+	AgentBackend     string    `json:"agent_backend"`
+	WorkingDirectory string    `json:"working_directory"`
+	Status           string    `json:"status"`
+	UpdatedAt        time.Time `json:"updated_at"`
+	PreviewText      string    `json:"preview_text"`
+	HasPendingUpdate bool      `json:"has_pending_update"`
+}
+
+type ConversationSummaryCursor struct {
+	UpdatedAt time.Time `json:"updated_at"`
+	ID        string    `json:"id"`
+}
+
+type ListConversationSummariesParams struct {
+	Cursor   *ConversationSummaryCursor
+	PageSize int
+}
+
+type ListConversationSummariesResult struct {
+	Conversations []ConversationSummary
+	NextCursor    *ConversationSummaryCursor
+}

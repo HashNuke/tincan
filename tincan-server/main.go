@@ -121,9 +121,10 @@ func main() {
 	mux.HandleFunc("/debug/audio/generated/", srv.handleGeneratedAudio)
 	mux.HandleFunc("/hooks/opencode", srv.handleOpenCodeHook)
 	tincanapi.Routes{
-		Profiles: srv.profiles,
-		Backends: srv.backends,
-		Adapters: apiAdapters,
+		Profiles:      srv.profiles,
+		Backends:      srv.backends,
+		Conversations: srv.conversations,
+		Adapters:      apiAdapters,
 	}.Register(mux)
 	mux.HandleFunc("/session/", srv.handleSessionControl)
 	srv.webrtcTransport.RegisterRoutes(mux)
@@ -181,7 +182,7 @@ func newServer(dataDir string) (*server, error) {
 	var routerService controllers.Router
 	var updateProcessor controllers.ConversationUpdateProcessor
 	if !ok {
-			log.Printf("router backend is not configured; voice command routing is unavailable until __router__ is added to config/agent_backends.json")
+		log.Printf("router backend is not configured; voice command routing is unavailable until __router__ is added to config/agent_backends.json")
 		routerService = unavailableRouter{reason: "router backend is not configured"}
 	} else {
 		routerAdapter, ok := agentAdapters[routerBackend.Type]

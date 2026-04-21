@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -16,6 +17,13 @@ type fakeAdapter struct {
 	supportsModelDiscovery bool
 	models                 []string
 	err                    error
+}
+
+func (f fakeAdapter) ValidateBackend(name string, backend tincanconfig.AgentBackendDefinition) error {
+	if f.err != nil {
+		return f.err
+	}
+	return nil
 }
 
 func (f fakeAdapter) SupportsModelDiscovery() bool {
@@ -101,6 +109,11 @@ func TestRoutesRejectUnsupportedModelDiscovery(t *testing.T) {
 }
 
 func testRoutes(t *testing.T) Routes {
+	routes, _ := testRoutesWithDataDir(t)
+	return routes
+}
+
+func testRoutesWithDataDir(t *testing.T) (Routes, string) {
 	t.Helper()
 
 	dataDir := t.TempDir()
@@ -162,7 +175,7 @@ func testRoutes(t *testing.T) Routes {
 				},
 			},
 		},
-	}
+	}, dataDir
 }
 
 func TestRoutesPropagatesModelDiscoveryFailure(t *testing.T) {
@@ -181,5 +194,252 @@ func TestRoutesPropagatesModelDiscoveryFailure(t *testing.T) {
 
 	if recorder.Code != http.StatusBadGateway {
 		t.Fatalf("expected 502, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestRoutesCreateAgentProfilePersistsToConfig(t *testing.T) {
+	routes, dataDir := testRoutesWithDataDir(t)
+	mux := http.NewServeMux()
+	routes.Register(mux)
+
+	body := []byte(`{
+  "name": "Emma",
+  "working_directory": "/tmp/emma",
+  "agent_backend": "opencode"
+}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agent-profiles", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+
+	profile, ok := routes.Profiles.Get("Emma")
+	if !ok {
+		t.Fatalf("expected profile to be created in store")
+	}
+	if profile.WorkingDirectory != "/tmp/emma" {
+		t.Fatalf("unexpected profile working directory: %q", profile.WorkingDirectory)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dataDir, "config", "agent_profiles.json"))
+	if err != nil {
+		t.Fatalf("read agent_profiles.json: %v", err)
+	}
+	if !bytes.Contains(data, []byte(`"name": "Emma"`)) {
+		t.Fatalf("expected profile to be persisted, got %s", string(data))
+	}
+}
+
+func TestRoutesCreateAgentProfileRejectsUnknownBackend(t *testing.T) {
+	routes := testRoutes(t)
+	mux := http.NewServeMux()
+	routes.Register(mux)
+
+	body := []byte(`{
+  "name": "Emma",
+  "working_directory": "/tmp/emma",
+  "agent_backend": "missing"
+}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agent-profiles", bytes.NewReader(body))
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestRoutesPatchAgentProfileUpdatesConfig(t *testing.T) {
+	routes, dataDir := testRoutesWithDataDir(t)
+	mux := http.NewServeMux()
+	routes.Register(mux)
+
+	body := []byte(`{
+  "name": "Atlas",
+  "working_directory": "/tmp/updated",
+  "agent_backend": "opencode"
+}`)
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/agent-profiles/Atlas", bytes.NewReader(body))
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+
+	profile, _ := routes.Profiles.Get("Atlas")
+	if profile.WorkingDirectory != "/tmp/updated" {
+		t.Fatalf("expected updated working directory, got %q", profile.WorkingDirectory)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dataDir, "config", "agent_profiles.json"))
+	if err != nil {
+		t.Fatalf("read agent_profiles.json: %v", err)
+	}
+	if !bytes.Contains(data, []byte(`"working_directory": "/tmp/updated"`)) {
+		t.Fatalf("expected updated config, got %s", string(data))
+	}
+}
+
+func TestRoutesDeleteAgentProfileRemovesConfig(t *testing.T) {
+	routes, dataDir := testRoutesWithDataDir(t)
+	mux := http.NewServeMux()
+	routes.Register(mux)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/agent-profiles/Atlas", nil)
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if _, ok := routes.Profiles.Get("Atlas"); ok {
+		t.Fatalf("expected profile to be removed from store")
+	}
+
+	data, err := os.ReadFile(filepath.Join(dataDir, "config", "agent_profiles.json"))
+	if err != nil {
+		t.Fatalf("read agent_profiles.json: %v", err)
+	}
+	if bytes.Contains(data, []byte(`"name": "Atlas"`)) {
+		t.Fatalf("expected profile to be removed from config, got %s", string(data))
+	}
+}
+
+func TestRoutesCreateAgentBackendPersistsToConfig(t *testing.T) {
+	routes, dataDir := testRoutesWithDataDir(t)
+	mux := http.NewServeMux()
+	routes.Register(mux)
+
+	body := []byte(`{
+  "name": "codex-local",
+  "type": "codex",
+  "options": {
+    "connection_type": "command"
+  }
+}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agent-backends", bytes.NewReader(body))
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+
+	backend, ok := routes.Backends.Get("codex-local")
+	if !ok {
+		t.Fatalf("expected backend to be created in store")
+	}
+	if backend.Options.Agent != "build" {
+		t.Fatalf("expected default agent to be applied, got %q", backend.Options.Agent)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dataDir, "config", "agent_backends.json"))
+	if err != nil {
+		t.Fatalf("read agent_backends.json: %v", err)
+	}
+	if !bytes.Contains(data, []byte(`"codex-local"`)) {
+		t.Fatalf("expected backend to be persisted, got %s", string(data))
+	}
+}
+
+func TestRoutesCreateAgentBackendRejectsUnknownType(t *testing.T) {
+	routes := testRoutes(t)
+	mux := http.NewServeMux()
+	routes.Register(mux)
+
+	body := []byte(`{
+  "name": "mystery",
+  "type": "unknown",
+  "options": {}
+}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agent-backends", bytes.NewReader(body))
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestRoutesPatchAgentBackendUpdatesConfig(t *testing.T) {
+	routes, dataDir := testRoutesWithDataDir(t)
+	mux := http.NewServeMux()
+	routes.Register(mux)
+
+	body := []byte(`{
+  "name": "opencode",
+  "type": "opencode",
+  "options": {
+    "connection_type": "server",
+    "model": "openai/gpt-5.3-codex-spark",
+    "base_url": "http://127.0.0.1:5000"
+  }
+}`)
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/agent-backends/opencode", bytes.NewReader(body))
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+
+	backend, _ := routes.Backends.Get("opencode")
+	if backend.Options.BaseURL != "http://127.0.0.1:5000" {
+		t.Fatalf("expected updated base_url, got %q", backend.Options.BaseURL)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dataDir, "config", "agent_backends.json"))
+	if err != nil {
+		t.Fatalf("read agent_backends.json: %v", err)
+	}
+	if !bytes.Contains(data, []byte(`"base_url": "http://127.0.0.1:5000"`)) {
+		t.Fatalf("expected updated backend config, got %s", string(data))
+	}
+}
+
+func TestRoutesDeleteAgentBackendRejectsReferencedBackend(t *testing.T) {
+	routes := testRoutes(t)
+	mux := http.NewServeMux()
+	routes.Register(mux)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/agent-backends/opencode", nil)
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestRoutesDeleteAgentBackendRemovesConfig(t *testing.T) {
+	routes, dataDir := testRoutesWithDataDir(t)
+	if err := routes.Profiles.Delete("Atlas"); err != nil {
+		t.Fatalf("delete dependent profile: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	routes.Register(mux)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/agent-backends/opencode", nil)
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if _, ok := routes.Backends.Get("opencode"); ok {
+		t.Fatalf("expected backend to be removed from store")
+	}
+
+	data, err := os.ReadFile(filepath.Join(dataDir, "config", "agent_backends.json"))
+	if err != nil {
+		t.Fatalf("read agent_backends.json: %v", err)
+	}
+	if bytes.Contains(data, []byte(`"opencode": {`)) {
+		t.Fatalf("expected backend to be removed from config, got %s", string(data))
 	}
 }
