@@ -397,7 +397,7 @@ Minimum API shape for the first usable version:
 
 The server already has the underlying data for much of this in:
 
-- `agent_profiles.json`
+- `<data-dir>/config/agent_profiles.json`
 - `conversations`
 - `conversation_updates`
 

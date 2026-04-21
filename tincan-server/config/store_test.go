@@ -305,3 +305,40 @@ func TestNewAppConfigStoreMigratesLegacyRootConfigIntoConfigDirectory(t *testing
 		t.Fatalf("expected migrated config file in config dir: %v", err)
 	}
 }
+
+func TestSampleDataDirLoadsRuntimeConfig(t *testing.T) {
+	sampleDataDir := filepath.Join("..", "testdata", "data-dir")
+
+	appConfig, err := NewAppConfigStore(sampleDataDir)
+	if err != nil {
+		t.Fatalf("NewAppConfigStore returned error: %v", err)
+	}
+
+	profiles, err := NewAgentProfileStore(sampleDataDir)
+	if err != nil {
+		t.Fatalf("NewAgentProfileStore returned error: %v", err)
+	}
+
+	backends, err := NewAgentBackendStore(sampleDataDir)
+	if err != nil {
+		t.Fatalf("NewAgentBackendStore returned error: %v", err)
+	}
+
+	routerProfile, ok := appConfig.RouterProfile()
+	if !ok || routerProfile != "emma" {
+		t.Fatalf("expected router_profile emma, got %q ok=%v", routerProfile, ok)
+	}
+
+	if _, ok := profiles.Get("emma"); !ok {
+		t.Fatalf("expected emma profile in sample data dir")
+	}
+	if _, ok := profiles.Get("atlas"); !ok {
+		t.Fatalf("expected atlas profile in sample data dir")
+	}
+	if _, ok := backends.Get("opencode-1"); !ok {
+		t.Fatalf("expected opencode-1 backend in sample data dir")
+	}
+	if _, ok := backends.Get("__router__"); !ok {
+		t.Fatalf("expected __router__ backend in sample data dir")
+	}
+}
