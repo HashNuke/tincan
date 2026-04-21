@@ -124,9 +124,9 @@ func TestHookControllerSessionIdleEmitsProcessedNotificationAndSummary(t *testin
 		t.Fatalf("unexpected processor detail text: %q", processor.input.DetailText)
 	}
 
-	update, ok, err := store.GetLatestPendingUpdateByConversationID(conversation.ID)
+	update, ok, err := store.GetLatestPendingMessageByConversationID(conversation.ID)
 	if err != nil {
-		t.Fatalf("GetLatestPendingUpdateByConversationID returned error: %v", err)
+		t.Fatalf("GetLatestPendingMessageByConversationID returned error: %v", err)
 	}
 	if !ok {
 		t.Fatalf("expected pending update to be stored")

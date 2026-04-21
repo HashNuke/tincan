@@ -5,6 +5,7 @@ import Speech
 enum LocalSpeechRecognizerError: LocalizedError {
     case notAuthorized
     case recognizerUnavailable
+    case audioTooShort
     case noTranscript
 
     var errorDescription: String? {
@@ -13,13 +14,18 @@ enum LocalSpeechRecognizerError: LocalizedError {
             "Speech recognition permission is required."
         case .recognizerUnavailable:
             "Speech recognition is currently unavailable on this Mac."
+        case .audioTooShort:
+            "The captured audio was too short to recognize."
         case .noTranscript:
             "No speech transcript was produced."
         }
     }
 }
 
-nonisolated final class LocalSpeechRecognizer {
+@MainActor
+final class LocalSpeechRecognizer {
+    nonisolated init() {}
+
     func requestAuthorization() async -> Bool {
         await withCheckedContinuation { continuation in
             SFSpeechRecognizer.requestAuthorization { status in
@@ -31,6 +37,10 @@ nonisolated final class LocalSpeechRecognizer {
     func transcribe(audioWAV: Data) async throws -> String {
         guard SFSpeechRecognizer.authorizationStatus() == .authorized else {
             throw LocalSpeechRecognizerError.notAuthorized
+        }
+
+        guard audioWAV.count > 44 else {
+            throw LocalSpeechRecognizerError.audioTooShort
         }
 
         guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US")), recognizer.isAvailable else {

@@ -121,13 +121,13 @@ func testRoutesWithDataDir(t *testing.T) (Routes, string) {
 	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		t.Fatalf("create config dir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(configDir, "agent_profiles.json"), []byte(`[
-  {
+	if err := os.WriteFile(filepath.Join(configDir, "agent_profiles.json"), []byte(`{
+  "atlas": {
     "name": "Atlas",
     "working_directory": "/Users/akash/Library/Application Support/tincan",
     "agent_backend": "opencode"
   }
-]`), 0o644); err != nil {
+}`), 0o644); err != nil {
 		t.Fatalf("write agent_profiles.json: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(configDir, "agent_backends.json"), []byte(`{
@@ -228,6 +228,9 @@ func TestRoutesCreateAgentProfilePersistsToConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read agent_profiles.json: %v", err)
 	}
+	if !bytes.Contains(data, []byte(`"emma": {`)) {
+		t.Fatalf("expected profile key to be persisted, got %s", string(data))
+	}
 	if !bytes.Contains(data, []byte(`"name": "Emma"`)) {
 		t.Fatalf("expected profile to be persisted, got %s", string(data))
 	}
@@ -258,7 +261,7 @@ func TestRoutesPatchAgentProfileUpdatesConfig(t *testing.T) {
 	routes.Register(mux)
 
 	body := []byte(`{
-  "name": "Atlas",
+  "name": "Atlas Updated",
   "working_directory": "/tmp/updated",
   "agent_backend": "opencode"
 }`)
@@ -270,17 +273,35 @@ func TestRoutesPatchAgentProfileUpdatesConfig(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", recorder.Code, recorder.Body.String())
 	}
 
-	profile, _ := routes.Profiles.Get("Atlas")
+	if _, ok := routes.Profiles.Get("Atlas"); ok {
+		t.Fatalf("expected old profile key to be removed after rename")
+	}
+	profile, ok := routes.Profiles.Get("Atlas Updated")
+	if !ok {
+		t.Fatalf("expected renamed profile to be available under new key")
+	}
 	if profile.WorkingDirectory != "/tmp/updated" {
 		t.Fatalf("expected updated working directory, got %q", profile.WorkingDirectory)
+	}
+	if profile.Name != "Atlas Updated" {
+		t.Fatalf("expected updated display name, got %q", profile.Name)
 	}
 
 	data, err := os.ReadFile(filepath.Join(dataDir, "config", "agent_profiles.json"))
 	if err != nil {
 		t.Fatalf("read agent_profiles.json: %v", err)
 	}
+	if bytes.Contains(data, []byte(`"atlas": {`)) {
+		t.Fatalf("expected old profile key to be removed, got %s", string(data))
+	}
+	if !bytes.Contains(data, []byte(`"atlas updated": {`)) {
+		t.Fatalf("expected renamed profile key, got %s", string(data))
+	}
 	if !bytes.Contains(data, []byte(`"working_directory": "/tmp/updated"`)) {
 		t.Fatalf("expected updated config, got %s", string(data))
+	}
+	if !bytes.Contains(data, []byte(`"name": "Atlas Updated"`)) {
+		t.Fatalf("expected updated display name in config, got %s", string(data))
 	}
 }
 

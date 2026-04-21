@@ -51,7 +51,7 @@ final class MacOnboardingViewModel: ObservableObject {
 
     init() {
         atlasAgentFolder = AppPaths.appSupportDirectory.path
-        isCompleted = Self.generatedConfigExists()
+        isCompleted = Self.hasGeneratedAgentProfiles()
 
         if !isCompleted {
             refreshOpenCodeStatus()
@@ -184,7 +184,7 @@ final class MacOnboardingViewModel: ObservableObject {
 
         do {
             try writeGeneratedConfig()
-            isCompleted = true
+            refreshCompletionFromDisk()
         } catch {
             saveErrorMessage = error.localizedDescription
         }
@@ -221,8 +221,9 @@ final class MacOnboardingViewModel: ObservableObject {
             "opencode": makeBackendDefinition(model: atlasModel, backend: atlasBackend),
         ]
 
-        var profiles: [GeneratedAgentProfile] = [
-            GeneratedAgentProfile(
+        var profileKeysInUse: Set<String> = ["atlas"]
+        var profiles: [String: GeneratedAgentProfile] = [
+            "atlas": GeneratedAgentProfile(
                 name: atlasName,
                 workingDirectory: atlasAgentFolder,
                 agentBackend: "opencode"
@@ -236,11 +237,12 @@ final class MacOnboardingViewModel: ObservableObject {
             let backendName = uniqueBackendName(for: draft, backendNamesInUse: &backendNamesInUse)
 
             backendDefinitions[backendName] = makeBackendDefinition(model: trimmedModel, backend: draft.backend)
-            profiles.append(GeneratedAgentProfile(
+            let profileKey = uniqueProfileKey(for: trimmedName, profileKeysInUse: &profileKeysInUse)
+            profiles[profileKey] = GeneratedAgentProfile(
                 name: trimmedName,
                 workingDirectory: trimmedFolder,
                 agentBackend: backendName
-            ))
+            )
         }
 
         let backendsData = try encoder.encode(backendDefinitions)
@@ -261,6 +263,20 @@ final class MacOnboardingViewModel: ObservableObject {
         }
 
         backendNamesInUse.insert(candidate)
+        return candidate
+    }
+
+    private func uniqueProfileKey(for name: String, profileKeysInUse: inout Set<String>) -> String {
+        let baseName = slugify(name)
+        var candidate = baseName
+        var counter = 2
+
+        while profileKeysInUse.contains(candidate) || candidate.isEmpty {
+            candidate = "\(baseName)-\(counter)"
+            counter += 1
+        }
+
+        profileKeysInUse.insert(candidate)
         return candidate
     }
 
@@ -293,9 +309,12 @@ final class MacOnboardingViewModel: ObservableObject {
         }
     }
 
-    private static func generatedConfigExists() -> Bool {
-        FileManager.default.fileExists(atPath: AppPaths.generatedAgentProfilesURL.path) &&
-        FileManager.default.fileExists(atPath: AppPaths.generatedAgentBackendsURL.path)
+    private func refreshCompletionFromDisk() {
+        isCompleted = Self.hasGeneratedAgentProfiles()
+    }
+
+    private static func hasGeneratedAgentProfiles() -> Bool {
+        FileManager.default.fileExists(atPath: AppPaths.generatedAgentProfilesURL.path)
     }
 
     private static func detectOpenCode() throws -> OpenCodeDetection {

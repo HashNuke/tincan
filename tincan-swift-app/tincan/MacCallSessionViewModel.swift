@@ -232,6 +232,14 @@ final class MacCallSessionViewModel: ObservableObject {
         }
     }
 
+    private func uploadApprovedSegment(
+        _ segment: CapturedSpeechSegment,
+        with client: BackendSessionClient,
+        sessionID: String
+    ) async throws -> BackendSessionClient.UtteranceResponse {
+        try await client.uploadUtterance(sessionID: sessionID, audioWAV: segment.wavData)
+    }
+
     private func appendLog(_ message: String) {
         let timestamp = Date.now.formatted(date: .omitted, time: .standard)
         logLines.insert("[\(timestamp)] \(message)", at: 0)
@@ -258,10 +266,9 @@ final class MacCallSessionViewModel: ObservableObject {
 
     private func speakIdentificationPrompt(_ challengePrompt: String) {
         promptTask?.cancel()
+        ignoreCapturedSegmentsUntil = .distantFuture
+        appendLog("Speaking local speaker-identification prompt")
         promptTask = Task { @MainActor in
-            ignoreCapturedSegmentsUntil = .distantFuture
-            appendLog("Speaking local speaker-identification prompt")
-
             await promptSpeaker.speak(
                 "Speaker identification. Please say: \(challengePrompt)"
             )
@@ -281,25 +288,26 @@ extension MacCallSessionViewModel: AudioTurnPipelineOutput {
 
     func audioTurnPipelineDidCaptureSegment(_ segment: CapturedSpeechSegment) {
         guard let client = sessionClient, let sid = sessionID else { return }
-        guard Date() >= ignoreCapturedSegmentsUntil else {
+        guard !promptSpeaker.isSpeaking, Date() >= ignoreCapturedSegmentsUntil else {
             appendLog("Ignored speech captured while tincan was speaking the identification prompt")
             return
         }
-        Task {
+        let identityManager = self.identityManager
+        Task(priority: .userInitiated) {
             let outcome = await identityManager.processSegment(segment)
-            applyIdentityStatus(outcome.status)
-            appendLog(outcome.logMessage)
+            self.applyIdentityStatus(outcome.status)
+            self.appendLog(outcome.logMessage)
 
             guard let approvedSegment = outcome.segmentApprovedForUpload else {
                 return
             }
 
             do {
-                let response = try await client.uploadUtterance(sessionID: sid, audioWAV: approvedSegment.wavData)
-                lastServerTranscript = response.text
-                appendLog("Transcript: \(response.text)")
+                let response = try await self.uploadApprovedSegment(approvedSegment, with: client, sessionID: sid)
+                self.lastServerTranscript = response.text
+                self.appendLog("Transcript: \(response.text)")
             } catch {
-                appendLog("Upload failed: \(error.localizedDescription)")
+                self.appendLog("Upload failed: \(error.localizedDescription)")
             }
         }
     }

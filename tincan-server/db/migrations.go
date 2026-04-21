@@ -74,6 +74,33 @@ WHERE detail_text = '';
 `,
 		},
 		{
+			name: "2026_04_21_add_preview_text_to_conversations",
+			sql: `
+ALTER TABLE conversations ADD COLUMN preview_text TEXT NOT NULL DEFAULT '';
+UPDATE conversations
+SET preview_text = COALESCE((
+  SELECT COALESCE(NULLIF(cu.summary_text, ''), NULLIF(cu.detail_text, ''), '')
+  FROM conversation_updates cu
+  WHERE cu.conversation_id = conversations.id
+  ORDER BY cu.updated_at DESC, cu.id DESC
+  LIMIT 1
+), '')
+WHERE preview_text = '';
+`,
+		},
+		{
+			name: "2026_04_21_replace_conversation_updates_with_messages",
+			sql: `
+ALTER TABLE conversation_updates RENAME TO messages;
+DROP INDEX IF EXISTS idx_conversation_updates_conversation;
+DROP INDEX IF EXISTS idx_conversation_updates_handle;
+DROP INDEX IF EXISTS idx_conversation_updates_status;
+CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_messages_handle ON messages(conversation_handle);
+CREATE INDEX IF NOT EXISTS idx_messages_status ON messages(status);
+`,
+		},
+		{
 			name: "2026_04_20_create_conversation_notes",
 			sql: `
 CREATE TABLE IF NOT EXISTS conversation_notes (

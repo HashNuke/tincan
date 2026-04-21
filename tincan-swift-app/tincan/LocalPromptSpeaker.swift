@@ -3,7 +3,7 @@ import AVFoundation
 import Foundation
 
 @MainActor
-final class LocalPromptSpeaker: NSObject, AVSpeechSynthesizerDelegate {
+final class LocalPromptSpeaker: NSObject, @preconcurrency AVSpeechSynthesizerDelegate {
     private let synthesizer = AVSpeechSynthesizer()
     private var currentContinuation: CheckedContinuation<Void, Never>?
 

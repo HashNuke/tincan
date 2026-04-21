@@ -173,7 +173,7 @@ func TestUserInputControllerReadConversationUpdateConsumesPendingUpdate(t *testi
 		BackendConversationID: "backend-1",
 		Status:                "running",
 	})
-	update, changed, err := store.UpsertPendingUpdate(conversations.ConversationUpdate{
+	update, changed, err := store.CreateMessage(conversations.Message{
 		ConversationID:     conversation.ID,
 		ConversationHandle: conversation.DisplayHandle,
 		SummaryText:        "Build is green now.",
@@ -183,7 +183,7 @@ func TestUserInputControllerReadConversationUpdateConsumesPendingUpdate(t *testi
 		Status:             "pending",
 	})
 	if err != nil {
-		t.Fatalf("UpsertPendingUpdate returned error: %v", err)
+		t.Fatalf("CreateMessage returned error: %v", err)
 	}
 	if !changed {
 		t.Fatalf("expected initial update upsert to report changed")
@@ -210,7 +210,7 @@ func TestUserInputControllerReadConversationUpdateConsumesPendingUpdate(t *testi
 	if got := result.ResponseBody["resolved_conversation_handle"]; got != "emma#10" {
 		t.Fatalf("expected resolved handle emma#10, got %#v", got)
 	}
-	storedUpdate, ok := result.ResponseBody["update"].(conversations.ConversationUpdate)
+	storedUpdate, ok := result.ResponseBody["update"].(conversations.Message)
 	if !ok {
 		t.Fatalf("expected response body update, got %#v", result.ResponseBody["update"])
 	}
@@ -224,17 +224,17 @@ func TestUserInputControllerReadConversationUpdateConsumesPendingUpdate(t *testi
 		t.Fatalf("unexpected update summary text: %q", result.OutputEvents[0].Text)
 	}
 
-	latest, ok, err := store.GetLatestPendingUpdateByConversationID(conversation.ID)
+	latest, ok, err := store.GetLatestPendingMessageByConversationID(conversation.ID)
 	if err != nil {
-		t.Fatalf("GetLatestPendingUpdateByConversationID returned error: %v", err)
+		t.Fatalf("GetLatestPendingMessageByConversationID returned error: %v", err)
 	}
 	if ok {
 		t.Fatalf("expected pending update to be consumed, still found %+v", latest)
 	}
 
-	pendingUpdates, err := store.ListPendingUpdates(10)
+	pendingUpdates, err := store.ListPendingMessages(10)
 	if err != nil {
-		t.Fatalf("ListPendingUpdates returned error: %v", err)
+		t.Fatalf("ListPendingMessages returned error: %v", err)
 	}
 	for _, pending := range pendingUpdates {
 		if pending.ID == update.ID {
@@ -309,7 +309,7 @@ func newTestConversationStore(t *testing.T) *conversations.Store {
 	if err != nil {
 		t.Fatalf("failed to open sqlite db: %v", err)
 	}
-	if err := db.AutoMigrate(&conversations.Conversation{}, &conversations.ConversationUpdate{}, &conversations.ConversationNote{}); err != nil {
+	if err := db.AutoMigrate(&conversations.Conversation{}, &conversations.Message{}, &conversations.ConversationNote{}); err != nil {
 		t.Fatalf("failed to migrate test db: %v", err)
 	}
 	return conversations.NewStore(db)

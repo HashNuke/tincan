@@ -246,6 +246,13 @@ actor SpeakerIdentityManager {
             ])
         }
 
+        let validation = diarizerManager.validateAudio(samples)
+        guard validation.isValid else {
+            throw NSError(domain: "SpeakerIdentityManager", code: 2, userInfo: [
+                NSLocalizedDescriptionKey: validation.issues.joined(separator: ". ")
+            ])
+        }
+
         return try diarizerManager.extractSpeakerEmbedding(from: samples)
     }
 

@@ -216,7 +216,7 @@ func (c *UserInputController) dispatchReadConversationUpdate(sessionID string, r
 		return dispatchResult{}, err
 	}
 
-	update, ok, err := c.Conversations.GetLatestPendingUpdateByConversationID(conversation.ID)
+	message, ok, err := c.Conversations.GetLatestPendingMessageByConversationID(conversation.ID)
 	if err != nil {
 		return dispatchResult{}, err
 	}
@@ -233,18 +233,18 @@ func (c *UserInputController) dispatchReadConversationUpdate(sessionID string, r
 		}, nil
 	}
 
-	if err := c.Conversations.ConsumeUpdate(update.ID); err != nil {
+	if err := c.Conversations.ConsumeMessage(message.ID); err != nil {
 		return dispatchResult{}, err
 	}
 	return dispatchResult{
 		ResponseBody: map[string]any{
 			"resolved_conversation_handle": conversation.DisplayHandle,
-			"update":                       update,
+			"update":                       message,
 		},
 		OutputEvents: []output.Event{{
 			SessionID: sessionID,
 			Kind:      output.KindUpdateSummary,
-			Text:      update.SummaryText,
+			Text:      message.SummaryText,
 		}},
 	}, nil
 }

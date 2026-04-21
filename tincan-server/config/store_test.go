@@ -23,8 +23,41 @@ func TestNewAgentProfileStoreCreatesEmptyFileWhenMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected agent_profiles.json to be created: %v", err)
 	}
-	if string(data) != "[]\n" {
+	if string(data) != "{}\n" {
 		t.Fatalf("unexpected default agent_profiles.json contents: %q", string(data))
+	}
+}
+
+func TestNewAgentProfileStoreLoadsObjectShapedConfig(t *testing.T) {
+	tempDir := t.TempDir()
+	configDir := filepath.Join(tempDir, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("create config dir: %v", err)
+	}
+	profilesPath := filepath.Join(configDir, "agent_profiles.json")
+
+	if err := os.WriteFile(profilesPath, []byte(`{
+  "atlas": {
+    "name": "Atlas Display",
+    "working_directory": "/tmp/atlas",
+    "agent_backend": "opencode"
+  }
+}
+`), 0o644); err != nil {
+		t.Fatalf("write agent_profiles.json: %v", err)
+	}
+
+	store, err := NewAgentProfileStore(tempDir)
+	if err != nil {
+		t.Fatalf("NewAgentProfileStore returned error: %v", err)
+	}
+
+	profile, ok := store.Get("atlas")
+	if !ok {
+		t.Fatalf("expected profile to be loaded")
+	}
+	if profile.Name != "Atlas Display" {
+		t.Fatalf("expected display name to be preserved, got %q", profile.Name)
 	}
 }
 

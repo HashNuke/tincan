@@ -30,7 +30,7 @@ type AgentBackendStore struct {
 
 func NewAgentProfileStore(dataDir string) (*AgentProfileStore, error) {
 	profilesPath := configFilePath(dataDir, agentProfilesFileName)
-	if err := ensureConfigFile(dataDir, agentProfilesFileName, []byte("[]\n")); err != nil {
+	if err := ensureConfigFile(dataDir, agentProfilesFileName, []byte("{}\n")); err != nil {
 		return nil, err
 	}
 
@@ -39,27 +39,9 @@ func NewAgentProfileStore(dataDir string) (*AgentProfileStore, error) {
 		return nil, fmt.Errorf("read agent profiles: %w", err)
 	}
 
-	var decoded []AgentProfile
-	if err := json.Unmarshal(data, &decoded); err != nil {
+	profiles, err := decodeAgentProfiles(data)
+	if err != nil {
 		return nil, fmt.Errorf("decode agent profiles: %w", err)
-	}
-
-	profiles := make(map[string]AgentProfile, len(decoded))
-	for _, profile := range decoded {
-		if profile.Name == "" {
-			return nil, fmt.Errorf("agent profile name must not be empty")
-		}
-		if profile.WorkingDirectory == "" {
-			return nil, fmt.Errorf("agent profile %q working_directory must not be empty", profile.Name)
-		}
-		if profile.AgentBackend == "" {
-			return nil, fmt.Errorf("agent profile %q agent_backend must not be empty", profile.Name)
-		}
-		normalizedName := normalizeAgentProfileName(profile.Name)
-		if _, exists := profiles[normalizedName]; exists {
-			return nil, fmt.Errorf("duplicate agent profile %q", profile.Name)
-		}
-		profiles[normalizedName] = profile
 	}
 
 	return &AgentProfileStore{
@@ -187,16 +169,19 @@ func (s *AgentProfileStore) Update(existingName string, profile AgentProfile) (A
 		return AgentProfile{}, fmt.Errorf("agent profile %q not found", existingName)
 	}
 
-	validated, normalizedName, err := validateAgentProfile(profile)
+	validated, normalizedUpdatedName, err := validateAgentProfile(profile)
 	if err != nil {
 		return AgentProfile{}, err
 	}
-	if normalizedName != normalizedExistingName {
-		return AgentProfile{}, fmt.Errorf("agent profile name in body must match request path")
+	if normalizedUpdatedName != normalizedExistingName {
+		if _, exists := s.profiles[normalizedUpdatedName]; exists {
+			return AgentProfile{}, fmt.Errorf("agent profile %q already exists", validated.Name)
+		}
 	}
 
 	nextProfiles := cloneProfilesMap(s.profiles)
-	nextProfiles[normalizedExistingName] = validated
+	delete(nextProfiles, normalizedExistingName)
+	nextProfiles[normalizedUpdatedName] = validated
 	if err := writeAgentProfilesFile(s.filePath, nextProfiles); err != nil {
 		return AgentProfile{}, err
 	}
@@ -321,15 +306,70 @@ func validateAgentBackend(name string, backend AgentBackendDefinition) (string, 
 	return name, backend, nil
 }
 
-func writeAgentProfilesFile(filePath string, profiles map[string]AgentProfile) error {
-	list := make([]AgentProfile, 0, len(profiles))
-	for _, profile := range profiles {
-		list = append(list, profile)
+func decodeAgentProfiles(data []byte) (map[string]AgentProfile, error) {
+	var objectDecoded map[string]AgentProfile
+	if err := json.Unmarshal(data, &objectDecoded); err == nil {
+		if objectDecoded == nil {
+			return map[string]AgentProfile{}, nil
+		}
+		return validateAgentProfilesMap(objectDecoded, false)
 	}
-	sort.Slice(list, func(i int, j int) bool {
-		return strings.ToLower(list[i].Name) < strings.ToLower(list[j].Name)
-	})
-	return writeJSONFile(filePath, list)
+
+	var arrayDecoded []AgentProfile
+	if err := json.Unmarshal(data, &arrayDecoded); err != nil {
+		return nil, err
+	}
+
+	profiles := make(map[string]AgentProfile, len(arrayDecoded))
+	for _, profile := range arrayDecoded {
+		validated, normalizedName, err := validateAgentProfile(profile)
+		if err != nil {
+			return nil, err
+		}
+		if _, exists := profiles[normalizedName]; exists {
+			return nil, fmt.Errorf("duplicate agent profile %q", profile.Name)
+		}
+		profiles[normalizedName] = validated
+	}
+	return profiles, nil
+}
+
+func validateAgentProfilesMap(source map[string]AgentProfile, allowLegacyNameKey bool) (map[string]AgentProfile, error) {
+	profiles := make(map[string]AgentProfile, len(source))
+	for key, profile := range source {
+		validated, normalizedName, err := validateAgentProfile(profile)
+		if err != nil {
+			return nil, err
+		}
+
+		normalizedKey := normalizeAgentProfileName(key)
+		if normalizedKey == "" {
+			if !allowLegacyNameKey {
+				return nil, fmt.Errorf("agent profile key must not be empty")
+			}
+			normalizedKey = normalizedName
+		}
+
+		if _, exists := profiles[normalizedKey]; exists {
+			return nil, fmt.Errorf("duplicate agent profile key %q", key)
+		}
+		profiles[normalizedKey] = validated
+	}
+	return profiles, nil
+}
+
+func writeAgentProfilesFile(filePath string, profiles map[string]AgentProfile) error {
+	sortedKeys := make([]string, 0, len(profiles))
+	for key := range profiles {
+		sortedKeys = append(sortedKeys, key)
+	}
+	sort.Strings(sortedKeys)
+
+	orderedProfiles := make(map[string]AgentProfile, len(sortedKeys))
+	for _, key := range sortedKeys {
+		orderedProfiles[key] = profiles[key]
+	}
+	return writeJSONFile(filePath, orderedProfiles)
 }
 
 func writeAgentBackendsFile(filePath string, backends map[string]AgentBackendDefinition) error {
