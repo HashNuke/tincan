@@ -58,8 +58,14 @@ final class AudioTurnPipeline {
         inputNode.removeTap(onBus: 0)
         inputNode.installTap(onBus: 0, bufferSize: 2_048, format: inputFormat) { [weak self] buffer, _ in
             guard let self else { return }
+            guard AudioTapBufferValidator.shouldProcess(buffer) else {
+                return
+            }
             do {
                 let resampled = try self.tapAudioConverter.resampleBuffer(buffer)
+                guard !resampled.isEmpty else {
+                    return
+                }
                 self.audioStreamContinuation?.yield(resampled)
             } catch {
                 Task {
@@ -88,6 +94,23 @@ final class AudioTurnPipeline {
         audioEngine = AVAudioEngine()
         await turnDetector.reset()
         await sink.emitLog("Microphone capture stopped")
+    }
+}
+
+enum AudioTapBufferValidator {
+    static func shouldProcess(_ buffer: AVAudioPCMBuffer) -> Bool {
+        guard buffer.frameLength > 0 else {
+            return false
+        }
+
+        let audioBuffers = UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList)
+        guard !audioBuffers.isEmpty else {
+            return false
+        }
+
+        return audioBuffers.allSatisfy { audioBuffer in
+            audioBuffer.mData != nil && audioBuffer.mDataByteSize > 0
+        }
     }
 }
 
