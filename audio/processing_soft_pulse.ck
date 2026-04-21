@@ -4,7 +4,7 @@
 
 Gain master => dac;
 master => WvOut2 capture => blackhole;
-(me.dir() + "processing_soft_pulse.wav", IO.INT24) => capture.wavFilename;
+(me.dir() + "output/processing_soft_pulse.wav", IO.INT24) => capture.wavFilename;
 0.9 => capture.fileGain;
 0.22 => master.gain;
 

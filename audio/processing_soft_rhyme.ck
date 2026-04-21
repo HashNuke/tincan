@@ -5,7 +5,7 @@
 Gain master => LPF soften => Gain dry => dac;
 soften => JCRev rev => LPF revTone => Gain wet => dac;
 dac => WvOut2 capture => blackhole;
-(me.dir() + "processing_soft_rhyme.wav", IO.INT24) => capture.wavFilename;
+(me.dir() + "output/processing_soft_rhyme.wav", IO.INT24) => capture.wavFilename;
 0.98 => capture.fileGain;
 1.36 => master.gain;
 2300.0 => soften.freq;

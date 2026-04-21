@@ -4,7 +4,7 @@
 
 Gain master => dac;
 master => WvOut2 capture => blackhole;
-(me.dir() + "processing_warm_orbit.wav", IO.INT24) => capture.wavFilename;
+(me.dir() + "output/processing_warm_orbit.wav", IO.INT24) => capture.wavFilename;
 0.9 => capture.fileGain;
 0.20 => master.gain;
 

@@ -1,58 +1,69 @@
-// A soft but urgent smartphone-style ringtone with a tighter cadence.
+// A softer phone-like double-ring with a gentle "krrrr" character.
 
-3.0::second => dur LOOP_DUR;
+3.2::second => dur LOOP_DUR;
 
 Gain master => LPF soften => Gain dry => dac;
 soften => JCRev rev => LPF revTone => Gain wet => dac;
 dac => WvOut2 capture => blackhole;
-(me.dir() + "call_ringing.wav", IO.INT24) => capture.wavFilename;
-0.98 => capture.fileGain;
-1.34 => master.gain;
-2500.0 => soften.freq;
-0.88 => dry.gain;
-0.12 => wet.gain;
+(me.dir() + "output/call_ringing.wav", IO.INT24) => capture.wavFilename;
+0.94 => capture.fileGain;
+1.20 => master.gain;
+1900.0 => soften.freq;
+0.86 => dry.gain;
+0.14 => wet.gain;
 0.08 => rev.mix;
-1800.0 => revTone.freq;
+1500.0 => revTone.freq;
 
 fun void strike(float freq, float amp, float pan, dur hold, dur releaseTime)
 {
-    TriOsc lead => Gain blend => ADSR env => LPF tone => Gain voice => Pan2 p => master;
-    SinOsc body => blend;
-    SinOsc air => blend;
+    SawOsc buzzA => Gain blend => ADSR env => LPF tone => Gain voice => Pan2 p => master;
+    SqrOsc buzzB => blend;
+    Noise grit => HPF gritHPF => LPF gritLPF => Gain airy => blend;
+    SinOsc wobble => blackhole;
 
     pan => p.pan;
-    freq => lead.freq;
-    freq * 0.5 => body.freq;
-    freq * 2.0 => air.freq;
+    22.0 => wobble.freq;
+    freq => buzzA.freq;
+    freq * 1.005 => buzzB.freq;
 
-    0.24 => lead.gain;
-    0.18 => body.gain;
-    0.025 => air.gain;
+    0.11 => buzzA.gain;
+    0.06 => buzzB.gain;
+    700.0 => gritHPF.freq;
+    1800.0 => gritLPF.freq;
+    0.012 => grit.gain;
+    0.03 => airy.gain;
 
-    2200.0 => tone.freq;
+    1200.0 => tone.freq;
     amp => voice.gain;
 
-    env.set(8::ms, 54::ms, 0.58, releaseTime);
+    env.set(3::ms, 24::ms, 0.74, releaseTime);
     env.keyOn();
-    hold => now;
+    12 => int steps;
+    hold / steps => dur stepDur;
+    for (0 => int i; i < steps; i++)
+    {
+        freq + (wobble.last() * 5.0) => buzzA.freq;
+        (freq * 1.005) + (wobble.last() * 3.5) => buzzB.freq;
+        stepDur => now;
+    }
     env.keyOff();
     releaseTime => now;
 }
 
 fun void ringPhrase(float panBias)
 {
-    spork ~ strike(1318.51, 0.92, -0.08 * panBias, 150::ms, 250::ms);
-    spork ~ strike(1046.50, 0.68, 0.06 * panBias, 150::ms, 270::ms);
+    spork ~ strike(760.0, 0.74, -0.08 * panBias, 135::ms, 165::ms);
+    spork ~ strike(640.0, 0.38, 0.05 * panBias, 135::ms, 175::ms);
     210::ms => now;
-    spork ~ strike(1318.51, 0.86, 0.08 * panBias, 150::ms, 250::ms);
-    spork ~ strike(1046.50, 0.62, -0.06 * panBias, 150::ms, 270::ms);
-    760::ms => now;
+    spork ~ strike(760.0, 0.68, 0.08 * panBias, 135::ms, 165::ms);
+    spork ~ strike(640.0, 0.34, -0.05 * panBias, 135::ms, 175::ms);
+    980::ms => now;
 }
 
 120::ms => now;
 spork ~ ringPhrase(1.0);
-970::ms => now;
+1180::ms => now;
 spork ~ ringPhrase(-1.0);
-940::ms => now;
+1180::ms => now;
 
 capture.closeFile();

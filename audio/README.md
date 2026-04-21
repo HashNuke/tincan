@@ -1,22 +1,49 @@
-# Processing Sounds
+# Audio Assets
 
-This directory holds procedural loading and "thinking" sounds for call processing states.
+This directory contains two kinds of audio assets:
 
-The `.ck` files are the source sketches.
-Generated `.wav` renders are ignored by git.
+1. Downloaded/source audio files that we keep directly in `audio/`
+2. Procedural sound programs written in ChucK (`.ck`) that generate rendered audio into `audio/output/`
+
+The goal is to keep hand-picked/downloaded assets separate from generated renders while still keeping all audio work in one place.
+
+## Layout
+
+- `*.ck`: ChucK source programs for generated sounds
+- `output/`: rendered `.wav` files generated from the ChucK programs
+- standalone `.wav` files in `audio/`: downloaded/source assets that we keep intentionally
 
 ## Usage
 
-Audition a single sketch live:
+Audition a generated sound live:
 
 ```bash
 chuck audio/processing_soft_pulse.ck
 ```
 
-Render every sketch to WAV:
+Render every ChucK program to `audio/output/`:
 
 ```bash
 ./audio/render_all.sh
 ```
 
-The current sketches are intentionally loop-safe by leaving enough decay and silence before the file boundary, so repeating the exported file does not chop off a tail mid-phrase.
+The generated sketches are generally designed to loop cleanly by leaving enough decay and silence near the file boundary so repeated playback does not cut off a tail abruptly.
+
+## Downloaded Assets
+
+- `phone-ring-out-call-end-tone.wav`
+
+## Generated Programs
+
+- `call_disconnect.ck`
+- `call_ringing.ck`
+- `processing_air_taps.ck`
+- `processing_click_echo.ck`
+- `processing_signal_chime.ck`
+- `processing_soft_pulse.ck`
+- `processing_soft_rhyme.ck`
+- `processing_warm_orbit.ck`
+
+## Attributions
+
+- `phone-ring-out-call-end-tone.wav` by [kalhan on Freesound](https://freesound.org/s/677458/) — License: Creative Commons 0

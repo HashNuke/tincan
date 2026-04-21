@@ -4,7 +4,7 @@
 
 Gain master => LPF round => LPF soften => dac;
 dac => WvOut2 capture => blackhole;
-(me.dir() + "processing_click_echo.wav", IO.INT24) => capture.wavFilename;
+(me.dir() + "output/processing_click_echo.wav", IO.INT24) => capture.wavFilename;
 1.0 => capture.fileGain;
 8.20 => master.gain;
 1650.0 => round.freq;

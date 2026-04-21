@@ -5,7 +5,7 @@
 Gain master => LPF soften => Gain dry => dac;
 soften => JCRev rev => LPF revTone => Gain wet => dac;
 dac => WvOut2 capture => blackhole;
-(me.dir() + "call_disconnect.wav", IO.INT24) => capture.wavFilename;
+(me.dir() + "output/call_disconnect.wav", IO.INT24) => capture.wavFilename;
 0.98 => capture.fileGain;
 1.50 => master.gain;
 2100.0 => soften.freq;
