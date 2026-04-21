@@ -13,6 +13,7 @@ type Conversation struct {
 	Status                string     `gorm:"column:status;not null"`
 	CreatedAt             time.Time  `gorm:"column:created_at;not null"`
 	UpdatedAt             time.Time  `gorm:"column:updated_at;not null"`
+	PreviewText           string     `gorm:"column:preview_text;not null"`
 	LastMessageAt         *time.Time `gorm:"column:last_message_at"`
 	EndedAt               *time.Time `gorm:"column:ended_at"`
 }
@@ -21,22 +22,22 @@ func (Conversation) TableName() string {
 	return "conversations"
 }
 
-type ConversationUpdate struct {
+type Message struct {
 	ID                 string     `gorm:"primaryKey;type:text"`
-	ConversationID     string     `gorm:"column:conversation_id;not null;index:idx_conversation_updates_conversation"`
-	ConversationHandle string     `gorm:"column:conversation_handle;not null;index:idx_conversation_updates_handle"`
+	ConversationID     string     `gorm:"column:conversation_id;not null;index:idx_messages_conversation"`
+	ConversationHandle string     `gorm:"column:conversation_handle;not null;index:idx_messages_handle"`
 	SummaryText        string     `gorm:"column:summary_text;not null"`
 	DetailText         string     `gorm:"column:detail_text;not null"`
 	NotificationText   string     `gorm:"column:notification_text;not null"`
 	RawUpdateJSON      string     `gorm:"column:raw_update_json"`
-	Status             string     `gorm:"column:status;not null;index:idx_conversation_updates_status"`
+	Status             string     `gorm:"column:status;not null;index:idx_messages_status"`
 	CreatedAt          time.Time  `gorm:"column:created_at;not null"`
 	UpdatedAt          time.Time  `gorm:"column:updated_at;not null"`
 	ConsumedAt         *time.Time `gorm:"column:consumed_at"`
 }
 
-func (ConversationUpdate) TableName() string {
-	return "conversation_updates"
+func (Message) TableName() string {
+	return "messages"
 }
 
 type ConversationNote struct {
@@ -75,4 +76,32 @@ type ListConversationSummariesParams struct {
 type ListConversationSummariesResult struct {
 	Conversations []ConversationSummary
 	NextCursor    *ConversationSummaryCursor
+}
+
+type MessageSummary struct {
+	ID               string     `json:"id"`
+	Kind             string     `json:"kind"`
+	SummaryText      string     `json:"summary_text"`
+	DetailText       string     `json:"detail_text"`
+	NotificationText string     `json:"notification_text"`
+	Status           string     `json:"status"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
+	ConsumedAt       *time.Time `json:"consumed_at,omitempty"`
+}
+
+type MessageHistoryCursor struct {
+	CreatedAt time.Time `json:"created_at"`
+	ID        string    `json:"id"`
+}
+
+type ListMessageHistoryParams struct {
+	ConversationID string
+	Cursor         *MessageHistoryCursor
+	PageSize       int
+}
+
+type ListMessageHistoryResult struct {
+	Messages   []MessageSummary
+	NextCursor *MessageHistoryCursor
 }

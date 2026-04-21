@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	tincanconfig "tincan-server/config"
 	"tincan-server/conversations"
@@ -50,6 +51,24 @@ type conversationsResponse struct {
 	Conversations []conversations.ConversationSummary `json:"conversations"`
 }
 
+type conversationResponse struct {
+	ID               string    `json:"id"`
+	Handle           string    `json:"handle"`
+	AgentProfileName string    `json:"agent_profile_name"`
+	AgentBackend     string    `json:"agent_backend"`
+	WorkingDirectory string    `json:"working_directory"`
+	Status           string    `json:"status"`
+	UpdatedAt        time.Time `json:"updated_at"`
+	PreviewText      string    `json:"preview_text"`
+	HasPendingUpdate bool      `json:"has_pending_update"`
+}
+
+type conversationMessagesResponse struct {
+	Conversation conversationResponse           `json:"conversation"`
+	NextCursor   string                         `json:"next_cursor,omitempty"`
+	Messages     []conversations.MessageSummary `json:"messages"`
+}
+
 func (r Routes) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/agent-profiles", r.handleAgentProfiles)
 	mux.HandleFunc("/api/v1/agent-profiles/", r.handleAgentProfileSubpath)
@@ -58,6 +77,7 @@ func (r Routes) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/backend-types", r.handleBackendTypes)
 	mux.HandleFunc("/api/v1/backend-types/", r.handleBackendTypeSubpath)
 	mux.HandleFunc("/api/v1/conversations", r.handleConversations)
+	mux.HandleFunc("/api/v1/conversations/", r.handleConversationSubpath)
 }
 
 func (r Routes) handleAgentProfiles(w http.ResponseWriter, req *http.Request) {
@@ -283,6 +303,100 @@ func (r Routes) handleConversations(w http.ResponseWriter, req *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
+func (r Routes) handleConversationSubpath(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if r.Conversations == nil {
+		http.Error(w, "conversations are unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	rest := strings.TrimPrefix(req.URL.Path, "/api/v1/conversations/")
+	parts := strings.Split(rest, "/")
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || parts[1] != "messages" {
+		http.NotFound(w, req)
+		return
+	}
+
+	r.listConversationMessages(w, req, parts[0])
+}
+
+func (r Routes) listConversationMessages(w http.ResponseWriter, req *http.Request, conversationID string) {
+	conversation, ok, err := r.Conversations.GetConversationByID(conversationID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("get conversation failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+	if !ok {
+		http.Error(w, "conversation not found", http.StatusNotFound)
+		return
+	}
+
+	pageSize := 50
+	if rawPageSize := strings.TrimSpace(req.URL.Query().Get("page_size")); rawPageSize != "" {
+		parsedPageSize, err := strconv.Atoi(rawPageSize)
+		if err != nil || parsedPageSize <= 0 {
+			http.Error(w, "page_size must be a positive integer", http.StatusBadRequest)
+			return
+		}
+		if parsedPageSize > 100 {
+			parsedPageSize = 100
+		}
+		pageSize = parsedPageSize
+	}
+
+	cursor, err := decodeMessageHistoryCursor(strings.TrimSpace(req.URL.Query().Get("cursor")))
+	if err != nil {
+		http.Error(w, fmt.Sprintf("invalid cursor: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	result, err := r.Conversations.ListMessageHistory(conversations.ListMessageHistoryParams{
+		ConversationID: conversationID,
+		Cursor:         cursor,
+		PageSize:       pageSize,
+	})
+	if err != nil {
+		http.Error(w, fmt.Sprintf("list conversation messages failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	hasPendingUpdate := false
+	if _, found, err := r.Conversations.GetLatestPendingMessageByConversationID(conversationID); err != nil {
+		http.Error(w, fmt.Sprintf("check pending update failed: %v", err), http.StatusInternalServerError)
+		return
+	} else if found {
+		hasPendingUpdate = true
+	}
+
+	response := conversationMessagesResponse{
+		Conversation: conversationResponse{
+			ID:               conversation.ID,
+			Handle:           conversation.DisplayHandle,
+			AgentProfileName: conversation.AgentProfileName,
+			AgentBackend:     conversation.AgentBackend,
+			WorkingDirectory: conversation.WorkingDirectory,
+			Status:           conversation.Status,
+			UpdatedAt:        conversation.UpdatedAt.UTC(),
+			PreviewText:      conversation.PreviewText,
+			HasPendingUpdate: hasPendingUpdate,
+		},
+		Messages: result.Messages,
+	}
+	if result.NextCursor != nil {
+		encodedCursor, err := encodeMessageHistoryCursor(*result.NextCursor)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("encode cursor failed: %v", err), http.StatusInternalServerError)
+			return
+		}
+		response.NextCursor = encodedCursor
+	}
+
+	writeJSON(w, http.StatusOK, response)
+}
+
 func (r Routes) createAgentProfile(w http.ResponseWriter, req *http.Request) {
 	var profile tincanconfig.AgentProfile
 	if err := decodeJSONBody(req, &profile); err != nil {
@@ -421,6 +535,34 @@ func decodeConversationSummaryCursor(raw string) (*conversations.ConversationSum
 	}
 	if cursor.UpdatedAt.IsZero() || strings.TrimSpace(cursor.ID) == "" {
 		return nil, fmt.Errorf("cursor must include updated_at and id")
+	}
+	return &cursor, nil
+}
+
+func encodeMessageHistoryCursor(cursor conversations.MessageHistoryCursor) (string, error) {
+	payload, err := json.Marshal(cursor)
+	if err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(payload), nil
+}
+
+func decodeMessageHistoryCursor(raw string) (*conversations.MessageHistoryCursor, error) {
+	if raw == "" {
+		return nil, nil
+	}
+
+	payload, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil {
+		return nil, err
+	}
+
+	var cursor conversations.MessageHistoryCursor
+	if err := json.Unmarshal(payload, &cursor); err != nil {
+		return nil, err
+	}
+	if cursor.CreatedAt.IsZero() || strings.TrimSpace(cursor.ID) == "" {
+		return nil, fmt.Errorf("cursor must include created_at and id")
 	}
 	return &cursor, nil
 }

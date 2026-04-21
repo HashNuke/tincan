@@ -45,6 +45,7 @@ type server struct {
 	userInputController *controllers.UserInputController
 	hookController      *controllers.HookController
 	outputPublisher     *output.Publisher
+	liveHub             *liveHub
 }
 
 type inferenceEnvelope struct {
@@ -126,6 +127,7 @@ func main() {
 		Conversations: srv.conversations,
 		Adapters:      apiAdapters,
 	}.Register(mux)
+	mux.Handle("/api/v1/live", srv.liveHub.handler())
 	mux.HandleFunc("/session/", srv.handleSessionControl)
 	srv.webrtcTransport.RegisterRoutes(mux)
 
@@ -224,9 +226,10 @@ func newServer(dataDir string) (*server, error) {
 		},
 	}
 	srv.webrtcTransport = newWebRTCTransport(srv)
+	srv.liveHub = newLiveHub(srv)
 	srv.outputPublisher = output.NewPublisher(output.CallAudioListener{
 		Renderer: callAudioRenderer{server: srv},
-	})
+	}, srv.liveHub)
 	return srv, nil
 }
 
@@ -342,6 +345,10 @@ func (s *server) handleOpenCodeHook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("failed to publish hook output: %v", err), http.StatusInternalServerError)
 		return
 	}
+	if result.ConversationID != "" {
+		s.broadcastConversationMessageByID(result.ConversationID, result.MessageID)
+		s.broadcastConversationSummaryByID(result.ConversationID)
+	}
 
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -447,6 +454,7 @@ func (s *server) processUtterance(sessionID string, audioData []byte, contentTyp
 		log.Printf("peer %s publish output failed: %v", sessionID, err)
 		return nil, fmt.Errorf("publish output failed: %w", err)
 	}
+	s.broadcastLiveUpdatesForHandleResult(handleResult.RouteResult, handleResult.ResponseBody)
 
 	return handleResult.ResponseBody, nil
 }

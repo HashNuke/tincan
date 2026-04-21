@@ -95,24 +95,9 @@ func (s *Store) ListConversationSummaries(params ListConversationSummariesParams
 	}
 
 	const query = `
-WITH latest_updates AS (
-  SELECT
-    cu.conversation_id,
-    cu.summary_text,
-    cu.detail_text,
-    cu.updated_at
-  FROM conversation_updates cu
-  WHERE cu.id = (
-    SELECT cu2.id
-    FROM conversation_updates cu2
-    WHERE cu2.conversation_id = cu.conversation_id
-    ORDER BY cu2.updated_at DESC, cu2.id DESC
-    LIMIT 1
-  )
-),
-pending_updates AS (
+WITH pending_updates AS (
   SELECT DISTINCT conversation_id
-  FROM conversation_updates
+  FROM messages
   WHERE status = 'pending'
 ),
 conversation_summaries AS (
@@ -124,16 +109,6 @@ conversation_summaries AS (
     c.working_directory,
     c.status,
     CASE
-      WHEN lu.updated_at IS NOT NULL AND c.last_message_at IS NOT NULL THEN
-        CASE
-          WHEN lu.updated_at >= c.last_message_at THEN lu.updated_at
-          ELSE c.last_message_at
-        END
-      WHEN lu.updated_at IS NOT NULL THEN
-        CASE
-          WHEN lu.updated_at >= c.updated_at THEN lu.updated_at
-          ELSE c.updated_at
-        END
       WHEN c.last_message_at IS NOT NULL THEN
         CASE
           WHEN c.last_message_at >= c.updated_at THEN c.last_message_at
@@ -141,13 +116,12 @@ conversation_summaries AS (
         END
       ELSE c.updated_at
     END AS updated_at,
-    COALESCE(NULLIF(lu.summary_text, ''), NULLIF(lu.detail_text, ''), '') AS preview_text,
+    c.preview_text AS preview_text,
     CASE
       WHEN pu.conversation_id IS NOT NULL THEN TRUE
       ELSE FALSE
     END AS has_pending_update
   FROM conversations c
-  LEFT JOIN latest_updates lu ON lu.conversation_id = c.id
   LEFT JOIN pending_updates pu ON pu.conversation_id = c.id
 )
 SELECT
@@ -250,6 +224,49 @@ func (s *Store) ListConversationHandles() ([]string, error) {
 	return handles, nil
 }
 
+func (s *Store) GetConversationByID(id string) (Conversation, bool, error) {
+	var conversation Conversation
+	err := s.db.Where("id = ?", id).First(&conversation).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return Conversation{}, false, nil
+		}
+		return Conversation{}, false, fmt.Errorf("get conversation by id: %w", err)
+	}
+	return conversation, true, nil
+}
+
+func (s *Store) GetConversationSummaryByID(id string) (ConversationSummary, bool, error) {
+	conversation, ok, err := s.GetConversationByID(id)
+	if err != nil || !ok {
+		return ConversationSummary{}, ok, err
+	}
+
+	hasPendingUpdate := false
+	if _, found, err := s.GetLatestPendingMessageByConversationID(id); err != nil {
+		return ConversationSummary{}, false, err
+	} else if found {
+		hasPendingUpdate = true
+	}
+
+	updatedAt := conversation.UpdatedAt.UTC()
+	if conversation.LastMessageAt != nil && conversation.LastMessageAt.UTC().After(updatedAt) {
+		updatedAt = conversation.LastMessageAt.UTC()
+	}
+
+	return ConversationSummary{
+		ID:               conversation.ID,
+		Handle:           conversation.DisplayHandle,
+		AgentProfileName: conversation.AgentProfileName,
+		AgentBackend:     conversation.AgentBackend,
+		WorkingDirectory: conversation.WorkingDirectory,
+		Status:           conversation.Status,
+		UpdatedAt:        updatedAt,
+		PreviewText:      conversation.PreviewText,
+		HasPendingUpdate: hasPendingUpdate,
+	}, true, nil
+}
+
 func (s *Store) GetConversationByBackendConversationID(backendConversationID string) (Conversation, bool, error) {
 	var conversation Conversation
 	err := s.db.Where("backend_conversation_id = ?", backendConversationID).First(&conversation).Error
@@ -309,102 +326,215 @@ func (s *Store) GetMostRecentConversationByBackendConversationIDs(backendConvers
 	return conversation, true, nil
 }
 
-func (s *Store) UpsertPendingUpdate(update ConversationUpdate) (ConversationUpdate, bool, error) {
+func (s *Store) CreateMessage(message Message) (Message, bool, error) {
 	now := time.Now().UTC()
-	var existing ConversationUpdate
-	err := s.db.Where("conversation_id = ? AND status = ?", update.ConversationID, "pending").First(&existing).Error
-	if err != nil && err != gorm.ErrRecordNotFound {
-		return ConversationUpdate{}, false, fmt.Errorf("lookup pending conversation update: %w", err)
-	}
+	previewText := buildPreviewText(message.SummaryText, message.DetailText)
 
-	if err == gorm.ErrRecordNotFound {
-		update.ID = uuid.NewString()
-		update.Status = "pending"
-		update.CreatedAt = now
-		update.UpdatedAt = now
-		if err := s.db.Create(&update).Error; err != nil {
-			return ConversationUpdate{}, false, fmt.Errorf("create pending conversation update: %w", err)
+	var (
+		result  Message
+		changed bool
+	)
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		var existing Message
+		err := tx.Where("conversation_id = ?", message.ConversationID).
+			Order("created_at desc, id desc").
+			First(&existing).Error
+		if err != nil && err != gorm.ErrRecordNotFound {
+			return fmt.Errorf("lookup latest conversation message: %w", err)
 		}
-		return update, true, nil
-	}
 
-	changed := existing.SummaryText != update.SummaryText ||
-		existing.DetailText != update.DetailText ||
-		existing.NotificationText != update.NotificationText ||
-		existing.RawUpdateJSON != update.RawUpdateJSON ||
-		existing.Status != "pending" ||
-		existing.ConsumedAt != nil
-	if !changed {
-		return existing, false, nil
-	}
+		if err == nil {
+			changed = existing.ConversationHandle != message.ConversationHandle ||
+				existing.SummaryText != message.SummaryText ||
+				existing.DetailText != message.DetailText ||
+				existing.NotificationText != message.NotificationText ||
+				existing.RawUpdateJSON != message.RawUpdateJSON ||
+				existing.Status != message.Status
+			if !changed {
+				result = existing
+				return nil
+			}
+		}
 
-	existing.SummaryText = update.SummaryText
-	existing.DetailText = update.DetailText
-	existing.NotificationText = update.NotificationText
-	existing.RawUpdateJSON = update.RawUpdateJSON
-	existing.Status = "pending"
-	existing.UpdatedAt = now
-	existing.ConsumedAt = nil
-	if err := s.db.Save(&existing).Error; err != nil {
-		return ConversationUpdate{}, false, fmt.Errorf("update pending conversation update: %w", err)
+		message.ID = uuid.NewString()
+		if strings.TrimSpace(message.Status) == "" {
+			message.Status = "pending"
+		}
+		message.CreatedAt = now
+		message.UpdatedAt = now
+		message.ConsumedAt = nil
+		if err := tx.Create(&message).Error; err != nil {
+			return fmt.Errorf("create conversation message: %w", err)
+		}
+		if err := updateConversationSummary(tx, message.ConversationID, previewText, now); err != nil {
+			return err
+		}
+		result = message
+		changed = true
+		return nil
+	})
+	if err != nil {
+		return Message{}, false, err
 	}
-	return existing, true, nil
+	return result, changed, nil
 }
 
-func (s *Store) ListPendingUpdates(limit int) ([]ConversationUpdate, error) {
+func buildPreviewText(summaryText string, detailText string) string {
+	trimmedSummary := strings.TrimSpace(summaryText)
+	if trimmedSummary != "" {
+		return trimmedSummary
+	}
+	return strings.TrimSpace(detailText)
+}
+
+func updateConversationSummary(tx *gorm.DB, conversationID string, previewText string, now time.Time) error {
+	if err := tx.Model(&Conversation{}).
+		Where("id = ?", conversationID).
+		Updates(map[string]any{
+			"preview_text":    previewText,
+			"updated_at":      now,
+			"last_message_at": now,
+		}).Error; err != nil {
+		return fmt.Errorf("update conversation summary: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) ListMessagesByConversationID(conversationID string, limit int) ([]Message, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	var messages []Message
+	if err := s.db.
+		Where("conversation_id = ?", conversationID).
+		Order("created_at desc, id desc").
+		Limit(limit).
+		Find(&messages).Error; err != nil {
+		return nil, fmt.Errorf("list conversation messages: %w", err)
+	}
+	return messages, nil
+}
+
+func (s *Store) GetMessageByID(id string) (Message, bool, error) {
+	var message Message
+	err := s.db.Where("id = ?", id).First(&message).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return Message{}, false, nil
+		}
+		return Message{}, false, fmt.Errorf("get message by id: %w", err)
+	}
+	return message, true, nil
+}
+
+func (s *Store) ListMessageHistory(params ListMessageHistoryParams) (ListMessageHistoryResult, error) {
+	pageSize := params.PageSize
+	if pageSize <= 0 {
+		pageSize = 50
+	}
+
+	query := s.db.
+		Where("conversation_id = ?", params.ConversationID).
+		Order("created_at desc, id desc")
+	if params.Cursor != nil {
+		cursorCreatedAt := params.Cursor.CreatedAt.UTC()
+		query = query.Where(
+			"created_at < ? OR (created_at = ? AND id < ?)",
+			cursorCreatedAt,
+			cursorCreatedAt,
+			params.Cursor.ID,
+		)
+	}
+
+	var rows []Message
+	if err := query.Limit(pageSize + 1).Find(&rows).Error; err != nil {
+		return ListMessageHistoryResult{}, fmt.Errorf("list message history: %w", err)
+	}
+
+	result := ListMessageHistoryResult{
+		Messages: make([]MessageSummary, 0, min(len(rows), pageSize)),
+	}
+	for _, row := range rows {
+		result.Messages = append(result.Messages, MessageSummary{
+			ID:               row.ID,
+			Kind:             "agent_update",
+			SummaryText:      row.SummaryText,
+			DetailText:       row.DetailText,
+			NotificationText: row.NotificationText,
+			Status:           row.Status,
+			CreatedAt:        row.CreatedAt.UTC(),
+			UpdatedAt:        row.UpdatedAt.UTC(),
+			ConsumedAt:       row.ConsumedAt,
+		})
+	}
+
+	if len(result.Messages) <= pageSize {
+		return result, nil
+	}
+
+	result.Messages = result.Messages[:pageSize]
+	last := result.Messages[len(result.Messages)-1]
+	result.NextCursor = &MessageHistoryCursor{
+		CreatedAt: last.CreatedAt.UTC(),
+		ID:        last.ID,
+	}
+	return result, nil
+}
+
+func (s *Store) ListPendingMessages(limit int) ([]Message, error) {
 	if limit <= 0 {
 		limit = 20
 	}
-	var updates []ConversationUpdate
-	if err := s.db.Where("status = ?", "pending").Order("updated_at desc").Limit(limit).Find(&updates).Error; err != nil {
-		return nil, fmt.Errorf("list pending conversation updates: %w", err)
+	var messages []Message
+	if err := s.db.Where("status = ?", "pending").Order("updated_at desc, id desc").Limit(limit).Find(&messages).Error; err != nil {
+		return nil, fmt.Errorf("list pending conversation messages: %w", err)
 	}
-	return updates, nil
+	return messages, nil
 }
 
-func (s *Store) GetLatestPendingUpdateByConversationID(conversationID string) (ConversationUpdate, bool, error) {
-	var update ConversationUpdate
+func (s *Store) GetLatestPendingMessageByConversationID(conversationID string) (Message, bool, error) {
+	var message Message
 	err := s.db.
 		Where("conversation_id = ? AND status = ?", conversationID, "pending").
-		Order("updated_at desc").
-		First(&update).Error
+		Order("updated_at desc, id desc").
+		First(&message).Error
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
-			return ConversationUpdate{}, false, nil
+			return Message{}, false, nil
 		}
-		return ConversationUpdate{}, false, fmt.Errorf("get latest pending conversation update: %w", err)
+		return Message{}, false, fmt.Errorf("get latest pending conversation message: %w", err)
 	}
-	return update, true, nil
+	return message, true, nil
 }
 
 func (s *Store) ListPendingUpdateHandles(limit int) ([]string, error) {
-	updates, err := s.ListPendingUpdates(limit)
+	messages, err := s.ListPendingMessages(limit)
 	if err != nil {
 		return nil, err
 	}
 
-	handles := make([]string, 0, len(updates))
-	seen := make(map[string]struct{}, len(updates))
-	for _, update := range updates {
-		if update.ConversationHandle == "" {
+	handles := make([]string, 0, len(messages))
+	seen := make(map[string]struct{}, len(messages))
+	for _, message := range messages {
+		if message.ConversationHandle == "" {
 			continue
 		}
-		if _, ok := seen[update.ConversationHandle]; ok {
+		if _, ok := seen[message.ConversationHandle]; ok {
 			continue
 		}
-		seen[update.ConversationHandle] = struct{}{}
-		handles = append(handles, update.ConversationHandle)
+		seen[message.ConversationHandle] = struct{}{}
+		handles = append(handles, message.ConversationHandle)
 	}
 	slices.Sort(handles)
 	return handles, nil
 }
 
-func (s *Store) ConsumeUpdate(id string) error {
+func (s *Store) ConsumeMessage(id string) error {
 	now := time.Now().UTC()
-	if err := s.db.Model(&ConversationUpdate{}).
+	if err := s.db.Model(&Message{}).
 		Where("id = ?", id).
 		Updates(map[string]any{"status": "consumed", "consumed_at": &now, "updated_at": now}).Error; err != nil {
-		return fmt.Errorf("consume conversation update: %w", err)
+		return fmt.Errorf("consume conversation message: %w", err)
 	}
 	return nil
 }

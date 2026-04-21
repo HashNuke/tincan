@@ -34,7 +34,9 @@ type ConversationUpdateProcessor interface {
 }
 
 type HookHandleResult struct {
-	OutputEvents []output.Event
+	ConversationID string
+	MessageID      string
+	OutputEvents   []output.Event
 }
 
 type HookController struct {
@@ -61,14 +63,15 @@ func (c *HookController) HandleOpenCodeHook(event OpenCodeHookEvent) (HookHandle
 
 	var (
 		changed         bool
+		messageID       string
 		processedUpdate processedConversationUpdate
 	)
 	switch event.EventType {
 	case "session.idle":
-		processedUpdate, changed, err = c.createConversationUpdateFromLatestAssistant(conversation)
+		processedUpdate, messageID, changed, err = c.createConversationUpdateFromLatestAssistant(conversation)
 	case "session.error":
 		processedUpdate = c.processConversationUpdate(conversation.DisplayHandle, event.ErrorMessage)
-		_, changed, err = c.Conversations.UpsertPendingUpdate(conversations.ConversationUpdate{
+		message, createChanged, createErr := c.Conversations.CreateMessage(conversations.Message{
 			ConversationID:     conversation.ID,
 			ConversationHandle: conversation.DisplayHandle,
 			SummaryText:        processedUpdate.SummaryText,
@@ -77,6 +80,8 @@ func (c *HookController) HandleOpenCodeHook(event OpenCodeHookEvent) (HookHandle
 			RawUpdateJSON:      mustMarshalJSON(event),
 			Status:             "pending",
 		})
+		messageID = message.ID
+		changed, err = createChanged, createErr
 	default:
 		return HookHandleResult{}, true, nil
 	}
@@ -93,6 +98,8 @@ func (c *HookController) HandleOpenCodeHook(event OpenCodeHookEvent) (HookHandle
 	}
 
 	return HookHandleResult{
+		ConversationID: conversation.ID,
+		MessageID:      messageID,
 		OutputEvents: []output.Event{{
 			SessionID:   sessionID,
 			Kind:        output.KindNotification,
@@ -102,15 +109,15 @@ func (c *HookController) HandleOpenCodeHook(event OpenCodeHookEvent) (HookHandle
 	}, true, nil
 }
 
-func (c *HookController) createConversationUpdateFromLatestAssistant(conversation conversations.Conversation) (processedConversationUpdate, bool, error) {
+func (c *HookController) createConversationUpdateFromLatestAssistant(conversation conversations.Conversation) (processedConversationUpdate, string, bool, error) {
 	baseURLString, ok := c.Backends.BackendBaseURL(conversation.AgentBackend)
 	if !ok || baseURLString == "" {
-		return processedConversationUpdate{}, false, fmt.Errorf("conversation backend does not support OpenCode message fetch")
+		return processedConversationUpdate{}, "", false, fmt.Errorf("conversation backend does not support OpenCode message fetch")
 	}
 
 	baseURL, err := url.Parse(baseURLString)
 	if err != nil {
-		return processedConversationUpdate{}, false, err
+		return processedConversationUpdate{}, "", false, err
 	}
 	messageURL := baseURL.ResolveReference(&url.URL{Path: strings.TrimRight(baseURL.Path, "/") + "/session/" + conversation.BackendConversationID + "/message"})
 	query := messageURL.Query()
@@ -119,11 +126,11 @@ func (c *HookController) createConversationUpdateFromLatestAssistant(conversatio
 
 	resp, err := http.Get(messageURL.String())
 	if err != nil {
-		return processedConversationUpdate{}, false, err
+		return processedConversationUpdate{}, "", false, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return processedConversationUpdate{}, false, fmt.Errorf("fetch session messages failed with status %d", resp.StatusCode)
+		return processedConversationUpdate{}, "", false, fmt.Errorf("fetch session messages failed with status %d", resp.StatusCode)
 	}
 
 	var messages []struct {
@@ -136,7 +143,7 @@ func (c *HookController) createConversationUpdateFromLatestAssistant(conversatio
 		} `json:"parts"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&messages); err != nil {
-		return processedConversationUpdate{}, false, err
+		return processedConversationUpdate{}, "", false, err
 	}
 
 	latestText := ""
@@ -160,7 +167,7 @@ func (c *HookController) createConversationUpdateFromLatestAssistant(conversatio
 
 	processedUpdate := c.processConversationUpdate(conversation.DisplayHandle, latestText)
 
-	_, changed, err := c.Conversations.UpsertPendingUpdate(conversations.ConversationUpdate{
+	message, changed, err := c.Conversations.CreateMessage(conversations.Message{
 		ConversationID:     conversation.ID,
 		ConversationHandle: conversation.DisplayHandle,
 		SummaryText:        processedUpdate.SummaryText,
@@ -169,7 +176,10 @@ func (c *HookController) createConversationUpdateFromLatestAssistant(conversatio
 		RawUpdateJSON:      mustMarshalJSON(messages),
 		Status:             "pending",
 	})
-	return processedUpdate, changed, err
+	if err != nil {
+		return processedConversationUpdate{}, "", false, err
+	}
+	return processedUpdate, message.ID, changed, nil
 }
 
 func (c *HookController) processConversationUpdate(conversationHandle string, detailText string) processedConversationUpdate {

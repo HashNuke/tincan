@@ -114,6 +114,26 @@ func (m *Manager) BackendConversationIDsForSession(transportSessionID string) []
 	return backendConversationIDs
 }
 
+func (m *Manager) ActiveBackendConversationIDs() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	backendConversationIDs := make([]string, 0, len(m.sessions))
+	seen := make(map[string]struct{}, len(m.sessions))
+	for _, session := range m.sessions {
+		if session.State.CurrentBackendConversationID == "" {
+			continue
+		}
+		if _, ok := seen[session.State.CurrentBackendConversationID]; ok {
+			continue
+		}
+		seen[session.State.CurrentBackendConversationID] = struct{}{}
+		backendConversationIDs = append(backendConversationIDs, session.State.CurrentBackendConversationID)
+	}
+	slices.Sort(backendConversationIDs)
+	return backendConversationIDs
+}
+
 func (m *Manager) CurrentBackendConversationIDForSession(transportSessionID string) (string, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
