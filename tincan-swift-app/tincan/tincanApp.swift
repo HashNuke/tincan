@@ -12,6 +12,11 @@ struct tincanApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(appModel)
+#if os(macOS)
+                .task {
+                    await appModel.ensureMacServerStarted()
+                }
+#endif
         }
     }
 }

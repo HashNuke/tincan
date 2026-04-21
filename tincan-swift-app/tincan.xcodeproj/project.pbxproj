@@ -122,6 +122,7 @@
 				389AF12A2F95073C0031FFE3 /* Sources */,
 				389AF12B2F95073C0031FFE3 /* Frameworks */,
 				389AF12C2F95073C0031FFE3 /* Resources */,
+				5A7B8C9D0E1F223344556681 /* ShellScript */,
 			);
 			buildRules = (
 			);
@@ -256,6 +257,29 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		5A7B8C9D0E1F223344556681 /* ShellScript */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/BundledRuntime",
+			);
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/BundledRuntime",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "if [ \"${PLATFORM_NAME}\" != \"macosx\" ]; then\n  exit 0\nfi\n\nSOURCE_RUNTIME_DIR=\"${SRCROOT}/BundledRuntime\"\nDESTINATION_RUNTIME_DIR=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/BundledRuntime\"\n\nif [ ! -d \"${SOURCE_RUNTIME_DIR}\" ]; then\n  echo \"warning: BundledRuntime missing at ${SOURCE_RUNTIME_DIR}; run ./build-deps.sh\"\n  exit 0\nfi\n\nrm -rf \"${DESTINATION_RUNTIME_DIR}\"\nmkdir -p \"$(dirname \"${DESTINATION_RUNTIME_DIR}\")\"\n/usr/bin/ditto \"${SOURCE_RUNTIME_DIR}\" \"${DESTINATION_RUNTIME_DIR}\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		389AF12A2F95073C0031FFE3 /* Sources */ = {
@@ -445,7 +469,7 @@
 				DEVELOPMENT_TEAM = EPW5DK6JN4;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_NO_COMMON_BLOCKS = YES;
@@ -507,7 +531,7 @@
 				DEVELOPMENT_TEAM = EPW5DK6JN4;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;

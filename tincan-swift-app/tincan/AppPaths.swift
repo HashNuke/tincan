@@ -39,10 +39,21 @@ enum AppPaths {
         return directory
     }()
 
+    nonisolated static let logsDirectory: URL = {
+        let directory = appSupportDirectory.appendingPathComponent("logs", isDirectory: true)
+        try? FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true,
+            attributes: nil
+        )
+        return directory
+    }()
+
     nonisolated static let generatedAgentProfilesURL = generatedConfigDirectory.appendingPathComponent("agent_profiles.json")
     nonisolated static let generatedAgentBackendsURL = generatedConfigDirectory.appendingPathComponent("agent_backends.json")
     nonisolated static let speakerProfilesURL = appSupportDirectory.appendingPathComponent("speaker_profiles.json")
     nonisolated static let legacyOwnerProfileURL = appSupportDirectory.appendingPathComponent("owner-voice-profile.json")
+    nonisolated static let tincanServerLogURL = logsDirectory.appendingPathComponent("tincan-server.log")
     nonisolated static let backendDirectory = projectRoot.appendingPathComponent("backend", isDirectory: true)
     nonisolated static let backendServerModule = "backend.server"
 
@@ -50,6 +61,7 @@ enum AppPaths {
         _ = appSupportDirectory
         _ = generatedConfigDirectory
         _ = temporaryDirectory
+        _ = logsDirectory
     }
 }
 
