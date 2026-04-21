@@ -10,8 +10,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func OpenAndMigrate() (*gorm.DB, error) {
-	dataDir := filepath.Join("data")
+func OpenAndMigrate(dataDir string) (*gorm.DB, error) {
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create data dir: %w", err)
 	}

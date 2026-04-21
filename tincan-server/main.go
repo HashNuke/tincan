@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -27,6 +28,7 @@ import (
 	"tincan-server/conversations"
 	"tincan-server/db"
 	"tincan-server/output"
+	tincanrouter "tincan-server/router"
 )
 
 type server struct {
@@ -80,9 +82,17 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	dataDirFlag := flag.String("data-dir", "", "directory for tincan-server runtime data")
+	flag.Parse()
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8004"
+	}
+
+	dataDir, err := resolveDataDir(*dataDirFlag)
+	if err != nil {
+		log.Fatalf("failed to resolve data dir: %v", err)
 	}
 
 	inference := newInferenceSupervisor(inferenceSocketPath())
@@ -91,7 +101,7 @@ func main() {
 	}
 	defer inference.Shutdown()
 
-	srv, err := newServer()
+	srv, err := newServer(dataDir)
 	if err != nil {
 		log.Fatalf("failed to initialize server: %v", err)
 	}
@@ -124,18 +134,18 @@ func main() {
 	}
 }
 
-func newServer() (*server, error) {
-	profiles, err := tincanconfig.NewAgentProfileStore()
+func newServer(dataDir string) (*server, error) {
+	profiles, err := tincanconfig.NewAgentProfileStore(dataDir)
 	if err != nil {
 		return nil, fmt.Errorf("init agent profiles: %w", err)
 	}
 
-	backends, err := tincanconfig.NewAgentBackendStore()
+	backends, err := tincanconfig.NewAgentBackendStore(dataDir)
 	if err != nil {
 		return nil, fmt.Errorf("init agent backends: %w", err)
 	}
 
-	gormDB, err := db.OpenAndMigrate()
+	gormDB, err := db.OpenAndMigrate(dataDir)
 	if err != nil {
 		return nil, fmt.Errorf("init database: %w", err)
 	}
@@ -158,15 +168,23 @@ func newServer() (*server, error) {
 	}
 
 	routerBackend, ok := backends.Get("__router__")
+	var routerService controllers.Router
+	var updateProcessor controllers.ConversationUpdateProcessor
 	if !ok {
-		return nil, fmt.Errorf("missing __router__ backend definition")
-	}
-	routerAdapter, ok := agentAdapters[routerBackend.Type]
-	if !ok {
-		return nil, fmt.Errorf("no agent adapter registered for router backend type %q", routerBackend.Type)
-	}
-	if err := routerAdapter.ValidateBackend("__router__", routerBackend); err != nil {
-		return nil, fmt.Errorf("validate router backend: %w", err)
+		log.Printf("router backend is not configured; voice command routing is unavailable until __router__ is added to agent_backends.json")
+		routerService = unavailableRouter{reason: "router backend is not configured"}
+	} else {
+		routerAdapter, ok := agentAdapters[routerBackend.Type]
+		if !ok {
+			return nil, fmt.Errorf("no agent adapter registered for router backend type %q", routerBackend.Type)
+		}
+		if err := routerAdapter.ValidateBackend("__router__", routerBackend); err != nil {
+			return nil, fmt.Errorf("validate router backend: %w", err)
+		}
+
+		builtRouter := NewRouter(routerBackend, routerAdapter, profiles)
+		routerService = builtRouter
+		updateProcessor = builtRouter
 	}
 
 	callManager := calls.NewManager()
@@ -176,7 +194,6 @@ func newServer() (*server, error) {
 	}
 
 	conversationService := NewConversationService(profiles, backends, conversationStore, agentAdapters)
-	routerService := NewRouter(routerBackend, routerAdapter, profiles)
 
 	srv := &server{
 		inference:           &inferenceClient{socketPath: inferenceSocketPath()},
@@ -198,13 +215,47 @@ func newServer() (*server, error) {
 			Conversations:   conversationStore,
 			Backends:        backends,
 			Sessions:        callManager,
-			UpdateProcessor: routerService,
+			UpdateProcessor: updateProcessor,
 		},
 	}
 	srv.outputPublisher = output.NewPublisher(output.CallAudioListener{
 		Renderer: callAudioRenderer{server: srv},
 	})
 	return srv, nil
+}
+
+func resolveDataDir(flagValue string) (string, error) {
+	if strings.TrimSpace(flagValue) != "" {
+		return expandPath(flagValue)
+	}
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve user home dir: %w", err)
+	}
+	return filepath.Join(homeDir, ".tincan"), nil
+}
+
+func expandPath(path string) (string, error) {
+	if path == "~" || strings.HasPrefix(path, "~/") {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("resolve user home dir: %w", err)
+		}
+		if path == "~" {
+			return homeDir, nil
+		}
+		return filepath.Join(homeDir, strings.TrimPrefix(path, "~/")), nil
+	}
+	return path, nil
+}
+
+type unavailableRouter struct {
+	reason string
+}
+
+func (r unavailableRouter) RouteUserInput(_ tincanrouter.RouteUserInputRequest) (tincanrouter.RouteUserInputResult, error) {
+	return tincanrouter.RouteUserInputResult{}, fmt.Errorf("%s", r.reason)
 }
 
 func (s *server) handleHealth(w http.ResponseWriter, _ *http.Request) {

@@ -1,17 +1,17 @@
 package config
 
 import (
-	_ "embed"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 )
 
-//go:embed agent_profiles.json
-var agentProfilesJSON []byte
-
-//go:embed agent_backends.json
-var agentBackendsJSON []byte
+const (
+	agentProfilesFileName = "agent_profiles.json"
+	agentBackendsFileName = "agent_backends.json"
+)
 
 type AgentProfileStore struct {
 	profiles map[string]AgentProfile
@@ -21,9 +21,18 @@ type AgentBackendStore struct {
 	backends map[string]AgentBackendDefinition
 }
 
-func NewAgentProfileStore() (*AgentProfileStore, error) {
+func NewAgentProfileStore(dataDir string) (*AgentProfileStore, error) {
+	if err := ensureConfigFile(filepath.Join(dataDir, agentProfilesFileName), []byte("[]\n")); err != nil {
+		return nil, err
+	}
+
+	data, err := os.ReadFile(filepath.Join(dataDir, agentProfilesFileName))
+	if err != nil {
+		return nil, fmt.Errorf("read agent profiles: %w", err)
+	}
+
 	var decoded []AgentProfile
-	if err := json.Unmarshal(agentProfilesJSON, &decoded); err != nil {
+	if err := json.Unmarshal(data, &decoded); err != nil {
 		return nil, fmt.Errorf("decode agent profiles: %w", err)
 	}
 
@@ -48,10 +57,22 @@ func NewAgentProfileStore() (*AgentProfileStore, error) {
 	return &AgentProfileStore{profiles: profiles}, nil
 }
 
-func NewAgentBackendStore() (*AgentBackendStore, error) {
+func NewAgentBackendStore(dataDir string) (*AgentBackendStore, error) {
+	if err := ensureConfigFile(filepath.Join(dataDir, agentBackendsFileName), []byte("{}\n")); err != nil {
+		return nil, err
+	}
+
+	data, err := os.ReadFile(filepath.Join(dataDir, agentBackendsFileName))
+	if err != nil {
+		return nil, fmt.Errorf("read agent backends: %w", err)
+	}
+
 	var decoded map[string]AgentBackendDefinition
-	if err := json.Unmarshal(agentBackendsJSON, &decoded); err != nil {
+	if err := json.Unmarshal(data, &decoded); err != nil {
 		return nil, fmt.Errorf("decode agent backends: %w", err)
+	}
+	if decoded == nil {
+		decoded = map[string]AgentBackendDefinition{}
 	}
 
 	backends := make(map[string]AgentBackendDefinition, len(decoded))
@@ -102,4 +123,21 @@ func (s *AgentBackendStore) BackendBaseURL(name string) (string, bool) {
 		return "", false
 	}
 	return backend.Options.BaseURL, true
+}
+
+func ensureConfigFile(path string, defaultContents []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create config dir: %w", err)
+	}
+
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("stat config file %s: %w", path, err)
+	}
+
+	if err := os.WriteFile(path, defaultContents, 0o644); err != nil {
+		return fmt.Errorf("create config file %s: %w", path, err)
+	}
+	return nil
 }
