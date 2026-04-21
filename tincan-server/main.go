@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -21,8 +22,8 @@ import (
 	"github.com/google/uuid"
 	"tincan-server/agent_adapters"
 	"tincan-server/calls"
-	"tincan-server/controllers"
 	tincanconfig "tincan-server/config"
+	"tincan-server/controllers"
 	"tincan-server/conversations"
 	"tincan-server/db"
 	"tincan-server/output"
@@ -41,10 +42,6 @@ type server struct {
 	userInputController *controllers.UserInputController
 	hookController      *controllers.HookController
 	outputPublisher     *output.Publisher
-}
-
-type pendingUpdateResponse struct {
-	Updates []conversations.ConversationUpdate `json:"updates"`
 }
 
 type inferenceEnvelope struct {
@@ -104,13 +101,9 @@ func main() {
 		}
 	}()
 	mux := http.NewServeMux()
-	mux.HandleFunc("/health", srv.handleHealth)
 	mux.HandleFunc("/healthz", srv.handleHealth)
 	mux.HandleFunc("/speak", srv.handleSpeakPage)
-	mux.HandleFunc("/debug/audio/processing", srv.handleProcessingAudio)
 	mux.HandleFunc("/debug/audio/generated/", srv.handleGeneratedAudio)
-	mux.HandleFunc("/updates/pending", srv.handlePendingUpdates)
-	mux.HandleFunc("/updates/", srv.handleUpdateActions)
 	mux.HandleFunc("/hooks/opencode", srv.handleOpenCodeHook)
 	mux.HandleFunc("/session/", srv.handleSessionControl)
 	srv.linphoneServer.RegisterRoutes(mux)
@@ -230,25 +223,6 @@ func (s *server) handleSpeakPage(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(speakPageHTML))
 }
 
-func (s *server) handleProcessingAudio(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	audioPath := filepath.Join("assets", "audio", "hold_on_processing_1.wav")
-	audioData, err := os.ReadFile(audioPath)
-	if err != nil {
-		http.Error(w, "audio asset not found", http.StatusNotFound)
-		return
-	}
-
-	w.Header().Set("Content-Type", "audio/wav")
-	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(audioData)))
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(audioData)
-}
-
 func (s *server) handleGeneratedAudio(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -278,40 +252,6 @@ func (s *server) handleGeneratedAudio(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(audioData)))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(audioData)
-}
-
-func (s *server) handlePendingUpdates(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	updates, err := s.conversations.ListPendingUpdates(20)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("failed to list pending updates: %v", err), http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, http.StatusOK, pendingUpdateResponse{Updates: updates})
-}
-
-func (s *server) handleUpdateActions(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	path := strings.TrimPrefix(r.URL.Path, "/updates/")
-	parts := strings.Split(path, "/")
-	if len(parts) != 2 || parts[1] != "consume" {
-		http.NotFound(w, r)
-		return
-	}
-
-	if err := s.conversations.ConsumeUpdate(parts[0]); err != nil {
-		http.Error(w, fmt.Sprintf("failed to consume update: %v", err), http.StatusInternalServerError)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *server) handleOpenCodeHook(w http.ResponseWriter, r *http.Request) {
@@ -528,7 +468,7 @@ func (c *inferenceClient) synthesize(text string) ([]byte, error) {
 	}
 
 	if response.Header.Kind == "error" {
-		return nil, fmt.Errorf(response.Header.Message)
+		return nil, errors.New(response.Header.Message)
 	}
 	if response.Header.Kind != "result" || response.Header.Action != "tts" {
 		return nil, fmt.Errorf("unexpected tts response: %+v", response.Header)
@@ -570,7 +510,7 @@ func (c *inferenceClient) transcribeOnce(audioData []byte, contentType string) (
 	}
 
 	if response.Header.Kind == "error" {
-		return "", fmt.Errorf(response.Header.Message)
+		return "", errors.New(response.Header.Message)
 	}
 
 	if response.Header.Kind != "result" || response.Header.Action != "stt" {

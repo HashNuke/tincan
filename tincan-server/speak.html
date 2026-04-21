@@ -155,7 +155,6 @@
       <button id="connectButton">Connect</button>
       <button id="disconnectButton" disabled>Disconnect</button>
       <button id="talkButton" disabled>Start Speaking</button>
-      <button id="playServerAudioButton">Play Server Audio</button>
     </div>
     <div class="meta" id="meta">Waiting to connect.</div>
     <audio id="remoteAudio" autoplay controls style="width:100%; margin-top: 12px;"></audio>
@@ -180,7 +179,6 @@
     const connectButton = document.getElementById('connectButton')
     const disconnectButton = document.getElementById('disconnectButton')
     const talkButton = document.getElementById('talkButton')
-    const playServerAudioButton = document.getElementById('playServerAudioButton')
     const statusEl = document.getElementById('status')
     const metaEl = document.getElementById('meta')
     const historyListEl = document.getElementById('historyList')
@@ -733,17 +731,6 @@
 
     talkButton.addEventListener('click', () => {
       setSpeaking(!isHoldingPushToTalk)
-    })
-
-    playServerAudioButton.addEventListener('click', async () => {
-      const audio = new Audio('/debug/audio/processing')
-      try {
-        await audio.play()
-        setMeta('Playing bundled server audio test.')
-      } catch (error) {
-        console.error(error)
-        setMeta('Server audio playback failed: ' + (error instanceof Error ? error.message : String(error)))
-      }
     })
 
     window.addEventListener('keydown', (event) => {

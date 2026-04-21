@@ -268,7 +268,6 @@ func (a *OpencodeAdapter) RunRouterPrompt(backend tincanconfig.AgentBackendDefin
 	if result.Action == "" {
 		return tincanrouter.RouteUserInputResult{}, fmt.Errorf("router response missing action")
 	}
-	result.RawTranscript = rawTranscript
 	return result, nil
 }
 

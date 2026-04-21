@@ -93,9 +93,9 @@ func (c *UserInputController) HandleTranscript(sessionID string, transcript stri
 	}
 	result.OutputEvents = append(result.OutputEvents, dispatchResult.OutputEvents...)
 
-	if conversationValue, ok := result.ResponseBody["conversation"]; ok && strings.TrimSpace(routeResult.UpdatedConversationNotes) != "" {
+	if conversationValue, ok := result.ResponseBody["conversation"]; ok && strings.TrimSpace(routeResult.ConversationNotes) != "" {
 		if conversation, ok := conversationValue.(ConversationCreateResult); ok {
-			if _, err := c.Conversations.UpsertConversationNotes(conversation.ID, routeResult.UpdatedConversationNotes); err != nil {
+			if _, err := c.Conversations.UpsertConversationNotes(conversation.ID, routeResult.ConversationNotes); err != nil {
 				return HandleResult{}, err
 			}
 		}
