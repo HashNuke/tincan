@@ -8,6 +8,7 @@ import (
 
 	"tincan-server/conversations"
 	"tincan-server/output"
+	tincanrouter "tincan-server/router"
 )
 
 type fakeHookSessionResolver struct {
@@ -32,7 +33,18 @@ func (f fakeHookBackendLookup) BackendBaseURL(name string) (string, bool) {
 	return f.baseURL, true
 }
 
-func TestHookControllerSessionIdleEmitsNotificationDetailText(t *testing.T) {
+type fakeHookUpdateProcessor struct {
+	result tincanrouter.ProcessConversationUpdateResult
+	err    error
+	input  tincanrouter.ProcessConversationUpdateRequest
+}
+
+func (f *fakeHookUpdateProcessor) ProcessConversationUpdate(input tincanrouter.ProcessConversationUpdateRequest) (tincanrouter.ProcessConversationUpdateResult, error) {
+	f.input = input
+	return f.result, f.err
+}
+
+func TestHookControllerSessionIdleEmitsProcessedNotificationAndSummary(t *testing.T) {
 	messageServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/session/backend-1/message" {
 			t.Fatalf("unexpected message path: %s", r.URL.Path)
@@ -55,6 +67,13 @@ func TestHookControllerSessionIdleEmitsNotificationDetailText(t *testing.T) {
 	}))
 	defer messageServer.Close()
 
+	processor := &fakeHookUpdateProcessor{
+		result: tincanrouter.ProcessConversationUpdateResult{
+			NotificationText: "I finished the task.",
+			SummaryText:      "I finished the build work and all tests passed.",
+		},
+	}
+
 	store := newTestConversationStore(t)
 	conversation := createTestConversation(t, store, conversations.Conversation{
 		ID:                    "conv-1",
@@ -68,9 +87,10 @@ func TestHookControllerSessionIdleEmitsNotificationDetailText(t *testing.T) {
 	})
 
 	controller := &HookController{
-		Conversations: store,
-		Backends:      fakeHookBackendLookup{baseURL: messageServer.URL},
-		Sessions:      fakeHookSessionResolver{sessionID: "session-1"},
+		Conversations:   store,
+		Backends:        fakeHookBackendLookup{baseURL: messageServer.URL},
+		Sessions:        fakeHookSessionResolver{sessionID: "session-1"},
+		UpdateProcessor: processor,
 	}
 
 	result, handled, err := controller.HandleOpenCodeHook(OpenCodeHookEvent{
@@ -91,11 +111,17 @@ func TestHookControllerSessionIdleEmitsNotificationDetailText(t *testing.T) {
 	if event.Kind != output.KindNotification {
 		t.Fatalf("expected notification output, got %q", event.Kind)
 	}
-	if event.Text != "emma#14 has an update." {
+	if event.Text != "I finished the task." {
 		t.Fatalf("unexpected notification text: %q", event.Text)
 	}
-	if event.DetailText != "The build finished and all tests passed." {
-		t.Fatalf("unexpected notification detail text: %q", event.DetailText)
+	if event.SummaryText != "I finished the build work and all tests passed." {
+		t.Fatalf("unexpected notification summary text: %q", event.SummaryText)
+	}
+	if processor.input.ConversationHandle != "emma#14" {
+		t.Fatalf("unexpected processor handle: %q", processor.input.ConversationHandle)
+	}
+	if processor.input.DetailText != "The build finished and all tests passed." {
+		t.Fatalf("unexpected processor detail text: %q", processor.input.DetailText)
 	}
 
 	update, ok, err := store.GetLatestPendingUpdateByConversationID(conversation.ID)
@@ -105,7 +131,13 @@ func TestHookControllerSessionIdleEmitsNotificationDetailText(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected pending update to be stored")
 	}
-	if update.SummaryText != "The build finished and all tests passed." {
+	if update.NotificationText != "I finished the task." {
+		t.Fatalf("unexpected stored notification text: %q", update.NotificationText)
+	}
+	if update.SummaryText != "I finished the build work and all tests passed." {
 		t.Fatalf("unexpected stored summary text: %q", update.SummaryText)
+	}
+	if update.DetailText != "The build finished and all tests passed." {
+		t.Fatalf("unexpected stored detail text: %q", update.DetailText)
 	}
 }

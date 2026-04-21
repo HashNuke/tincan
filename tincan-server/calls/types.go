@@ -20,11 +20,11 @@ type PlayAudioEvent struct {
 }
 
 type NotifyEvent struct {
-	Type           string `json:"type"`
-	Text           string `json:"text,omitempty"`
-	AudioURL       string `json:"audio_url,omitempty"`
-	DetailText     string `json:"detail_text,omitempty"`
-	DetailAudioURL string `json:"detail_audio_url,omitempty"`
+	Type            string `json:"type"`
+	Text            string `json:"text,omitempty"`
+	AudioURL        string `json:"audio_url,omitempty"`
+	SummaryText     string `json:"summary_text,omitempty"`
+	SummaryAudioURL string `json:"summary_audio_url,omitempty"`
 }
 
 func NewPlayAudioEvent(text string, url string) PlayAudioEvent {
@@ -35,12 +35,12 @@ func NewPlayAudioEvent(text string, url string) PlayAudioEvent {
 	}
 }
 
-func NewNotifyEvent(text string, audioURL string, detailText string, detailAudioURL string) NotifyEvent {
+func NewNotifyEvent(text string, audioURL string, summaryText string, summaryAudioURL string) NotifyEvent {
 	return NotifyEvent{
-		Type:           "notify",
-		Text:           text,
-		AudioURL:       audioURL,
-		DetailText:     detailText,
-		DetailAudioURL: detailAudioURL,
+		Type:            "notify",
+		Text:            text,
+		AudioURL:        audioURL,
+		SummaryText:     summaryText,
+		SummaryAudioURL: summaryAudioURL,
 	}
 }

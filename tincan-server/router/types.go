@@ -23,3 +23,13 @@ type RouteUserInputResult struct {
 	ConversationNotes  string `json:"conversation_notes,omitempty"`
 	ImmediateFeedback  string `json:"immediate_feedback,omitempty"`
 }
+
+type ProcessConversationUpdateRequest struct {
+	ConversationHandle string `json:"conversation_handle,omitempty"`
+	DetailText         string `json:"detail_text"`
+}
+
+type ProcessConversationUpdateResult struct {
+	NotificationText string `json:"notification_text,omitempty"`
+	SummaryText      string `json:"summary_text,omitempty"`
+}

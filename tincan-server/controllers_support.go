@@ -61,14 +61,14 @@ func (r callAudioRenderer) PlaySpeech(sessionID string, text string) error {
 	return nil
 }
 
-func (r callAudioRenderer) NotifySpeech(sessionID string, text string, detailText string) error {
+func (r callAudioRenderer) NotifySpeech(sessionID string, text string, summaryText string) error {
 	if r.server == nil {
 		return nil
 	}
 	notificationText := strings.TrimSpace(text)
-	detailedText := strings.TrimSpace(detailText)
+	spokenSummary := strings.TrimSpace(summaryText)
 	if notificationText == "" {
-		notificationText = detailedText
+		notificationText = spokenSummary
 	}
 	if notificationText == "" {
 		return nil
@@ -79,17 +79,17 @@ func (r callAudioRenderer) NotifySpeech(sessionID string, text string, detailTex
 		return err
 	}
 
-	detailAudioURL := audioURL
-	if detailedText == "" {
-		detailedText = notificationText
-	} else if detailedText != notificationText {
-		detailAudioURL, err = r.server.generateFeedbackAudio(detailedText)
+	summaryAudioURL := audioURL
+	if spokenSummary == "" {
+		spokenSummary = notificationText
+	} else if spokenSummary != notificationText {
+		summaryAudioURL, err = r.server.generateFeedbackAudio(spokenSummary)
 		if err != nil {
 			return err
 		}
 	}
 
-	r.server.sendSessionEvent(sessionID, calls.NewNotifyEvent(notificationText, audioURL, detailedText, detailAudioURL))
+	r.server.sendSessionEvent(sessionID, calls.NewNotifyEvent(notificationText, audioURL, spokenSummary, summaryAudioURL))
 	return nil
 }
 

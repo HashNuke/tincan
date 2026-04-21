@@ -177,6 +177,7 @@ func TestUserInputControllerReadConversationUpdateConsumesPendingUpdate(t *testi
 		ConversationID:     conversation.ID,
 		ConversationHandle: conversation.DisplayHandle,
 		SummaryText:        "Build is green now.",
+		DetailText:         "Build is green now, the flaky auth test is fixed, and I committed the change.",
 		NotificationText:   "emma#10 has an update.",
 		RawUpdateJSON:      `{"ok":true}`,
 		Status:             "pending",
@@ -190,7 +191,7 @@ func TestUserInputControllerReadConversationUpdateConsumesPendingUpdate(t *testi
 
 	router := &fakeRouter{
 		result: tincanrouter.RouteUserInputResult{
-			Action:            "read_conversation_update",
+			Action:             "read_conversation_update",
 			ConversationHandle: "emma 10",
 		},
 	}
@@ -208,6 +209,13 @@ func TestUserInputControllerReadConversationUpdateConsumesPendingUpdate(t *testi
 
 	if got := result.ResponseBody["resolved_conversation_handle"]; got != "emma#10" {
 		t.Fatalf("expected resolved handle emma#10, got %#v", got)
+	}
+	storedUpdate, ok := result.ResponseBody["update"].(conversations.ConversationUpdate)
+	if !ok {
+		t.Fatalf("expected response body update, got %#v", result.ResponseBody["update"])
+	}
+	if storedUpdate.DetailText != "Build is green now, the flaky auth test is fixed, and I committed the change." {
+		t.Fatalf("unexpected update detail text: %q", storedUpdate.DetailText)
 	}
 	if len(result.OutputEvents) != 1 || result.OutputEvents[0].Kind != output.KindUpdateSummary {
 		t.Fatalf("expected one update summary event, got %+v", result.OutputEvents)

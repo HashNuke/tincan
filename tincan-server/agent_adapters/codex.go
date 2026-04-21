@@ -50,3 +50,10 @@ func (a *CodexAdapter) RunRouterPrompt(backend tincanconfig.AgentBackendDefiniti
 	}
 	return tincanrouter.RouteUserInputResult{}, fmt.Errorf("codex adapter is not implemented yet")
 }
+
+func (a *CodexAdapter) RunConversationUpdatePrompt(backend tincanconfig.AgentBackendDefinition, prompt string, rawUpdate string) (tincanrouter.ProcessConversationUpdateResult, error) {
+	if err := a.ValidateBackend("__router__", backend); err != nil {
+		return tincanrouter.ProcessConversationUpdateResult{}, err
+	}
+	return tincanrouter.ProcessConversationUpdateResult{}, fmt.Errorf("codex adapter is not implemented yet")
+}

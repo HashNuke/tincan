@@ -65,6 +65,15 @@ CREATE INDEX IF NOT EXISTS idx_conversation_updates_status ON conversation_updat
 `,
 		},
 		{
+			name: "2026_04_21_add_detail_text_to_conversation_updates",
+			sql: `
+ALTER TABLE conversation_updates ADD COLUMN detail_text TEXT NOT NULL DEFAULT '';
+UPDATE conversation_updates
+SET detail_text = summary_text
+WHERE detail_text = '';
+`,
+		},
+		{
 			name: "2026_04_20_create_conversation_notes",
 			sql: `
 CREATE TABLE IF NOT EXISTS conversation_notes (

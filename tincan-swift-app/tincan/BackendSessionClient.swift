@@ -28,30 +28,30 @@ struct BackendSessionClient {
 
     enum ServerEvent {
         case playAudio(text: String, urlPath: String)
-        case notify(text: String, audioURLPath: String?, detailText: String?, detailAudioURLPath: String?)
+        case notify(text: String, audioURLPath: String?, summaryText: String?, summaryAudioURLPath: String?)
     }
 
     static func notificationPlaybackChoice(
         text: String,
         audioURLPath: String?,
-        detailText: String?,
-        detailAudioURLPath: String?,
+        summaryText: String?,
+        summaryAudioURLPath: String?,
         isAudioPlaying: Bool
     ) -> NotificationPlaybackChoice {
         let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedDetailText = detailText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let trimmedSummaryText = summaryText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let normalizedAudioURLPath = audioURLPath?.isEmpty == true ? nil : audioURLPath
-        let normalizedDetailAudioURLPath = detailAudioURLPath?.isEmpty == true ? nil : detailAudioURLPath
+        let normalizedSummaryAudioURLPath = summaryAudioURLPath?.isEmpty == true ? nil : summaryAudioURLPath
 
-        if !isAudioPlaying, !trimmedDetailText.isEmpty {
+        if !isAudioPlaying, !trimmedSummaryText.isEmpty {
             return NotificationPlaybackChoice(
-                text: trimmedDetailText,
-                audioURLPath: normalizedDetailAudioURLPath ?? normalizedAudioURLPath
+                text: trimmedSummaryText,
+                audioURLPath: normalizedSummaryAudioURLPath ?? normalizedAudioURLPath
             )
         }
 
         return NotificationPlaybackChoice(
-            text: trimmedText.isEmpty ? trimmedDetailText : trimmedText,
+            text: trimmedText.isEmpty ? trimmedSummaryText : trimmedText,
             audioURLPath: normalizedAudioURLPath
         )
     }
@@ -155,13 +155,13 @@ struct BackendSessionClient {
         case "notify":
             let text = json["text"] as? String ?? ""
             let audioURLPath = json["audio_url"] as? String
-            let detailText = json["detail_text"] as? String
-            let detailAudioURLPath = json["detail_audio_url"] as? String
+            let summaryText = (json["summary_text"] as? String) ?? (json["detail_text"] as? String)
+            let summaryAudioURLPath = (json["summary_audio_url"] as? String) ?? (json["detail_audio_url"] as? String)
             return .notify(
                 text: text,
                 audioURLPath: audioURLPath,
-                detailText: detailText,
-                detailAudioURLPath: detailAudioURLPath
+                summaryText: summaryText,
+                summaryAudioURLPath: summaryAudioURLPath
             )
         default:
             return nil

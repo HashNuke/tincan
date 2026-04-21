@@ -8,9 +8,9 @@ type fakeCallAudioRenderer struct {
 }
 
 type renderCall struct {
-	sessionID  string
-	text       string
-	detailText string
+	sessionID   string
+	text        string
+	summaryText string
 }
 
 func (f *fakeCallAudioRenderer) PlaySpeech(sessionID string, text string) error {
@@ -18,8 +18,8 @@ func (f *fakeCallAudioRenderer) PlaySpeech(sessionID string, text string) error 
 	return nil
 }
 
-func (f *fakeCallAudioRenderer) NotifySpeech(sessionID string, text string, detailText string) error {
-	f.notifyCalls = append(f.notifyCalls, renderCall{sessionID: sessionID, text: text, detailText: detailText})
+func (f *fakeCallAudioRenderer) NotifySpeech(sessionID string, text string, summaryText string) error {
+	f.notifyCalls = append(f.notifyCalls, renderCall{sessionID: sessionID, text: text, summaryText: summaryText})
 	return nil
 }
 
@@ -32,7 +32,7 @@ func TestCallAudioListenerRoutesKindsToCorrectRendererMethod(t *testing.T) {
 		{SessionID: "s1", Kind: KindClarificationQuestion, Text: "Which one?"},
 		{SessionID: "s1", Kind: KindUpdateSummary, Text: "The build passed."},
 		{SessionID: "s1", Kind: KindContextSwitch, Text: "Switched to emma#2."},
-		{SessionID: "s1", Kind: KindNotification, Text: "emma#2 has an update.", DetailText: "The build passed."},
+		{SessionID: "s1", Kind: KindNotification, Text: "I have an update.", SummaryText: "The build passed."},
 	}
 
 	for _, event := range events {
@@ -47,11 +47,11 @@ func TestCallAudioListenerRoutesKindsToCorrectRendererMethod(t *testing.T) {
 	if len(renderer.notifyCalls) != 1 {
 		t.Fatalf("expected 1 notify call, got %d", len(renderer.notifyCalls))
 	}
-	if renderer.notifyCalls[0].text != "emma#2 has an update." {
+	if renderer.notifyCalls[0].text != "I have an update." {
 		t.Fatalf("unexpected notify text: %q", renderer.notifyCalls[0].text)
 	}
-	if renderer.notifyCalls[0].detailText != "The build passed." {
-		t.Fatalf("unexpected notify detail text: %q", renderer.notifyCalls[0].detailText)
+	if renderer.notifyCalls[0].summaryText != "The build passed." {
+		t.Fatalf("unexpected notify summary text: %q", renderer.notifyCalls[0].summaryText)
 	}
 }
 

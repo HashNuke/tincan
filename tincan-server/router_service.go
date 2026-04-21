@@ -28,6 +28,15 @@ func (r *Router) RouteUserInput(input tincanrouter.RouteUserInputRequest) (tinca
 	return result, nil
 }
 
+func (r *Router) ProcessConversationUpdate(input tincanrouter.ProcessConversationUpdateRequest) (tincanrouter.ProcessConversationUpdateResult, error) {
+	prompt := r.buildConversationUpdatePrompt(input)
+	result, err := r.adapter.RunConversationUpdatePrompt(r.backend, prompt, input.DetailText)
+	if err != nil {
+		return tincanrouter.ProcessConversationUpdateResult{}, fmt.Errorf("process conversation update: %w", err)
+	}
+	return result, nil
+}
+
 func (r *Router) buildUserRouterPrompt(input tincanrouter.RouteUserInputRequest) string {
 	var profileNames []string
 	for _, profile := range r.profiles.List() {
@@ -115,4 +124,37 @@ Unresolved clarification history:
 
 User transcript:
 ` + input.Transcript)
+}
+
+func (r *Router) buildConversationUpdatePrompt(input tincanrouter.ProcessConversationUpdateRequest) string {
+	return strings.TrimSpace(`You are the Tincan conversation update processor.
+
+Your job is to turn a full agent update into two short audio-friendly strings.
+Return JSON only. Do not wrap the response in markdown.
+
+Response schema:
+{
+  "notification_text": string,
+  "summary_text": string
+}
+
+Rules:
+- notification_text should be short, first-person, and immediately useful when spoken aloud.
+- notification_text should usually be 2-8 words.
+- notification_text should reflect state when possible, for example: "I have an update.", "I need more info.", "I hit an issue.", "I finished the task.", "I need approval."
+- summary_text should be a concise spoken summary, usually 1-2 short sentences.
+- summary_text should stay brief enough for audio. Aim for roughly 12-35 words.
+- summary_text should focus on the outcome, blocker, or next action rather than implementation trivia.
+- If the full update asks the user a question or requests missing information, make notification_text indicate that.
+- If the full update reports completion, make notification_text indicate completion.
+- If the full update reports a blocker, failure, or issue, make notification_text indicate that.
+- Do not use markdown, bullets, code fences, or file dumps.
+- Do not mention the conversation handle unless it is necessary for clarity.
+- Return valid JSON only.
+
+Conversation handle:
+` + input.ConversationHandle + `
+
+Full update:
+` + input.DetailText)
 }

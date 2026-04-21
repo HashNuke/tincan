@@ -168,6 +168,7 @@ func (s *Store) UpsertPendingUpdate(update ConversationUpdate) (ConversationUpda
 	}
 
 	changed := existing.SummaryText != update.SummaryText ||
+		existing.DetailText != update.DetailText ||
 		existing.NotificationText != update.NotificationText ||
 		existing.RawUpdateJSON != update.RawUpdateJSON ||
 		existing.Status != "pending" ||
@@ -177,6 +178,7 @@ func (s *Store) UpsertPendingUpdate(update ConversationUpdate) (ConversationUpda
 	}
 
 	existing.SummaryText = update.SummaryText
+	existing.DetailText = update.DetailText
 	existing.NotificationText = update.NotificationText
 	existing.RawUpdateJSON = update.RawUpdateJSON
 	existing.Status = "pending"

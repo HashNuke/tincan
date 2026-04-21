@@ -195,9 +195,10 @@ func newServer() (*server, error) {
 			ConversationSend:   conversationMessenger{service: conversationService},
 		},
 		hookController: &controllers.HookController{
-			Conversations: conversationStore,
-			Backends:      backends,
-			Sessions:      callManager,
+			Conversations:   conversationStore,
+			Backends:        backends,
+			Sessions:        callManager,
+			UpdateProcessor: routerService,
 		},
 	}
 	srv.outputPublisher = output.NewPublisher(output.CallAudioListener{

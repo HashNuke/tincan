@@ -26,6 +26,7 @@ type ConversationUpdate struct {
 	ConversationID     string     `gorm:"column:conversation_id;not null;index:idx_conversation_updates_conversation"`
 	ConversationHandle string     `gorm:"column:conversation_handle;not null;index:idx_conversation_updates_handle"`
 	SummaryText        string     `gorm:"column:summary_text;not null"`
+	DetailText         string     `gorm:"column:detail_text;not null"`
 	NotificationText   string     `gorm:"column:notification_text;not null"`
 	RawUpdateJSON      string     `gorm:"column:raw_update_json"`
 	Status             string     `gorm:"column:status;not null;index:idx_conversation_updates_status"`
