@@ -5,120 +5,159 @@ struct MacOnboardingView: View {
     @ObservedObject var viewModel: MacOnboardingViewModel
 
     var body: some View {
-        Group {
-            switch viewModel.step {
-            case .preflight:
-                preflightView
-            case .agents:
-                agentSetupView
+        TincanCanvas {
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 20) {
+                    switch viewModel.step {
+                    case .preflight:
+                        preflightView
+                    case .agents:
+                        agentSetupView
+                    }
+                }
+                .frame(maxWidth: 920)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 18)
             }
         }
-        .padding(24)
-        .frame(minWidth: 760, minHeight: 560)
+        .frame(minWidth: 860, minHeight: 680)
     }
 
     private var preflightView: some View {
-        VStack(alignment: .leading, spacing: 24) {
+        VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Set up tincan")
-                    .font(.largeTitle.weight(.bold))
+                    .font(.system(size: 34, weight: .heavy, design: .rounded))
+                    .foregroundStyle(TincanPalette.textPrimary)
 
-                Text("tincan will run its own server on this Mac. First, confirm that OpenCode is installed.")
-                    .foregroundStyle(.secondary)
+                Text("This Mac becomes the always-on call surface for routing speech into your coding agents.")
+                    .font(.system(size: 15, weight: .medium, design: .rounded))
+                    .foregroundStyle(TincanPalette.textSecondary)
             }
 
-            GroupBox {
+            TincanSettingsSectionCard(title: "OpenCode preflight") {
                 VStack(alignment: .leading, spacing: 16) {
-                    HStack(spacing: 12) {
+                    HStack(alignment: .top, spacing: 12) {
                         Image(systemName: statusImageName)
-                            .font(.title2)
-                            .foregroundStyle(statusColor)
+                            .font(.system(size: 20, weight: .bold))
+                            .foregroundStyle(statusTone)
 
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(statusTitle)
-                                .font(.headline)
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack(spacing: 8) {
+                                TincanCapsuleTag(text: statusTitle.lowercased(), tone: statusTone)
+                                if viewModel.isCheckingOpencode {
+                                    TincanCapsuleTag(text: "checking", tone: TincanPalette.panelRaised, filled: false)
+                                }
+                            }
+
                             Text(statusMessage)
-                                .foregroundStyle(.secondary)
+                                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                                .foregroundStyle(TincanPalette.textPrimary)
                         }
                     }
 
                     if let path = viewModel.opencodePath {
-                        detailRow(label: "Path", value: path)
+                        detailRow(label: "Path", value: path, truncateMiddle: true)
                     }
 
                     if !viewModel.availableModels(for: .opencode).isEmpty {
                         detailRow(
                             label: "Models",
-                            value: "\(viewModel.availableModels(for: .opencode).count) available"
+                            value: "\(viewModel.availableModels(for: .opencode).count) discovered"
                         )
                     }
 
                     if let preflightErrorMessage = viewModel.preflightErrorMessage {
-                        Text(preflightErrorMessage)
-                            .foregroundStyle(.red)
+                        errorBanner(preflightErrorMessage)
                     }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.vertical, 4)
-            }
 
-            Spacer()
+                    HStack(spacing: 10) {
+                        TincanToolbarButton(
+                            label: "check again",
+                            systemImage: "arrow.clockwise",
+                            tone: TincanPalette.panelRaised,
+                            action: viewModel.refreshOpenCodeStatus
+                        )
+                        .disabled(viewModel.isCheckingOpencode)
 
-            HStack {
-                Button("Check Again") {
-                    viewModel.refreshOpenCodeStatus()
-                }
-                .disabled(viewModel.isCheckingOpencode)
-
-                Spacer()
-
-                if viewModel.canContinueFromPreflight {
-                    Button("Next") {
-                        viewModel.continueToAgentSetup()
+                        if viewModel.canContinueFromPreflight {
+                            TincanToolbarButton(
+                                label: "next",
+                                systemImage: "arrow.right",
+                                tone: TincanTone.mint.accent,
+                                foreground: TincanPalette.textOnAccent,
+                                action: viewModel.continueToAgentSetup
+                            )
+                        }
                     }
-                    .buttonStyle(.borderedProminent)
                 }
             }
         }
     }
 
     private var agentSetupView: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            HStack {
-                VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 8) {
                     Text("Agent profiles")
-                        .font(.largeTitle.weight(.bold))
+                        .font(.system(size: 34, weight: .heavy, design: .rounded))
+                        .foregroundStyle(TincanPalette.textPrimary)
 
-                    Text("Atlas is included by default. Add more agents only if you need them.")
-                        .foregroundStyle(.secondary)
+                    Text("Atlas ships first. Add extra profiles only if you actually need separate working directories or backends.")
+                        .font(.system(size: 15, weight: .medium, design: .rounded))
+                        .foregroundStyle(TincanPalette.textSecondary)
                 }
 
                 Spacer()
 
-                Button("Back") {
-                    viewModel.returnToPreflight()
-                }
+                TincanToolbarButton(
+                    label: "back",
+                    systemImage: "chevron.left",
+                    tone: TincanPalette.panelRaised,
+                    action: viewModel.returnToPreflight
+                )
             }
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    atlasCard
-
+            TincanSettingsSectionCard(title: "Default agent") {
+                VStack(alignment: .leading, spacing: 12) {
                     HStack {
-                        Text("Additional agents")
-                            .font(.headline)
+                        Text("Atlas")
+                            .font(.system(size: 18, weight: .bold, design: .rounded))
+                            .foregroundStyle(TincanPalette.textPrimary)
 
                         Spacer()
 
-                        Button("Add Agent") {
-                            viewModel.addAgent()
-                        }
+                        TincanCapsuleTag(text: "included", tone: TincanTone.mint.accent)
+                    }
+
+                    detailRow(label: "Agent backend", value: viewModel.atlasBackend.displayName)
+                    detailRow(label: "Agent folder", value: viewModel.atlasAgentFolder, truncateMiddle: true)
+                    detailRow(label: "Model", value: viewModel.atlasModel.isEmpty ? "Waiting for OpenCode" : viewModel.atlasModel)
+                }
+            }
+
+            TincanSettingsSectionCard(title: "Additional agents") {
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack {
+                        Text("These become extra server-side profiles after onboarding.")
+                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                            .foregroundStyle(TincanPalette.textMuted)
+
+                        Spacer()
+
+                        TincanToolbarButton(
+                            label: "add agent",
+                            systemImage: "plus",
+                            tone: TincanPalette.panelRaised,
+                            action: viewModel.addAgent
+                        )
                     }
 
                     if viewModel.additionalAgents.isEmpty {
                         Text("No extra agents yet.")
-                            .foregroundStyle(.secondary)
-                            .padding(.vertical, 8)
+                            .font(.system(size: 13, weight: .medium, design: .rounded))
+                            .foregroundStyle(TincanPalette.textSecondary)
+                            .padding(.vertical, 4)
                     } else {
                         ForEach(viewModel.additionalAgents) { draft in
                             EditableAgentCard(
@@ -142,67 +181,58 @@ struct MacOnboardingView: View {
                         }
                     }
                 }
-                .padding(.vertical, 4)
             }
 
             if let saveErrorMessage = viewModel.saveErrorMessage {
-                Text(saveErrorMessage)
-                    .foregroundStyle(.red)
+                errorBanner(saveErrorMessage)
             }
 
             HStack {
                 Text("Config will be written to \(AppPaths.generatedConfigDirectory.path)")
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(TincanPalette.textMuted)
                     .lineLimit(1)
                     .truncationMode(.middle)
 
                 Spacer()
 
-                Button(viewModel.isSaving ? "Saving..." : "Save Config") {
-                    viewModel.completeOnboarding()
-                }
-                .buttonStyle(.borderedProminent)
+                TincanToolbarButton(
+                    label: viewModel.isSaving ? "saving" : "save config",
+                    systemImage: "checkmark.circle.fill",
+                    tone: TincanTone.mint.accent,
+                    foreground: TincanPalette.textOnAccent,
+                    action: viewModel.completeOnboarding
+                )
                 .disabled(!viewModel.canSaveAgents || viewModel.isSaving)
             }
-        }
-    }
-
-    private var atlasCard: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    Text("Atlas")
-                        .font(.headline)
-                    Spacer()
-                    Text("Included")
-                        .font(.caption.weight(.semibold))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
-                        .background(Color.accentColor.opacity(0.12), in: Capsule())
-                }
-
-                detailRow(label: "Agent backend", value: viewModel.atlasBackend.displayName)
-                detailRow(label: "Agent folder", value: viewModel.atlasAgentFolder, truncateMiddle: true)
-                detailRow(label: "Model", value: viewModel.atlasModel.isEmpty ? "Waiting for OpenCode" : viewModel.atlasModel)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 4)
-        } label: {
-            Text("Default agent")
         }
     }
 
     private func detailRow(label: String, value: String, truncateMiddle: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(label)
-                .font(.subheadline.weight(.semibold))
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .foregroundStyle(TincanPalette.textMuted)
 
             Text(value)
-                .foregroundStyle(.secondary)
+                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                .foregroundStyle(TincanPalette.textPrimary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .lineLimit(1)
                 .truncationMode(truncateMiddle ? .middle : .tail)
         }
+    }
+
+    private func errorBanner(_ message: String) -> some View {
+        Text(message)
+            .font(.system(size: 11, weight: .medium, design: .monospaced))
+            .foregroundStyle(TincanTone.coral.accent)
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(TincanTone.coral.tint.opacity(0.5))
+            )
     }
 
     private var statusImageName: String {
@@ -215,22 +245,22 @@ struct MacOnboardingView: View {
         return "exclamationmark.triangle.fill"
     }
 
-    private var statusColor: Color {
+    private var statusTone: Color {
         if viewModel.isCheckingOpencode {
-            return .secondary
+            return TincanPalette.textSecondary
         }
         if viewModel.canContinueFromPreflight {
-            return .green
+            return TincanTone.mint.accent
         }
-        return .orange
+        return TincanTone.amber.accent
     }
 
     private var statusTitle: String {
         if viewModel.isCheckingOpencode {
-            return "Checking for OpenCode"
+            return "Checking OpenCode"
         }
         if viewModel.canContinueFromPreflight {
-            return "Found OpenCode"
+            return "OpenCode ready"
         }
         return "OpenCode not ready"
     }
@@ -240,7 +270,7 @@ struct MacOnboardingView: View {
             return "Looking for `opencode` on PATH and reading the available models."
         }
         if viewModel.canContinueFromPreflight {
-            return "OpenCode is installed and will be used for Atlas and any agents you add here."
+            return "OpenCode is installed and ready to back Atlas plus any extra agents you add."
         }
         return "Install OpenCode, then run the check again."
     }
@@ -279,68 +309,78 @@ private struct EditableAgentCard: View {
     let onFolderChange: (String) -> Void
 
     var body: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack {
-                    Text(draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "New agent" : draft.name)
-                        .font(.headline)
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text(draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "New agent" : draft.name)
+                    .font(.system(size: 16, weight: .bold, design: .rounded))
+                    .foregroundStyle(TincanPalette.textPrimary)
 
-                    Spacer()
+                Spacer()
 
-                    Button("Remove", role: .destructive) {
-                        onRemove()
-                    }
-                }
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Name")
-                        .font(.subheadline.weight(.semibold))
-                    TextField("Emma", text: $draft.name)
-                        .textFieldStyle(.roundedBorder)
-                }
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Agent backend")
-                        .font(.subheadline.weight(.semibold))
-                    Picker("Agent backend", selection: $draft.backend) {
-                        ForEach(availableBackends) { backend in
-                            Text(backend.displayName).tag(backend)
-                        }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
-                    .onChange(of: draft.backend) { _, newValue in
-                        onBackendChange(newValue)
-                    }
-                }
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Agent folder")
-                        .font(.subheadline.weight(.semibold))
-
-                    HStack(spacing: 10) {
-                        TextField("/Users/akash/code/my-project", text: $draft.agentFolder)
-                            .textFieldStyle(.roundedBorder)
-                            .onChange(of: draft.agentFolder) { _, newValue in
-                                onFolderChange(newValue)
-                            }
-
-                        Button("Choose") {
-                            onChooseFolder()
-                        }
-                    }
-                }
-
-                ModelAutocompleteField(
-                    title: "Model",
-                    text: $draft.model,
-                    suggestions: modelSuggestions,
-                    totalOptionCount: allModelOptions.count
+                TincanToolbarButton(
+                    label: "remove",
+                    systemImage: "trash.fill",
+                    tone: TincanPalette.callRed,
+                    action: onRemove
                 )
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 4)
+
+            MacOnboardingField(label: "Name", placeholder: "Emma", text: $draft.name)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Agent backend")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundStyle(TincanPalette.textMuted)
+
+                Picker("Agent backend", selection: $draft.backend) {
+                    ForEach(availableBackends) { backend in
+                        Text(backend.displayName).tag(backend)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .onChange(of: draft.backend) { _, newValue in
+                    onBackendChange(newValue)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Agent folder")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundStyle(TincanPalette.textMuted)
+
+                HStack(spacing: 10) {
+                    TextField("/Users/akash/code/my-project", text: $draft.agentFolder)
+                        .textFieldStyle(.plain)
+                        .foregroundStyle(TincanPalette.textPrimary)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .background(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .fill(TincanPalette.panelRaised.opacity(0.82))
+                        )
+                        .onChange(of: draft.agentFolder) { _, newValue in
+                            onFolderChange(newValue)
+                        }
+
+                    TincanToolbarButton(
+                        label: "choose",
+                        systemImage: "folder",
+                        tone: TincanPalette.panelRaised,
+                        action: onChooseFolder
+                    )
+                }
+            }
+
+            ModelAutocompleteField(
+                title: "Model",
+                text: $draft.model,
+                suggestions: modelSuggestions,
+                totalOptionCount: allModelOptions.count
+            )
         }
+        .padding(16)
+        .tincanCard(cornerRadius: 24, raised: true)
     }
 }
 
@@ -355,10 +395,18 @@ private struct ModelAutocompleteField: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title)
-                .font(.subheadline.weight(.semibold))
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .foregroundStyle(TincanPalette.textMuted)
 
             TextField("openai/gpt-5.3-codex-spark", text: $text)
-                .textFieldStyle(.roundedBorder)
+                .textFieldStyle(.plain)
+                .foregroundStyle(TincanPalette.textPrimary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(TincanPalette.panelRaised.opacity(0.82))
+                )
                 .focused($isFocused)
 
             if isFocused && !suggestions.isEmpty {
@@ -369,6 +417,8 @@ private struct ModelAutocompleteField: View {
                             isFocused = false
                         } label: {
                             Text(suggestion)
+                                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                                .foregroundStyle(TincanPalette.textPrimary)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 8)
@@ -377,19 +427,44 @@ private struct ModelAutocompleteField: View {
 
                         if index < suggestions.count - 1 {
                             Divider()
+                                .overlay(TincanPalette.divider)
                         }
                     }
                 }
-                .background(Color(nsColor: .windowBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+                .background(TincanPalette.panelRaised, in: RoundedRectangle(cornerRadius: 10))
                 .overlay(
                     RoundedRectangle(cornerRadius: 10)
-                        .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+                        .stroke(TincanPalette.shellBorder, lineWidth: 1)
                 )
             } else if totalOptionCount > 0 {
                 Text("\(totalOptionCount) models available")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundStyle(TincanPalette.textSecondary)
             }
+        }
+    }
+}
+
+private struct MacOnboardingField: View {
+    let label: String
+    let placeholder: String
+    @Binding var text: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(label)
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .foregroundStyle(TincanPalette.textMuted)
+
+            TextField(placeholder, text: $text)
+                .textFieldStyle(.plain)
+                .foregroundStyle(TincanPalette.textPrimary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(TincanPalette.panelRaised.opacity(0.82))
+                )
         }
     }
 }

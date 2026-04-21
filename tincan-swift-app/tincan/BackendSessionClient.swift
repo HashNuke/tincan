@@ -178,8 +178,9 @@ final class BackendSessionClient: NSObject {
             eventContinuation?.finish()
             eventContinuation = continuation
             continuation.onTermination = { [weak self] _ in
-                Task { @MainActor in
-                    self?.eventContinuation = nil
+                guard let self else { return }
+                Task { @MainActor [self] in
+                    self.eventContinuation = nil
                 }
             }
         }

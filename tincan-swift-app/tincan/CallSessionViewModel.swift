@@ -5,32 +5,29 @@ import Foundation
 
 @MainActor
 final class CallSessionViewModel: ObservableObject {
-    @Published var backendURLString: String
+    private static let inputLevelHistoryLength = 14
+
     @Published var callStateDescription = "Idle"
     @Published var lastServerTranscript = ""
     @Published var logLines: [String] = []
     @Published var isCallActive = false
     @Published var isTransitioningCallState = false
+    @Published private(set) var callStartedAt: Date?
+    @Published private(set) var isMuted = false
+    @Published private(set) var isSpeakerEnabled = true
+    @Published private(set) var inputLevelHistory = Array(repeating: 0.0, count: inputLevelHistoryLength)
 
     private let callKitController = CallKitController()
     private let audioPipeline = AudioTurnPipeline()
     private let tonePlayer = CallTonePlayer.shared
+    private let serverSettings: ServerConnectionStore
 
     private var sessionClient: BackendSessionClient?
     private var sessionID: String?
     private var eventTask: Task<Void, Never>?
 
-    private static let backendURLKey = "backend_url"
-    private static let defaultBackendURL = BackendConnectionConfig.serverBaseURLString
-    private static let legacyDefaultBackendURLs: Set<String> = [
-        "http://127.0.0.1:52734/infer",
-        "http://127.0.0.1:8004/infer",
-        BackendConnectionConfig.inferenceURLString,
-        BackendConnectionConfig.loopbackInferenceURLString,
-    ]
-
-    init() {
-        backendURLString = Self.initialBackendURL()
+    init(serverSettings: ServerConnectionStore) {
+        self.serverSettings = serverSettings
         callKitController.delegate = self
         audioPipeline.setDelegate(self)
         appendLog("Ready")
@@ -52,7 +49,6 @@ final class CallSessionViewModel: ObservableObject {
                 return
             }
 
-            persistBackendURL()
             callKitController.startCall()
         }
     }
@@ -71,24 +67,6 @@ final class CallSessionViewModel: ObservableObject {
         }
     }
 
-    private func persistBackendURL() {
-        UserDefaults.standard.set(backendURLString, forKey: Self.backendURLKey)
-    }
-
-    private static func initialBackendURL() -> String {
-        let storedValue = UserDefaults.standard.string(forKey: backendURLKey)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let storedValue, !storedValue.isEmpty else {
-            return defaultBackendURL
-        }
-
-        if legacyDefaultBackendURLs.contains(storedValue) {
-            return defaultBackendURL
-        }
-
-        return storedValue
-    }
-
     private func appendLog(_ message: String) {
         let timestamp = Date.now.formatted(date: .omitted, time: .standard)
         logLines.insert("[\(timestamp)] \(message)", at: 0)
@@ -98,8 +76,20 @@ final class CallSessionViewModel: ObservableObject {
     }
 
     private func makeSessionClient() -> BackendSessionClient? {
-        guard let url = URL(string: backendURLString) else { return nil }
+        guard let url = serverSettings.serverBaseURL else { return nil }
         return BackendSessionClient(serverBaseURL: url)
+    }
+
+    private func pushInputLevel(_ level: Float) {
+        let clampedLevel = max(0, min(1, Double(level)))
+        if inputLevelHistory.count == Self.inputLevelHistoryLength {
+            inputLevelHistory.removeFirst()
+        }
+        inputLevelHistory.append(clampedLevel)
+    }
+
+    private func resetInputLevels() {
+        inputLevelHistory = Array(repeating: 0.0, count: Self.inputLevelHistoryLength)
     }
 
     private func subscribeToServerEvents(client: BackendSessionClient, sessionID: String) {
@@ -129,6 +119,10 @@ final class CallSessionViewModel: ObservableObject {
     }
 
     private func playServerAudioIfPresent(_ path: String?, client: BackendSessionClient, fallbackLogPrefix: String) async {
+        guard isSpeakerEnabled else {
+            appendLog("Skipped playback while audio output is muted")
+            return
+        }
         guard let path, !path.isEmpty else { return }
         guard let audioURL = makeServerAudioURL(path: path, client: client) else {
             appendLog("\(fallbackLogPrefix) URL was invalid: \(path)")
@@ -153,6 +147,16 @@ final class CallSessionViewModel: ObservableObject {
         }
         return URL(string: path, relativeTo: client.serverBaseURL)?.absoluteURL
     }
+
+    func toggleMute() {
+        isMuted.toggle()
+        appendLog(isMuted ? "Muted outgoing audio" : "Resumed outgoing audio")
+    }
+
+    func toggleSpeakerEnabled() {
+        isSpeakerEnabled.toggle()
+        appendLog(isSpeakerEnabled ? "Enabled tincan audio playback" : "Disabled tincan audio playback")
+    }
 }
 
 extension CallSessionViewModel: CallKitControllerDelegate {
@@ -166,7 +170,7 @@ extension CallSessionViewModel: CallKitControllerDelegate {
         Task {
             guard let client = makeSessionClient() else {
                 callStateDescription = "Invalid server URL"
-                appendLog("Server URL is invalid: \(backendURLString)")
+                appendLog("Server connection is incomplete")
                 isTransitioningCallState = false
                 return
             }
@@ -181,6 +185,7 @@ extension CallSessionViewModel: CallKitControllerDelegate {
                 subscribeToServerEvents(client: client, sessionID: sid)
                 callStateDescription = "Listening"
                 isCallActive = true
+                callStartedAt = Date()
                 tonePlayer.playConnectTone()
             } catch {
                 callStateDescription = "Audio start failed"
@@ -211,6 +216,8 @@ extension CallSessionViewModel: CallKitControllerDelegate {
 
             callStateDescription = "Idle"
             isCallActive = false
+            callStartedAt = nil
+            resetInputLevels()
             tonePlayer.playDisconnectTone()
             isTransitioningCallState = false
         }
@@ -219,6 +226,8 @@ extension CallSessionViewModel: CallKitControllerDelegate {
     func callKitController(_ controller: CallKitController, didFail message: String) {
         callStateDescription = "Call failed"
         isCallActive = false
+        callStartedAt = nil
+        resetInputLevels()
         isTransitioningCallState = false
         appendLog("CallKit error: \(message)")
     }
@@ -229,8 +238,16 @@ extension CallSessionViewModel: AudioTurnPipelineOutput {
         appendLog(message)
     }
 
+    func audioTurnPipelineDidUpdateInputLevel(_ level: Float) {
+        pushInputLevel(level)
+    }
+
     func audioTurnPipelineDidCaptureSegment(_ segment: CapturedSpeechSegment) {
         guard let client = sessionClient, let sid = sessionID else { return }
+        guard !isMuted else {
+            appendLog("Ignored speech segment while muted")
+            return
+        }
         Task {
             do {
                 let response = try await client.uploadUtterance(sessionID: sid, audioWAV: segment.wavData)

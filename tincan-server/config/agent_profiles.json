@@ -1,12 +1,12 @@
-[
-  {
+{
+  "emma": {
     "name": "emma",
     "working_directory": "/Users/akash/code/apple/tincan",
     "agent_backend": "opencode-1"
   },
-  {
+  "atlas": {
     "name": "atlas",
     "working_directory": "/Users/akash/sources/opencode",
     "agent_backend": "codex-1"
   }
-]
+}

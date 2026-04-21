@@ -41,7 +41,8 @@ enum AppPaths {
 
     nonisolated static let generatedAgentProfilesURL = generatedConfigDirectory.appendingPathComponent("agent_profiles.json")
     nonisolated static let generatedAgentBackendsURL = generatedConfigDirectory.appendingPathComponent("agent_backends.json")
-    nonisolated static let ownerProfileURL = appSupportDirectory.appendingPathComponent("owner-voice-profile.json")
+    nonisolated static let speakerProfilesURL = appSupportDirectory.appendingPathComponent("speaker_profiles.json")
+    nonisolated static let legacyOwnerProfileURL = appSupportDirectory.appendingPathComponent("owner-voice-profile.json")
     nonisolated static let backendDirectory = projectRoot.appendingPathComponent("backend", isDirectory: true)
     nonisolated static let backendServerModule = "backend.server"
 

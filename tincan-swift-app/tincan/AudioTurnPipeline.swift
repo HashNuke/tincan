@@ -7,6 +7,7 @@ import Foundation
 @MainActor
 protocol AudioTurnPipelineOutput: AnyObject {
     func audioTurnPipelineDidLog(_ message: String)
+    func audioTurnPipelineDidUpdateInputLevel(_ level: Float)
     func audioTurnPipelineDidCaptureSegment(_ segment: CapturedSpeechSegment)
 }
 
@@ -67,6 +68,10 @@ final class AudioTurnPipeline {
                     return
                 }
                 self.audioStreamContinuation?.yield(resampled)
+                let inputLevel = Self.normalizedInputLevel(from: resampled)
+                Task {
+                    await self.sink.emitInputLevel(inputLevel)
+                }
             } catch {
                 Task {
                     await self.sink.emitLog("Failed to resample input buffer: \(error.localizedDescription)")
@@ -77,6 +82,7 @@ final class AudioTurnPipeline {
         audioEngine.prepare()
         try audioEngine.start()
         isRunning = true
+        await sink.resetInputLevel()
         await sink.emitLog("Microphone capture started")
     }
 
@@ -93,7 +99,24 @@ final class AudioTurnPipeline {
         isRunning = false
         audioEngine = AVAudioEngine()
         await turnDetector.reset()
+        await sink.resetInputLevel()
         await sink.emitLog("Microphone capture stopped")
+    }
+
+    private static func normalizedInputLevel(from samples: [Float]) -> Float {
+        guard !samples.isEmpty else { return 0 }
+
+        let meanSquare = samples.reduce(into: Float.zero) { partialResult, sample in
+            partialResult += sample * sample
+        } / Float(samples.count)
+
+        let rms = sqrt(meanSquare)
+        let floorLevel: Float = -48
+        let decibels = 20 * log10(max(rms, 0.000_01))
+        let normalized = max(0, min(1, (decibels - floorLevel) / -floorLevel))
+
+        // Ease the meter slightly so conversational speech is visible.
+        return Float(pow(Double(normalized), 0.65))
     }
 }
 
@@ -127,6 +150,8 @@ private enum AudioTurnPipelineError: LocalizedError {
 
 private actor TurnEventSink {
     weak var delegate: (any AudioTurnPipelineOutput)?
+    private var lastInputLevelEmission = Date.distantPast
+    private let minimumInputLevelEmissionInterval: TimeInterval = 1.0 / 15.0
 
     func setDelegate(_ delegate: (any AudioTurnPipelineOutput)?) {
         self.delegate = delegate
@@ -134,6 +159,21 @@ private actor TurnEventSink {
 
     func emitLog(_ message: String) async {
         await delegate?.audioTurnPipelineDidLog(message)
+    }
+
+    func emitInputLevel(_ level: Float) async {
+        let now = Date()
+        guard now.timeIntervalSince(lastInputLevelEmission) >= minimumInputLevelEmissionInterval else {
+            return
+        }
+
+        lastInputLevelEmission = now
+        await delegate?.audioTurnPipelineDidUpdateInputLevel(level)
+    }
+
+    func resetInputLevel() async {
+        lastInputLevelEmission = Date.distantPast
+        await delegate?.audioTurnPipelineDidUpdateInputLevel(0)
     }
 
     func emitSegment(_ segment: CapturedSpeechSegment) async {

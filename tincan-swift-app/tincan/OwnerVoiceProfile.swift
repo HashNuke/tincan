@@ -1,10 +1,29 @@
 import Foundation
 
+nonisolated struct SpeakerProfileSample: Codable, Sendable, Equatable {
+    var embedding: [Float]
+    var capturedAt: Date
+    var sampleDuration: TimeInterval
+    var inputDeviceName: String?
+
+    init(
+        embedding: [Float],
+        capturedAt: Date = Date(),
+        sampleDuration: TimeInterval,
+        inputDeviceName: String? = nil
+    ) {
+        self.embedding = embedding.l2Normalized()
+        self.capturedAt = capturedAt
+        self.sampleDuration = sampleDuration
+        self.inputDeviceName = inputDeviceName
+    }
+}
+
 nonisolated struct OwnerVoiceProfile: Codable, Sendable, Equatable {
     let id: UUID
     var displayName: String
     var canonicalEmbedding: [Float]
-    var acceptedEmbeddings: [[Float]]
+    var speakerProfiles: [SpeakerProfileSample]
     let createdAt: Date
     var updatedAt: Date
     var successfulIdentifications: Int
@@ -14,7 +33,7 @@ nonisolated struct OwnerVoiceProfile: Codable, Sendable, Equatable {
         id: UUID = UUID(),
         displayName: String = "Current User",
         canonicalEmbedding: [Float],
-        acceptedEmbeddings: [[Float]] = [],
+        speakerProfiles: [SpeakerProfileSample] = [],
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
         successfulIdentifications: Int = 1,
@@ -24,8 +43,16 @@ nonisolated struct OwnerVoiceProfile: Codable, Sendable, Equatable {
         self.id = id
         self.displayName = displayName
         self.canonicalEmbedding = normalizedEmbedding
-        self.acceptedEmbeddings = (acceptedEmbeddings.isEmpty ? [normalizedEmbedding] : acceptedEmbeddings)
-            .map { $0.l2Normalized() }
+        self.speakerProfiles = speakerProfiles.isEmpty
+            ? [SpeakerProfileSample(embedding: normalizedEmbedding, sampleDuration: 0)]
+            : speakerProfiles.map {
+                SpeakerProfileSample(
+                    embedding: $0.embedding,
+                    capturedAt: $0.capturedAt,
+                    sampleDuration: $0.sampleDuration,
+                    inputDeviceName: $0.inputDeviceName
+                )
+            }
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.successfulIdentifications = successfulIdentifications
@@ -34,13 +61,23 @@ nonisolated struct OwnerVoiceProfile: Codable, Sendable, Equatable {
 
     static func bootstrap(
         embedding: [Float],
+        sampleDuration: TimeInterval,
+        inputDeviceName: String? = nil,
+        capturedAt: Date = Date(),
         displayName: String = "Current User",
         modelIdentifier: String = "FluidAudio.Diarizer"
     ) -> OwnerVoiceProfile {
         OwnerVoiceProfile(
             displayName: displayName,
             canonicalEmbedding: embedding,
-            acceptedEmbeddings: [embedding.l2Normalized()],
+            speakerProfiles: [
+                SpeakerProfileSample(
+                    embedding: embedding,
+                    capturedAt: capturedAt,
+                    sampleDuration: sampleDuration,
+                    inputDeviceName: inputDeviceName
+                )
+            ],
             successfulIdentifications: 1,
             modelIdentifier: modelIdentifier
         )
@@ -48,14 +85,24 @@ nonisolated struct OwnerVoiceProfile: Codable, Sendable, Equatable {
 
     func refreshed(
         with embedding: [Float],
+        capturedAt: Date,
+        sampleDuration: TimeInterval,
+        inputDeviceName: String?,
         config: SpeakerIdentityConfig,
-        maxStoredEmbeddings: Int = 8
+        maxStoredProfiles: Int = 12
     ) -> OwnerVoiceProfile {
         let normalizedEmbedding = embedding.l2Normalized()
-        var updatedEmbeddings = acceptedEmbeddings
-        updatedEmbeddings.append(normalizedEmbedding)
-        if updatedEmbeddings.count > maxStoredEmbeddings {
-            updatedEmbeddings.removeFirst(updatedEmbeddings.count - maxStoredEmbeddings)
+        var updatedProfiles = speakerProfiles
+        updatedProfiles.append(
+            SpeakerProfileSample(
+                embedding: normalizedEmbedding,
+                capturedAt: capturedAt,
+                sampleDuration: sampleDuration,
+                inputDeviceName: inputDeviceName
+            )
+        )
+        if updatedProfiles.count > maxStoredProfiles {
+            updatedProfiles.removeFirst(updatedProfiles.count - maxStoredProfiles)
         }
 
         return OwnerVoiceProfile(
@@ -65,12 +112,76 @@ nonisolated struct OwnerVoiceProfile: Codable, Sendable, Equatable {
                 with: normalizedEmbedding,
                 alpha: config.profileSmoothingAlpha
             ),
-            acceptedEmbeddings: updatedEmbeddings,
+            speakerProfiles: updatedProfiles,
             createdAt: createdAt,
             updatedAt: Date(),
             successfulIdentifications: successfulIdentifications + 1,
             modelIdentifier: modelIdentifier
         )
+    }
+
+    func bestMatchDistance(for embedding: [Float]) -> Float {
+        let normalizedEmbedding = embedding.l2Normalized()
+        let canonicalDistance = normalizedEmbedding.cosineDistance(to: canonicalEmbedding)
+        let profileDistance = speakerProfiles
+            .map { normalizedEmbedding.cosineDistance(to: $0.embedding) }
+            .min()
+        return min(canonicalDistance, profileDistance ?? canonicalDistance)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case displayName
+        case canonicalEmbedding
+        case speakerProfiles
+        case createdAt
+        case updatedAt
+        case successfulIdentifications
+        case modelIdentifier
+        case acceptedEmbeddings
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let id = try container.decode(UUID.self, forKey: .id)
+        let displayName = try container.decode(String.self, forKey: .displayName)
+        let canonicalEmbedding = try container.decode([Float].self, forKey: .canonicalEmbedding)
+        let createdAt = try container.decode(Date.self, forKey: .createdAt)
+        let updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+        let successfulIdentifications = try container.decode(Int.self, forKey: .successfulIdentifications)
+        let modelIdentifier = try container.decode(String.self, forKey: .modelIdentifier)
+
+        let speakerProfiles: [SpeakerProfileSample]
+        if let decodedProfiles = try container.decodeIfPresent([SpeakerProfileSample].self, forKey: .speakerProfiles) {
+            speakerProfiles = decodedProfiles
+        } else if let acceptedEmbeddings = try container.decodeIfPresent([[Float]].self, forKey: .acceptedEmbeddings) {
+            speakerProfiles = acceptedEmbeddings.map { SpeakerProfileSample(embedding: $0, sampleDuration: 0) }
+        } else {
+            speakerProfiles = []
+        }
+
+        self.init(
+            id: id,
+            displayName: displayName,
+            canonicalEmbedding: canonicalEmbedding,
+            speakerProfiles: speakerProfiles,
+            createdAt: createdAt,
+            updatedAt: updatedAt,
+            successfulIdentifications: successfulIdentifications,
+            modelIdentifier: modelIdentifier
+        )
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(displayName, forKey: .displayName)
+        try container.encode(canonicalEmbedding, forKey: .canonicalEmbedding)
+        try container.encode(speakerProfiles, forKey: .speakerProfiles)
+        try container.encode(createdAt, forKey: .createdAt)
+        try container.encode(updatedAt, forKey: .updatedAt)
+        try container.encode(successfulIdentifications, forKey: .successfulIdentifications)
+        try container.encode(modelIdentifier, forKey: .modelIdentifier)
     }
 }
 

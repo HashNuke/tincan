@@ -6,19 +6,27 @@ import Speech
 
 @MainActor
 final class MacCallSessionViewModel: ObservableObject {
+    private static let inputLevelHistoryLength = 14
+
     @Published private(set) var callStateDescription = "Idle"
     @Published private(set) var identityStatusDescription = "Identity not ready"
     @Published private(set) var ownerProfileDescription = "No current-user voice enrolled"
+    @Published private(set) var speakerIdentityPhase: SpeakerIdentityPhase = .unavailable
     @Published private(set) var lastChallengeTranscript = ""
     @Published private(set) var lastServerTranscript = ""
     @Published private(set) var logLines: [String] = []
     @Published private(set) var isCallActive = false
     @Published private(set) var isTransitioningCallState = false
+    @Published private(set) var callStartedAt: Date?
+    @Published private(set) var isMuted = false
+    @Published private(set) var isSpeakerEnabled = true
+    @Published private(set) var inputLevelHistory = Array(repeating: 0.0, count: inputLevelHistoryLength)
 
     private let audioPipeline = AudioTurnPipeline()
     private let identityManager = SpeakerIdentityManager()
     private let promptSpeaker = LocalPromptSpeaker()
     private let tonePlayer = CallTonePlayer.shared
+    private let serverSettings: ServerConnectionStore
 
     private var sessionClient: BackendSessionClient?
     private var sessionID: String?
@@ -27,7 +35,8 @@ final class MacCallSessionViewModel: ObservableObject {
     private var currentChallengePrompt: String?
     private var ignoreCapturedSegmentsUntil = Date.distantPast
 
-    init() {
+    init(serverSettings: ServerConnectionStore) {
+        self.serverSettings = serverSettings
         audioPipeline.setDelegate(self)
         appendLog("Ready")
         Task {
@@ -64,8 +73,9 @@ final class MacCallSessionViewModel: ObservableObject {
                 return
             }
 
-            guard let serverURL = URL(string: BackendConnectionConfig.loopbackServerBaseURLString) else {
+            guard let serverURL = serverSettings.serverBaseURL else {
                 callStateDescription = "Invalid server URL"
+                appendLog("Server connection is incomplete")
                 isTransitioningCallState = false
                 return
             }
@@ -86,6 +96,7 @@ final class MacCallSessionViewModel: ObservableObject {
 
                 callStateDescription = "Connected"
                 isCallActive = true
+                callStartedAt = Date()
                 tonePlayer.playConnectTone()
 
                 if !hasOwnerProfile {
@@ -152,6 +163,8 @@ final class MacCallSessionViewModel: ObservableObject {
 
             callStateDescription = "Disconnected"
             isCallActive = false
+            callStartedAt = nil
+            resetInputLevels()
             tonePlayer.playDisconnectTone()
             isTransitioningCallState = false
         }
@@ -184,6 +197,10 @@ final class MacCallSessionViewModel: ObservableObject {
     }
 
     private func playServerAudioIfPresent(_ path: String?, client: BackendSessionClient, fallbackLogPrefix: String) async {
+        guard isSpeakerEnabled else {
+            appendLog("Skipped playback while audio output is muted")
+            return
+        }
         guard let path, !path.isEmpty else { return }
         guard let audioURL = makeServerAudioURL(path: path, client: client) else {
             appendLog("\(fallbackLogPrefix) URL was invalid: \(path)")
@@ -240,6 +257,18 @@ final class MacCallSessionViewModel: ObservableObject {
         try await client.uploadUtterance(sessionID: sessionID, audioWAV: segment.wavData)
     }
 
+    private func pushInputLevel(_ level: Float) {
+        let clampedLevel = max(0, min(1, Double(level)))
+        if inputLevelHistory.count == Self.inputLevelHistoryLength {
+            inputLevelHistory.removeFirst()
+        }
+        inputLevelHistory.append(clampedLevel)
+    }
+
+    private func resetInputLevels() {
+        inputLevelHistory = Array(repeating: 0.0, count: Self.inputLevelHistoryLength)
+    }
+
     private func appendLog(_ message: String) {
         let timestamp = Date.now.formatted(date: .omitted, time: .standard)
         logLines.insert("[\(timestamp)] \(message)", at: 0)
@@ -249,6 +278,7 @@ final class MacCallSessionViewModel: ObservableObject {
     }
 
     private func applyIdentityStatus(_ status: SpeakerIdentityStatus) {
+        speakerIdentityPhase = status.phase
         identityStatusDescription = status.description
         ownerProfileDescription = status.ownerProfileName.map { "Current user: \($0)" }
             ?? "No current-user voice enrolled"
@@ -279,6 +309,16 @@ final class MacCallSessionViewModel: ObservableObject {
             }
         }
     }
+
+    func toggleMute() {
+        isMuted.toggle()
+        appendLog(isMuted ? "Muted outgoing audio" : "Resumed outgoing audio")
+    }
+
+    func toggleSpeakerEnabled() {
+        isSpeakerEnabled.toggle()
+        appendLog(isSpeakerEnabled ? "Enabled tincan audio playback" : "Disabled tincan audio playback")
+    }
 }
 
 extension MacCallSessionViewModel: AudioTurnPipelineOutput {
@@ -286,8 +326,16 @@ extension MacCallSessionViewModel: AudioTurnPipelineOutput {
         appendLog(message)
     }
 
+    func audioTurnPipelineDidUpdateInputLevel(_ level: Float) {
+        pushInputLevel(level)
+    }
+
     func audioTurnPipelineDidCaptureSegment(_ segment: CapturedSpeechSegment) {
         guard let client = sessionClient, let sid = sessionID else { return }
+        guard !isMuted else {
+            appendLog("Ignored speech segment while muted")
+            return
+        }
         guard !promptSpeaker.isSpeaking, Date() >= ignoreCapturedSegmentsUntil else {
             appendLog("Ignored speech captured while tincan was speaking the identification prompt")
             return

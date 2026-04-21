@@ -6,7 +6,8 @@ enum BackendConnectionConfig {
     static let port = 8004
 
     static let inferencePath = "/infer"
-    static let healthPath = "/health"
+    static let healthPath = "/healthz"
+    static let liveUpdatesPath = "/api/v1/live"
 
     static let serverBaseURLString = "http://\(publicHost):\(port)"
     static let loopbackServerBaseURLString = "http://127.0.0.1:\(port)"
