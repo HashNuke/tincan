@@ -29,7 +29,6 @@ import (
 	"tincan-server/conversations"
 	"tincan-server/db"
 	"tincan-server/output"
-	tincanrouter "tincan-server/router"
 )
 
 type server struct {
@@ -37,6 +36,7 @@ type server struct {
 	callManager         *calls.Manager
 	webrtcTransport     *webrtcTransport
 	inference           *inferenceClient
+	appConfig           *tincanconfig.AppConfigStore
 	profiles            *tincanconfig.AgentProfileStore
 	backends            *tincanconfig.AgentBackendStore
 	conversations       *conversations.Store
@@ -122,6 +122,7 @@ func main() {
 	mux.HandleFunc("/debug/audio/generated/", srv.handleGeneratedAudio)
 	mux.HandleFunc("/hooks/opencode", srv.handleOpenCodeHook)
 	tincanapi.Routes{
+		AppConfig:     srv.appConfig,
 		Profiles:      srv.profiles,
 		Backends:      srv.backends,
 		Conversations: srv.conversations,
@@ -148,6 +149,11 @@ func main() {
 }
 
 func newServer(dataDir string) (*server, error) {
+	appConfig, err := tincanconfig.NewAppConfigStore(dataDir)
+	if err != nil {
+		return nil, fmt.Errorf("init app config: %w", err)
+	}
+
 	profiles, err := tincanconfig.NewAgentProfileStore(dataDir)
 	if err != nil {
 		return nil, fmt.Errorf("init agent profiles: %w", err)
@@ -180,25 +186,12 @@ func newServer(dataDir string) (*server, error) {
 		}
 	}
 
-	routerBackend, ok := backends.Get("__router__")
-	var routerService controllers.Router
-	var updateProcessor controllers.ConversationUpdateProcessor
-	if !ok {
-		log.Printf("router backend is not configured; voice command routing is unavailable until __router__ is added to config/agent_backends.json")
-		routerService = unavailableRouter{reason: "router backend is not configured"}
-	} else {
-		routerAdapter, ok := agentAdapters[routerBackend.Type]
-		if !ok {
-			return nil, fmt.Errorf("no agent adapter registered for router backend type %q", routerBackend.Type)
-		}
-		if err := routerAdapter.ValidateBackend("__router__", routerBackend); err != nil {
-			return nil, fmt.Errorf("validate router backend: %w", err)
-		}
-
-		builtRouter := NewRouter(routerBackend, routerAdapter, profiles)
-		routerService = builtRouter
-		updateProcessor = builtRouter
+	builtRouter := NewRouter(appConfig, profiles, backends, agentAdapters)
+	if err := builtRouter.ValidateConfiguration(); err != nil {
+		log.Printf("router is not configured; voice command routing is unavailable until config/config.json sets router_profile to a valid agent profile: %v", err)
 	}
+	var routerService controllers.Router = builtRouter
+	var updateProcessor controllers.ConversationUpdateProcessor = builtRouter
 
 	callManager := calls.NewManager()
 	conversationService := NewConversationService(profiles, backends, conversationStore, agentAdapters)
@@ -206,6 +199,7 @@ func newServer(dataDir string) (*server, error) {
 	srv := &server{
 		inference:           &inferenceClient{socketPath: inferenceSocketPath()},
 		callManager:         callManager,
+		appConfig:           appConfig,
 		profiles:            profiles,
 		backends:            backends,
 		conversations:       conversationStore,
@@ -257,14 +251,6 @@ func expandPath(path string) (string, error) {
 		return filepath.Join(homeDir, strings.TrimPrefix(path, "~/")), nil
 	}
 	return path, nil
-}
-
-type unavailableRouter struct {
-	reason string
-}
-
-func (r unavailableRouter) RouteUserInput(_ tincanrouter.RouteUserInputRequest) (tincanrouter.RouteUserInputResult, error) {
-	return tincanrouter.RouteUserInputResult{}, fmt.Errorf("%s", r.reason)
 }
 
 func (s *server) handleHealth(w http.ResponseWriter, _ *http.Request) {

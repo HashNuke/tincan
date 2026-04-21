@@ -49,15 +49,15 @@ func (a *CodexAdapter) ContinueConversation(conversation conversations.Conversat
 	return fmt.Errorf("codex adapter is not implemented yet")
 }
 
-func (a *CodexAdapter) RunRouterPrompt(backend tincanconfig.AgentBackendDefinition, prompt string, rawTranscript string) (tincanrouter.RouteUserInputResult, error) {
-	if err := a.ValidateBackend("__router__", backend); err != nil {
+func (a *CodexAdapter) RunRouterPrompt(profile tincanconfig.AgentProfile, backend tincanconfig.AgentBackendDefinition, prompt string, rawTranscript string) (tincanrouter.RouteUserInputResult, error) {
+	if err := a.ValidateBackend(profile.AgentBackend, backend); err != nil {
 		return tincanrouter.RouteUserInputResult{}, err
 	}
 	return tincanrouter.RouteUserInputResult{}, fmt.Errorf("codex adapter is not implemented yet")
 }
 
-func (a *CodexAdapter) RunConversationUpdatePrompt(backend tincanconfig.AgentBackendDefinition, prompt string, rawUpdate string) (tincanrouter.ProcessConversationUpdateResult, error) {
-	if err := a.ValidateBackend("__router__", backend); err != nil {
+func (a *CodexAdapter) RunConversationUpdatePrompt(profile tincanconfig.AgentProfile, backend tincanconfig.AgentBackendDefinition, prompt string, rawUpdate string) (tincanrouter.ProcessConversationUpdateResult, error) {
+	if err := a.ValidateBackend(profile.AgentBackend, backend); err != nil {
 		return tincanrouter.ProcessConversationUpdateResult{}, err
 	}
 	return tincanrouter.ProcessConversationUpdateResult{}, fmt.Errorf("codex adapter is not implemented yet")

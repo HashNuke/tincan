@@ -130,6 +130,12 @@ func testRoutesWithDataDir(t *testing.T) (Routes, string) {
 }`), 0o644); err != nil {
 		t.Fatalf("write agent_profiles.json: %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(configDir, "config.json"), []byte(`{
+  "router_profile": "Atlas"
+}
+`), 0o644); err != nil {
+		t.Fatalf("write config.json: %v", err)
+	}
 	if err := os.WriteFile(filepath.Join(configDir, "agent_backends.json"), []byte(`{
   "__router__": {
     "type": "opencode",
@@ -155,14 +161,19 @@ func testRoutesWithDataDir(t *testing.T) (Routes, string) {
 	if err != nil {
 		t.Fatalf("NewAgentProfileStore: %v", err)
 	}
+	appConfig, err := tincanconfig.NewAppConfigStore(dataDir)
+	if err != nil {
+		t.Fatalf("NewAppConfigStore: %v", err)
+	}
 	backends, err := tincanconfig.NewAgentBackendStore(dataDir)
 	if err != nil {
 		t.Fatalf("NewAgentBackendStore: %v", err)
 	}
 
 	return Routes{
-		Profiles: profiles,
-		Backends: backends,
+		AppConfig: appConfig,
+		Profiles:  profiles,
+		Backends:  backends,
 		Adapters: map[string]ModelDiscoveringAdapter{
 			"codex": fakeAdapter{
 				supportsModelDiscovery: false,
@@ -303,6 +314,14 @@ func TestRoutesPatchAgentProfileUpdatesConfig(t *testing.T) {
 	if !bytes.Contains(data, []byte(`"name": "Atlas Updated"`)) {
 		t.Fatalf("expected updated display name in config, got %s", string(data))
 	}
+
+	configData, err := os.ReadFile(filepath.Join(dataDir, "config", "config.json"))
+	if err != nil {
+		t.Fatalf("read config.json: %v", err)
+	}
+	if !bytes.Contains(configData, []byte(`"router_profile": "Atlas Updated"`)) {
+		t.Fatalf("expected router_profile to follow renamed router profile, got %s", string(configData))
+	}
 }
 
 func TestRoutesDeleteAgentProfileRemovesConfig(t *testing.T) {
@@ -327,6 +346,14 @@ func TestRoutesDeleteAgentProfileRemovesConfig(t *testing.T) {
 	}
 	if bytes.Contains(data, []byte(`"name": "Atlas"`)) {
 		t.Fatalf("expected profile to be removed from config, got %s", string(data))
+	}
+
+	configData, err := os.ReadFile(filepath.Join(dataDir, "config", "config.json"))
+	if err != nil {
+		t.Fatalf("read config.json: %v", err)
+	}
+	if bytes.Contains(configData, []byte(`"router_profile"`)) {
+		t.Fatalf("expected router_profile to be cleared after deleting router profile, got %s", string(configData))
 	}
 }
 

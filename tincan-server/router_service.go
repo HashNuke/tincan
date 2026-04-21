@@ -10,18 +10,29 @@ import (
 )
 
 type Router struct {
-	backend  tincanconfig.AgentBackendDefinition
-	adapter  agent_adapters.Adapter
+	config   *tincanconfig.AppConfigStore
 	profiles *tincanconfig.AgentProfileStore
+	backends *tincanconfig.AgentBackendStore
+	adapters map[string]agent_adapters.Adapter
 }
 
-func NewRouter(backend tincanconfig.AgentBackendDefinition, adapter agent_adapters.Adapter, profiles *tincanconfig.AgentProfileStore) *Router {
-	return &Router{backend: backend, adapter: adapter, profiles: profiles}
+func NewRouter(config *tincanconfig.AppConfigStore, profiles *tincanconfig.AgentProfileStore, backends *tincanconfig.AgentBackendStore, adapters map[string]agent_adapters.Adapter) *Router {
+	return &Router{
+		config:   config,
+		profiles: profiles,
+		backends: backends,
+		adapters: adapters,
+	}
 }
 
 func (r *Router) RouteUserInput(input tincanrouter.RouteUserInputRequest) (tincanrouter.RouteUserInputResult, error) {
+	profile, backend, adapter, err := r.resolveRuntime()
+	if err != nil {
+		return tincanrouter.RouteUserInputResult{}, err
+	}
+
 	prompt := r.buildUserRouterPrompt(input)
-	result, err := r.adapter.RunRouterPrompt(r.backend, prompt, input.Transcript)
+	result, err := adapter.RunRouterPrompt(profile, backend, prompt, input.Transcript)
 	if err != nil {
 		return tincanrouter.RouteUserInputResult{}, fmt.Errorf("route user input: %w", err)
 	}
@@ -29,12 +40,53 @@ func (r *Router) RouteUserInput(input tincanrouter.RouteUserInputRequest) (tinca
 }
 
 func (r *Router) ProcessConversationUpdate(input tincanrouter.ProcessConversationUpdateRequest) (tincanrouter.ProcessConversationUpdateResult, error) {
+	profile, backend, adapter, err := r.resolveRuntime()
+	if err != nil {
+		return tincanrouter.ProcessConversationUpdateResult{}, err
+	}
+
 	prompt := r.buildConversationUpdatePrompt(input)
-	result, err := r.adapter.RunConversationUpdatePrompt(r.backend, prompt, input.DetailText)
+	result, err := adapter.RunConversationUpdatePrompt(profile, backend, prompt, input.DetailText)
 	if err != nil {
 		return tincanrouter.ProcessConversationUpdateResult{}, fmt.Errorf("process conversation update: %w", err)
 	}
 	return result, nil
+}
+
+func (r *Router) ValidateConfiguration() error {
+	_, _, _, err := r.resolveRuntime()
+	return err
+}
+
+func (r *Router) resolveRuntime() (tincanconfig.AgentProfile, tincanconfig.AgentBackendDefinition, agent_adapters.Adapter, error) {
+	if r == nil || r.config == nil || r.profiles == nil || r.backends == nil {
+		return tincanconfig.AgentProfile{}, tincanconfig.AgentBackendDefinition{}, nil, fmt.Errorf("router is not configured")
+	}
+
+	routerProfileName, ok := r.config.RouterProfile()
+	if !ok {
+		return tincanconfig.AgentProfile{}, tincanconfig.AgentBackendDefinition{}, nil, fmt.Errorf("router_profile is not configured")
+	}
+
+	profile, ok := r.profiles.Get(routerProfileName)
+	if !ok {
+		return tincanconfig.AgentProfile{}, tincanconfig.AgentBackendDefinition{}, nil, fmt.Errorf("router profile %q was not found", routerProfileName)
+	}
+
+	backend, ok := r.backends.Get(profile.AgentBackend)
+	if !ok {
+		return tincanconfig.AgentProfile{}, tincanconfig.AgentBackendDefinition{}, nil, fmt.Errorf("router profile %q references unknown agent backend %q", profile.Name, profile.AgentBackend)
+	}
+
+	adapter, ok := r.adapters[backend.Type]
+	if !ok {
+		return tincanconfig.AgentProfile{}, tincanconfig.AgentBackendDefinition{}, nil, fmt.Errorf("no agent adapter registered for router backend type %q", backend.Type)
+	}
+	if err := adapter.ValidateBackend(profile.AgentBackend, backend); err != nil {
+		return tincanconfig.AgentProfile{}, tincanconfig.AgentBackendDefinition{}, nil, fmt.Errorf("validate router backend: %w", err)
+	}
+
+	return profile, backend, adapter, nil
 }
 
 func (r *Router) buildUserRouterPrompt(input tincanrouter.RouteUserInputRequest) string {

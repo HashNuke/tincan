@@ -212,12 +212,12 @@ func (a *OpencodeAdapter) ContinueConversation(conversation conversations.Conver
 	return nil
 }
 
-func (a *OpencodeAdapter) RunRouterPrompt(backend tincanconfig.AgentBackendDefinition, prompt string, rawTranscript string) (tincanrouter.RouteUserInputResult, error) {
-	if err := a.ValidateBackend("__router__", backend); err != nil {
+func (a *OpencodeAdapter) RunRouterPrompt(profile tincanconfig.AgentProfile, backend tincanconfig.AgentBackendDefinition, prompt string, rawTranscript string) (tincanrouter.RouteUserInputResult, error) {
+	if err := a.ValidateBackend(profile.AgentBackend, backend); err != nil {
 		return tincanrouter.RouteUserInputResult{}, err
 	}
 
-	raw, err := a.runMessagePrompt(backend, "/Users/akash/code/apple/tincan", "Router", prompt)
+	raw, err := a.runMessagePrompt(backend, profile.WorkingDirectory, "Router", prompt)
 	if err != nil {
 		return tincanrouter.RouteUserInputResult{}, err
 	}
@@ -235,12 +235,12 @@ func (a *OpencodeAdapter) RunRouterPrompt(backend tincanconfig.AgentBackendDefin
 	return result, nil
 }
 
-func (a *OpencodeAdapter) RunConversationUpdatePrompt(backend tincanconfig.AgentBackendDefinition, prompt string, rawUpdate string) (tincanrouter.ProcessConversationUpdateResult, error) {
-	if err := a.ValidateBackend("__router__", backend); err != nil {
+func (a *OpencodeAdapter) RunConversationUpdatePrompt(profile tincanconfig.AgentProfile, backend tincanconfig.AgentBackendDefinition, prompt string, rawUpdate string) (tincanrouter.ProcessConversationUpdateResult, error) {
+	if err := a.ValidateBackend(profile.AgentBackend, backend); err != nil {
 		return tincanrouter.ProcessConversationUpdateResult{}, err
 	}
 
-	raw, err := a.runMessagePrompt(backend, "/Users/akash/code/apple/tincan", "Update processor", prompt)
+	raw, err := a.runMessagePrompt(backend, profile.WorkingDirectory, "Update processor", prompt)
 	if err != nil {
 		return tincanrouter.ProcessConversationUpdateResult{}, err
 	}

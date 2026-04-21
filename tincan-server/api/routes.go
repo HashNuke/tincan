@@ -23,6 +23,7 @@ type ModelDiscoveringAdapter interface {
 }
 
 type Routes struct {
+	AppConfig     *tincanconfig.AppConfigStore
 	Profiles      *tincanconfig.AgentProfileStore
 	Backends      *tincanconfig.AgentBackendStore
 	Conversations *conversations.Store
@@ -432,11 +433,19 @@ func (r Routes) updateAgentProfile(w http.ResponseWriter, req *http.Request, nam
 		writeConfigMutationError(w, err)
 		return
 	}
+	if _, err := r.syncRouterProfile(name, updated.Name); err != nil {
+		writeConfigMutationError(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"profile": updated})
 }
 
 func (r Routes) deleteAgentProfile(w http.ResponseWriter, req *http.Request, name string) {
 	if err := r.Profiles.Delete(name); err != nil {
+		writeConfigMutationError(w, err)
+		return
+	}
+	if _, err := r.syncRouterProfile(name, ""); err != nil {
 		writeConfigMutationError(w, err)
 		return
 	}
@@ -509,6 +518,13 @@ func (r Routes) validateBackendDefinition(name string, backend tincanconfig.Agen
 		return fmt.Errorf("unknown backend type %q", backend.Type)
 	}
 	return adapter.ValidateBackend(name, backend)
+}
+
+func (r Routes) syncRouterProfile(currentName string, nextName string) (bool, error) {
+	if r.AppConfig == nil {
+		return false, nil
+	}
+	return r.AppConfig.UpdateRouterProfileReference(currentName, nextName)
 }
 
 func encodeConversationSummaryCursor(cursor conversations.ConversationSummaryCursor) (string, error) {

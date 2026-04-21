@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
@@ -181,6 +182,126 @@ func TestNewAgentBackendStoreMigratesLegacyRootConfigIntoConfigDirectory(t *test
 		t.Fatalf("expected legacy agent_backends.json to be moved, got err=%v", err)
 	}
 	if _, err := os.Stat(filepath.Join(tempDir, "config", "agent_backends.json")); err != nil {
+		t.Fatalf("expected migrated config file in config dir: %v", err)
+	}
+}
+
+func TestNewAppConfigStoreCreatesEmptyFileWhenMissing(t *testing.T) {
+	tempDir := t.TempDir()
+
+	store, err := NewAppConfigStore(tempDir)
+	if err != nil {
+		t.Fatalf("NewAppConfigStore returned error: %v", err)
+	}
+
+	if _, ok := store.RouterProfile(); ok {
+		t.Fatalf("expected router_profile to be unset")
+	}
+
+	configPath := filepath.Join(tempDir, "config", "config.json")
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("expected config.json to be created: %v", err)
+	}
+	if string(data) != "{}\n" {
+		t.Fatalf("unexpected default config.json contents: %q", string(data))
+	}
+}
+
+func TestAppConfigStoreLoadsAndUpdatesRouterProfile(t *testing.T) {
+	tempDir := t.TempDir()
+	configDir := filepath.Join(tempDir, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("create config dir: %v", err)
+	}
+
+	configPath := filepath.Join(configDir, "config.json")
+	if err := os.WriteFile(configPath, []byte(`{
+  "router_profile": "Atlas",
+  "transcription_backend": "parakeet"
+}
+`), 0o644); err != nil {
+		t.Fatalf("write config.json: %v", err)
+	}
+
+	store, err := NewAppConfigStore(tempDir)
+	if err != nil {
+		t.Fatalf("NewAppConfigStore returned error: %v", err)
+	}
+
+	routerProfile, ok := store.RouterProfile()
+	if !ok || routerProfile != "Atlas" {
+		t.Fatalf("expected router_profile Atlas, got %q ok=%v", routerProfile, ok)
+	}
+
+	updated, err := store.UpdateRouterProfileReference("Atlas", "Atlas Updated")
+	if err != nil {
+		t.Fatalf("UpdateRouterProfileReference returned error: %v", err)
+	}
+	if !updated {
+		t.Fatalf("expected router_profile reference to update")
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config.json: %v", err)
+	}
+	if string(data) == "" {
+		t.Fatalf("expected config.json to contain data")
+	}
+	if routerProfile, ok := store.RouterProfile(); !ok || routerProfile != "Atlas Updated" {
+		t.Fatalf("expected updated router_profile, got %q ok=%v", routerProfile, ok)
+	}
+	if !bytes.Contains(data, []byte(`"router_profile": "Atlas Updated"`)) {
+		t.Fatalf("expected updated router_profile in config.json, got %s", string(data))
+	}
+	if !bytes.Contains(data, []byte(`"transcription_backend": "parakeet"`)) {
+		t.Fatalf("expected unknown config keys to be preserved, got %s", string(data))
+	}
+
+	updated, err = store.UpdateRouterProfileReference("Atlas Updated", "")
+	if err != nil {
+		t.Fatalf("clear router_profile returned error: %v", err)
+	}
+	if !updated {
+		t.Fatalf("expected router_profile reference to clear")
+	}
+
+	data, err = os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config.json after clear: %v", err)
+	}
+	if bytes.Contains(data, []byte(`"router_profile"`)) {
+		t.Fatalf("expected router_profile to be removed from config.json, got %s", string(data))
+	}
+	if _, ok := store.RouterProfile(); ok {
+		t.Fatalf("expected router_profile to be unset after clear")
+	}
+}
+
+func TestNewAppConfigStoreMigratesLegacyRootConfigIntoConfigDirectory(t *testing.T) {
+	tempDir := t.TempDir()
+	legacyPath := filepath.Join(tempDir, "config.json")
+
+	if err := os.WriteFile(legacyPath, []byte(`{
+  "router_profile": "Atlas"
+}
+`), 0o644); err != nil {
+		t.Fatalf("write legacy config.json: %v", err)
+	}
+
+	store, err := NewAppConfigStore(tempDir)
+	if err != nil {
+		t.Fatalf("NewAppConfigStore returned error: %v", err)
+	}
+
+	if routerProfile, ok := store.RouterProfile(); !ok || routerProfile != "Atlas" {
+		t.Fatalf("expected migrated router_profile Atlas, got %q ok=%v", routerProfile, ok)
+	}
+	if _, err := os.Stat(legacyPath); !os.IsNotExist(err) {
+		t.Fatalf("expected legacy config.json to be moved, got err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tempDir, "config", "config.json")); err != nil {
 		t.Fatalf("expected migrated config file in config dir: %v", err)
 	}
 }
