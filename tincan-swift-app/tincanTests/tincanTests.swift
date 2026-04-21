@@ -6,13 +6,34 @@
 //
 
 import Testing
+@testable import tincan
 
 struct tincanTests {
 
-    @Test func example() async throws {
-        // Write your test here and use APIs like `#expect(...)` to check expected conditions.
-        // Swift Testing Documentation
-        // https://developer.apple.com/documentation/testing
+    @Test func notificationPlaybackUsesDetailWhenIdle() {
+        let choice = BackendSessionClient.notificationPlaybackChoice(
+            text: "emma#14 has an update.",
+            audioURLPath: "/debug/audio/generated/short.wav",
+            detailText: "The build finished and all tests passed.",
+            detailAudioURLPath: "/debug/audio/generated/detail.wav",
+            isAudioPlaying: false
+        )
+
+        #expect(choice.text == "The build finished and all tests passed.")
+        #expect(choice.audioURLPath == "/debug/audio/generated/detail.wav")
+    }
+
+    @Test func notificationPlaybackKeepsShortPromptDuringActivePlayback() {
+        let choice = BackendSessionClient.notificationPlaybackChoice(
+            text: "emma#14 has an update.",
+            audioURLPath: "/debug/audio/generated/short.wav",
+            detailText: "The build finished and all tests passed.",
+            detailAudioURLPath: "/debug/audio/generated/detail.wav",
+            isAudioPlaying: true
+        )
+
+        #expect(choice.text == "emma#14 has an update.")
+        #expect(choice.audioURLPath == "/debug/audio/generated/short.wav")
     }
 
 }

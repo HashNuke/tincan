@@ -46,15 +46,19 @@ func (c *HookController) HandleOpenCodeHook(event OpenCodeHookEvent) (HookHandle
 		return HookHandleResult{}, false, nil
 	}
 
-	var changed bool
+	var (
+		changed    bool
+		detailText string
+	)
 	switch event.EventType {
 	case "session.idle":
-		changed, err = c.createConversationUpdateFromLatestAssistant(conversation)
+		detailText, changed, err = c.createConversationUpdateFromLatestAssistant(conversation)
 	case "session.error":
+		detailText = latestPendingUpdateDetail(conversation.DisplayHandle, event.ErrorMessage)
 		_, changed, err = c.Conversations.UpsertPendingUpdate(conversations.ConversationUpdate{
 			ConversationID:     conversation.ID,
 			ConversationHandle: conversation.DisplayHandle,
-			SummaryText:        event.ErrorMessage,
+			SummaryText:        detailText,
 			NotificationText:   conversation.DisplayHandle + " has an update.",
 			RawUpdateJSON:      mustMarshalJSON(event),
 			Status:             "pending",
@@ -76,22 +80,23 @@ func (c *HookController) HandleOpenCodeHook(event OpenCodeHookEvent) (HookHandle
 
 	return HookHandleResult{
 		OutputEvents: []output.Event{{
-			SessionID: sessionID,
-			Kind:      output.KindNotification,
-			Text:      conversation.DisplayHandle + " has an update.",
+			SessionID:  sessionID,
+			Kind:       output.KindNotification,
+			Text:       conversation.DisplayHandle + " has an update.",
+			DetailText: detailText,
 		}},
 	}, true, nil
 }
 
-func (c *HookController) createConversationUpdateFromLatestAssistant(conversation conversations.Conversation) (bool, error) {
+func (c *HookController) createConversationUpdateFromLatestAssistant(conversation conversations.Conversation) (string, bool, error) {
 	baseURLString, ok := c.Backends.BackendBaseURL(conversation.AgentBackend)
 	if !ok || baseURLString == "" {
-		return false, fmt.Errorf("conversation backend does not support OpenCode message fetch")
+		return "", false, fmt.Errorf("conversation backend does not support OpenCode message fetch")
 	}
 
 	baseURL, err := url.Parse(baseURLString)
 	if err != nil {
-		return false, err
+		return "", false, err
 	}
 	messageURL := baseURL.ResolveReference(&url.URL{Path: strings.TrimRight(baseURL.Path, "/") + "/session/" + conversation.BackendConversationID + "/message"})
 	query := messageURL.Query()
@@ -100,11 +105,11 @@ func (c *HookController) createConversationUpdateFromLatestAssistant(conversatio
 
 	resp, err := http.Get(messageURL.String())
 	if err != nil {
-		return false, err
+		return "", false, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return false, fmt.Errorf("fetch session messages failed with status %d", resp.StatusCode)
+		return "", false, fmt.Errorf("fetch session messages failed with status %d", resp.StatusCode)
 	}
 
 	var messages []struct {
@@ -117,7 +122,7 @@ func (c *HookController) createConversationUpdateFromLatestAssistant(conversatio
 		} `json:"parts"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&messages); err != nil {
-		return false, err
+		return "", false, err
 	}
 
 	latestText := ""
@@ -147,7 +152,18 @@ func (c *HookController) createConversationUpdateFromLatestAssistant(conversatio
 		RawUpdateJSON:      mustMarshalJSON(messages),
 		Status:             "pending",
 	})
-	return changed, err
+	return latestText, changed, err
+}
+
+func latestPendingUpdateDetail(conversationHandle string, updateText string) string {
+	trimmed := strings.TrimSpace(updateText)
+	if trimmed != "" {
+		return trimmed
+	}
+	if strings.TrimSpace(conversationHandle) == "" {
+		return "The agent has an update."
+	}
+	return conversationHandle + " has an update."
 }
 
 func mustMarshalJSON(v any) string {

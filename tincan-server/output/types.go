@@ -11,7 +11,8 @@ const (
 )
 
 type Event struct {
-	SessionID string `json:"session_id"`
-	Kind      Kind   `json:"kind"`
-	Text      string `json:"text"`
+	SessionID  string `json:"session_id"`
+	Kind       Kind   `json:"kind"`
+	Text       string `json:"text"`
+	DetailText string `json:"detail_text,omitempty"`
 }

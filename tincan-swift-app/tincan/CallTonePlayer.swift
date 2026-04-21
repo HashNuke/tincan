@@ -7,6 +7,10 @@ final class CallTonePlayer: NSObject, AVAudioPlayerDelegate {
 
     private var activePlayers: [AVAudioPlayer] = []
 
+    var isPlayingAudio: Bool {
+        !activePlayers.isEmpty
+    }
+
     func playConnectTone() {
         playTone(sequence: [
             ToneSegment(frequency: 880, duration: 0.08),

@@ -169,9 +169,20 @@ final class MacCallSessionViewModel: ObservableObject {
                 case .playAudio(let text, let urlPath):
                     appendLog("Server: \(text)")
                     await playServerAudioIfPresent(urlPath, client: client, fallbackLogPrefix: "Server audio")
-                case .notify(let text, let audioURLPath):
-                    appendLog("Notify: \(text)")
-                    await playServerAudioIfPresent(audioURLPath, client: client, fallbackLogPrefix: "Notify audio")
+                case .notify(let text, let audioURLPath, let detailText, let detailAudioURLPath):
+                    let playbackChoice = BackendSessionClient.notificationPlaybackChoice(
+                        text: text,
+                        audioURLPath: audioURLPath,
+                        detailText: detailText,
+                        detailAudioURLPath: detailAudioURLPath,
+                        isAudioPlaying: tonePlayer.isPlayingAudio
+                    )
+                    appendLog("Notify: \(playbackChoice.text)")
+                    await playServerAudioIfPresent(
+                        playbackChoice.audioURLPath,
+                        client: client,
+                        fallbackLogPrefix: "Notify audio"
+                    )
                 }
             }
         }

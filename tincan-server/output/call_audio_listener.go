@@ -4,7 +4,7 @@ import "strings"
 
 type CallAudioRenderer interface {
 	PlaySpeech(sessionID string, text string) error
-	NotifySpeech(sessionID string, text string) error
+	NotifySpeech(sessionID string, text string, detailText string) error
 }
 
 type CallAudioListener struct {
@@ -18,7 +18,7 @@ func (l CallAudioListener) HandleEvent(event Event) error {
 
 	switch event.Kind {
 	case KindNotification:
-		return l.Renderer.NotifySpeech(event.SessionID, event.Text)
+		return l.Renderer.NotifySpeech(event.SessionID, event.Text, event.DetailText)
 	case KindImmediateFeedback, KindClarificationQuestion, KindUpdateSummary, KindContextSwitch:
 		return l.Renderer.PlaySpeech(event.SessionID, event.Text)
 	default:

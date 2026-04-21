@@ -3,6 +3,11 @@ import Foundation
 struct BackendSessionClient {
     let serverBaseURL: URL
 
+    struct NotificationPlaybackChoice: Equatable {
+        let text: String
+        let audioURLPath: String?
+    }
+
     struct RegisterResponse: Decodable {
         let sessionId: String
 
@@ -23,7 +28,32 @@ struct BackendSessionClient {
 
     enum ServerEvent {
         case playAudio(text: String, urlPath: String)
-        case notify(text: String, audioURLPath: String?)
+        case notify(text: String, audioURLPath: String?, detailText: String?, detailAudioURLPath: String?)
+    }
+
+    static func notificationPlaybackChoice(
+        text: String,
+        audioURLPath: String?,
+        detailText: String?,
+        detailAudioURLPath: String?,
+        isAudioPlaying: Bool
+    ) -> NotificationPlaybackChoice {
+        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedDetailText = detailText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let normalizedAudioURLPath = audioURLPath?.isEmpty == true ? nil : audioURLPath
+        let normalizedDetailAudioURLPath = detailAudioURLPath?.isEmpty == true ? nil : detailAudioURLPath
+
+        if !isAudioPlaying, !trimmedDetailText.isEmpty {
+            return NotificationPlaybackChoice(
+                text: trimmedDetailText,
+                audioURLPath: normalizedDetailAudioURLPath ?? normalizedAudioURLPath
+            )
+        }
+
+        return NotificationPlaybackChoice(
+            text: trimmedText.isEmpty ? trimmedDetailText : trimmedText,
+            audioURLPath: normalizedAudioURLPath
+        )
     }
 
     // MARK: - Session lifecycle
@@ -125,7 +155,14 @@ struct BackendSessionClient {
         case "notify":
             let text = json["text"] as? String ?? ""
             let audioURLPath = json["audio_url"] as? String
-            return .notify(text: text, audioURLPath: audioURLPath)
+            let detailText = json["detail_text"] as? String
+            let detailAudioURLPath = json["detail_audio_url"] as? String
+            return .notify(
+                text: text,
+                audioURLPath: audioURLPath,
+                detailText: detailText,
+                detailAudioURLPath: detailAudioURLPath
+            )
         default:
             return nil
         }
