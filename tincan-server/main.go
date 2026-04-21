@@ -181,7 +181,7 @@ func newServer(dataDir string) (*server, error) {
 	var routerService controllers.Router
 	var updateProcessor controllers.ConversationUpdateProcessor
 	if !ok {
-		log.Printf("router backend is not configured; voice command routing is unavailable until __router__ is added to agent_backends.json")
+			log.Printf("router backend is not configured; voice command routing is unavailable until __router__ is added to config/agent_backends.json")
 		routerService = unavailableRouter{reason: "router backend is not configured"}
 	} else {
 		routerAdapter, ok := agentAdapters[routerBackend.Type]

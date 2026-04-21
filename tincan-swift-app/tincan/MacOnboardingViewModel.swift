@@ -365,8 +365,18 @@ final class MacOnboardingViewModel: ObservableObject {
             return false
         }
 
-        let parts = value.split(separator: "/", omittingEmptySubsequences: false)
-        return parts.count == 2 && !parts[0].isEmpty && !parts[1].isEmpty
+        guard let slashIndex = value.firstIndex(of: "/") else {
+            return false
+        }
+
+        let providerID = String(value[..<slashIndex]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let modelStartIndex = value.index(after: slashIndex)
+        guard modelStartIndex < value.endIndex else {
+            return false
+        }
+
+        let modelID = String(value[modelStartIndex...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        return !providerID.isEmpty && !modelID.isEmpty
     }
 }
 

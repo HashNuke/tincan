@@ -395,15 +395,19 @@ func looksLikeOpenCodeModel(value string) bool {
 	if value == "provider/model" {
 		return false
 	}
-	if strings.Count(value, "/") != 1 {
+	if strings.Contains(value, "://") {
 		return false
 	}
-	parts := strings.SplitN(value, "/", 2)
-	if len(parts) != 2 {
+
+	slashIndex := strings.Index(value, "/")
+	if slashIndex <= 0 || slashIndex == len(value)-1 {
 		return false
 	}
-	if strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+
+	providerID := strings.TrimSpace(value[:slashIndex])
+	modelID := strings.TrimSpace(value[slashIndex+1:])
+	if providerID == "" || modelID == "" {
 		return false
 	}
-	return !strings.Contains(value, "://")
+	return true
 }

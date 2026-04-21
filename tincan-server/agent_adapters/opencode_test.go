@@ -25,6 +25,19 @@ func TestParseOptionalOpenCodeModelParsesProviderAndModel(t *testing.T) {
 	}
 }
 
+func TestParseOptionalOpenCodeModelPreservesNestedModelPath(t *testing.T) {
+	model, err := parseOptionalOpenCodeModel("openrouter/openai/gpt-5")
+	if err != nil {
+		t.Fatalf("parseOptionalOpenCodeModel returned error: %v", err)
+	}
+	if model == nil {
+		t.Fatalf("expected parsed model")
+	}
+	if model.ProviderID != "openrouter" || model.ModelID != "openai/gpt-5" {
+		t.Fatalf("unexpected parsed model: %#v", model)
+	}
+}
+
 func TestParseOptionalOpenCodeModelRejectsInvalidFormat(t *testing.T) {
 	if _, err := parseOptionalOpenCodeModel("gpt-5"); err == nil {
 		t.Fatalf("expected invalid model format to fail")
@@ -48,17 +61,18 @@ anthropic/claude-sonnet-4
 
 func TestParseOpenCodeModelsOutputIgnoresNoise(t *testing.T) {
 	raw := `
-Available models
-provider/model
-openai/gpt-5.3-codex-spark $0.30
-https://example.com/not-a-model
-`
+	Available models
+	provider/model
+	openai/gpt-5.3-codex-spark $0.30
+	openrouter/openai/gpt-5
+	https://example.com/not-a-model
+	`
 
 	models := parseOpenCodeModelsOutput(raw)
-	if len(models) != 1 {
-		t.Fatalf("expected 1 parsed model, got %d (%v)", len(models), models)
+	if len(models) != 2 {
+		t.Fatalf("expected 2 parsed models, got %d (%v)", len(models), models)
 	}
-	if models[0] != "openai/gpt-5.3-codex-spark" {
+	if models[0] != "openai/gpt-5.3-codex-spark" || models[1] != "openrouter/openai/gpt-5" {
 		t.Fatalf("unexpected parsed models: %v", models)
 	}
 }

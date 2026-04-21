@@ -9,6 +9,7 @@ import (
 )
 
 const (
+	configDirectoryName   = "config"
 	agentProfilesFileName = "agent_profiles.json"
 	agentBackendsFileName = "agent_backends.json"
 )
@@ -22,11 +23,12 @@ type AgentBackendStore struct {
 }
 
 func NewAgentProfileStore(dataDir string) (*AgentProfileStore, error) {
-	if err := ensureConfigFile(filepath.Join(dataDir, agentProfilesFileName), []byte("[]\n")); err != nil {
+	profilesPath := configFilePath(dataDir, agentProfilesFileName)
+	if err := ensureConfigFile(dataDir, agentProfilesFileName, []byte("[]\n")); err != nil {
 		return nil, err
 	}
 
-	data, err := os.ReadFile(filepath.Join(dataDir, agentProfilesFileName))
+	data, err := os.ReadFile(profilesPath)
 	if err != nil {
 		return nil, fmt.Errorf("read agent profiles: %w", err)
 	}
@@ -58,11 +60,12 @@ func NewAgentProfileStore(dataDir string) (*AgentProfileStore, error) {
 }
 
 func NewAgentBackendStore(dataDir string) (*AgentBackendStore, error) {
-	if err := ensureConfigFile(filepath.Join(dataDir, agentBackendsFileName), []byte("{}\n")); err != nil {
+	backendsPath := configFilePath(dataDir, agentBackendsFileName)
+	if err := ensureConfigFile(dataDir, agentBackendsFileName, []byte("{}\n")); err != nil {
 		return nil, err
 	}
 
-	data, err := os.ReadFile(filepath.Join(dataDir, agentBackendsFileName))
+	data, err := os.ReadFile(backendsPath)
 	if err != nil {
 		return nil, fmt.Errorf("read agent backends: %w", err)
 	}
@@ -83,9 +86,6 @@ func NewAgentBackendStore(dataDir string) (*AgentBackendStore, error) {
 		if backend.Type == "" {
 			return nil, fmt.Errorf("agent backend %q type must not be empty", name)
 		}
-		if backend.Options.Model == "" {
-			return nil, fmt.Errorf("agent backend %q model must not be empty", name)
-		}
 		if backend.Options.Agent == "" {
 			backend.Options.Agent = "build"
 		}
@@ -99,6 +99,14 @@ func (s *AgentProfileStore) List() []AgentProfile {
 	result := make([]AgentProfile, 0, len(s.profiles))
 	for _, profile := range s.profiles {
 		result = append(result, profile)
+	}
+	return result
+}
+
+func (s *AgentBackendStore) List() map[string]AgentBackendDefinition {
+	result := make(map[string]AgentBackendDefinition, len(s.backends))
+	for name, backend := range s.backends {
+		result[name] = backend
 	}
 	return result
 }
@@ -125,19 +133,39 @@ func (s *AgentBackendStore) BackendBaseURL(name string) (string, bool) {
 	return backend.Options.BaseURL, true
 }
 
-func ensureConfigFile(path string, defaultContents []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+func configDirectoryPath(dataDir string) string {
+	return filepath.Join(dataDir, configDirectoryName)
+}
+
+func configFilePath(dataDir string, fileName string) string {
+	return filepath.Join(configDirectoryPath(dataDir), fileName)
+}
+
+func ensureConfigFile(dataDir string, fileName string, defaultContents []byte) error {
+	configPath := configFilePath(dataDir, fileName)
+	legacyPath := filepath.Join(dataDir, fileName)
+
+	if err := os.MkdirAll(configDirectoryPath(dataDir), 0o755); err != nil {
 		return fmt.Errorf("create config dir: %w", err)
 	}
 
-	if _, err := os.Stat(path); err == nil {
+	if _, err := os.Stat(configPath); err == nil {
 		return nil
 	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("stat config file %s: %w", path, err)
+		return fmt.Errorf("stat config file %s: %w", configPath, err)
 	}
 
-	if err := os.WriteFile(path, defaultContents, 0o644); err != nil {
-		return fmt.Errorf("create config file %s: %w", path, err)
+	if _, err := os.Stat(legacyPath); err == nil {
+		if err := os.Rename(legacyPath, configPath); err != nil {
+			return fmt.Errorf("migrate config file %s to %s: %w", legacyPath, configPath, err)
+		}
+		return nil
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("stat legacy config file %s: %w", legacyPath, err)
+	}
+
+	if err := os.WriteFile(configPath, defaultContents, 0o644); err != nil {
+		return fmt.Errorf("create config file %s: %w", configPath, err)
 	}
 	return nil
 }
