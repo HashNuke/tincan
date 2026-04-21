@@ -52,3 +52,11 @@ enum AppPaths {
         _ = temporaryDirectory
     }
 }
+
+extension JSONEncoder {
+    nonisolated static func tincanFileEncoder() -> JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        return encoder
+    }
+}

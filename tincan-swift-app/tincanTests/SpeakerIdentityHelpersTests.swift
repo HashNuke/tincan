@@ -6,6 +6,28 @@ import FluidAudio
 @testable import tincan
 
 struct SpeakerIdentityHelpersTests {
+    @Test func fileJSONEncoderDoesNotEscapeSlashes() throws {
+        struct PathPayload: Codable {
+            let baseURL: String
+            let model: String
+            let workingDirectory: String
+        }
+
+        let payload = PathPayload(
+            baseURL: "http://127.0.0.1:4096",
+            model: "openai/gpt-5.3-codex-spark",
+            workingDirectory: "/Users/akash/code/apple/tincan"
+        )
+
+        let data = try JSONEncoder.tincanFileEncoder().encode(payload)
+        let json = try #require(String(data: data, encoding: .utf8))
+
+        #expect(json.contains(#""baseURL" : "http://127.0.0.1:4096""#))
+        #expect(json.contains(#""model" : "openai/gpt-5.3-codex-spark""#))
+        #expect(json.contains(#""workingDirectory" : "/Users/akash/code/apple/tincan""#))
+        #expect(!json.contains(#"\/"#))
+    }
+
     @Test func challengePhraseMatchingIgnoresCaseAndPunctuation() {
         let challenge = ChallengePhrase(text: "I like apples")
 

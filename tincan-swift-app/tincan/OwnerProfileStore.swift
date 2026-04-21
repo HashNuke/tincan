@@ -35,8 +35,7 @@ actor OwnerProfileStore {
     func saveProfile(_ profile: OwnerVoiceProfile) throws {
         try ensureParentDirectory()
 
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let encoder = JSONEncoder.tincanFileEncoder()
         encoder.dateEncodingStrategy = .iso8601
         let data = try encoder.encode(profile)
         try data.write(to: fileURL, options: .atomic)

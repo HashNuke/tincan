@@ -211,8 +211,7 @@ final class MacOnboardingViewModel: ObservableObject {
     }
 
     private func writeGeneratedConfig() throws {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let encoder = JSONEncoder.tincanFileEncoder()
         encoder.keyEncodingStrategy = .convertToSnakeCase
 
         var backendNamesInUse: Set<String> = ["__router__", "opencode"]
