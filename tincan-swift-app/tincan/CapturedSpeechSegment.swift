@@ -8,7 +8,7 @@ struct CapturedSpeechSegment: Sendable, Identifiable {
     let duration: TimeInterval
     let capturedAt: Date
 
-    init(
+    nonisolated init(
         id: UUID = UUID(),
         samples: [Float],
         wavData: Data,
