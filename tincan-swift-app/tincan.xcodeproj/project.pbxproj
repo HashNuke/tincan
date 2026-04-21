@@ -674,7 +674,7 @@
 /* Begin XCLocalSwiftPackageReference section */
 		A10B2C3D4E5F678900000003 /* XCLocalSwiftPackageReference "linphone-multiplatform" */ = {
 			isa = XCLocalSwiftPackageReference;
-			relativePath = "linphone-multiplatform";
+			relativePath = "../linphone-multiplatform";
 		};
 /* End XCLocalSwiftPackageReference section */
 
