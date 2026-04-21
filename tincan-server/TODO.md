@@ -6,8 +6,6 @@ Reference:
 
 - `api/api-gaps.md`
 
-## Phase 1: Read APIs
-
 ## Phase 1.5: Data Model Fixes
 
 - Define how “new/unread text update” is represented.
@@ -25,5 +23,6 @@ Reference:
 ## Phase 4: Settings Write APIs
 
 - When `tincan-server` is launched from the Swift app, pass a writable directory inside the app's Application Support directory via `--data-dir`.
+- Keep checked-in example runtime data under `tincan-server/testdata/data-dir/`, not under source package directories.
 
 - Add persistence and validation around config writes as needed for the Mac editing flows.

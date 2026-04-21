@@ -46,9 +46,9 @@ Important scope decision:
 The server already has these internal data sources:
 
 - Agent profiles
-  - Loaded from `config/agent_profiles.json`
+  - Loaded from `<data-dir>/config/agent_profiles.json`
 - Agent backends
-  - Loaded from `config/agent_backends.json`
+  - Loaded from `<data-dir>/config/agent_backends.json`
 - Conversations table
   - `display_handle`
   - `agent_profile_name`
@@ -367,17 +367,16 @@ Examples:
 
 Important implementation note:
 
-- The current config stores are built from embedded JSON via `go:embed`.
-- That means the current implementation is effectively read-only at runtime.
-- Before we add write APIs, we need to move these configs to writable storage and define validation/update rules.
-- The cleanest approach is to add a `--data-dir` flag to `tincan-server`.
+- The current config stores load writable JSON files from `<data-dir>/config`.
+- `tincan-server` accepts a `--data-dir` flag for that runtime data.
 - When the server is launched from the Swift app, the app should pass a writable directory inside its Application Support folder.
 - If `--data-dir` is not passed, the server should default to `~/.tincan`.
 - The server should create that directory if it does not exist.
 - The server should create/open the SQLite DB inside that directory if it does not exist.
 - The server should also store `agent_profiles.json` and `agent_backends.json` there.
 - If either JSON file is missing, the server should create an empty file there.
-- Embedded defaults should not be used as a runtime fallback for config files.
+- Checked-in sample runtime data now lives under `tincan-server/testdata/data-dir/config`.
+- Before we add write APIs, we still need validation/update rules for the Mac editing flows.
 
 ## Optional API Improvements
 

@@ -158,7 +158,8 @@ Current direction:
 
 Current reality:
 
-- Agent profiles live on the server in `tincan-server/config/agent_profiles.json`.
+- Agent profiles live on the server under `<data-dir>/config/agent_profiles.json`.
+- Checked-in sample runtime config lives under `tincan-server/testdata/data-dir/config/`.
 - Backends are also server-defined today.
 - The app does not yet have client-facing APIs for editing them.
 

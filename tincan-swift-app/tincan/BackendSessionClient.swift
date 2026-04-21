@@ -73,12 +73,13 @@ final class BackendSessionClient: NSObject {
     private var eventContinuation: AsyncStream<ServerEvent>.Continuation?
     private var openContinuation: CheckedContinuation<Void, Error>?
     private var pendingUtteranceContinuations: [String: CheckedContinuation<UtteranceResponse, Error>] = [:]
+    private var isFinishingSession = false
 
     init(serverBaseURL: URL) {
         self.serverBaseURL = serverBaseURL
     }
 
-    static func notificationPlaybackChoice(
+    nonisolated static func notificationPlaybackChoice(
         text: String,
         audioURLPath: String?,
         summaryText: String?,
@@ -207,7 +208,11 @@ final class BackendSessionClient: NSObject {
         guard dataChannel?.readyState != .open else { return }
 
         try await withCheckedThrowingContinuation { continuation in
-            openContinuation = continuation
+            if dataChannel?.readyState == .open {
+                continuation.resume(returning: ())
+            } else {
+                openContinuation = continuation
+            }
         }
     }
 
@@ -251,29 +256,47 @@ final class BackendSessionClient: NSObject {
         }
     }
 
-    private func finishSession(error: Error?) {
-        if let openContinuation {
-            self.openContinuation = nil
-            if let error {
-                openContinuation.resume(throwing: error)
-            } else {
-                openContinuation.resume(returning: ())
-            }
-        }
+    private func resumeOpenContinuation(error: Error?) {
+        let continuation = openContinuation
+        openContinuation = nil
 
-        for (requestId, continuation) in pendingUtteranceContinuations {
-            pendingUtteranceContinuations.removeValue(forKey: requestId)
+        guard let continuation else { return }
+
+        if let error {
+            continuation.resume(throwing: error)
+        } else {
+            continuation.resume(returning: ())
+        }
+    }
+
+    private func finishSession(error: Error?) {
+        guard !isFinishingSession else { return }
+        isFinishingSession = true
+        defer { isFinishingSession = false }
+
+        let pendingUtteranceContinuations = self.pendingUtteranceContinuations
+        self.pendingUtteranceContinuations.removeAll()
+
+        let eventContinuation = self.eventContinuation
+        self.eventContinuation = nil
+
+        let dataChannel = self.dataChannel
+        let peerConnection = self.peerConnection
+        self.dataChannel = nil
+        self.peerConnection = nil
+        sessionID = nil
+
+        resumeOpenContinuation(error: error)
+
+        for continuation in pendingUtteranceContinuations.values {
             continuation.resume(throwing: error ?? URLError(.networkConnectionLost))
         }
 
         eventContinuation?.finish()
-        eventContinuation = nil
         dataChannel?.delegate = nil
+        peerConnection?.delegate = nil
         dataChannel?.close()
         peerConnection?.close()
-        dataChannel = nil
-        peerConnection = nil
-        sessionID = nil
     }
 
     private func handleIncomingData(_ data: Data) {
@@ -333,52 +356,63 @@ final class BackendSessionClient: NSObject {
 }
 
 extension BackendSessionClient: RTCPeerConnectionDelegate {
-    func peerConnection(_ peerConnection: RTCPeerConnection, didChange stateChanged: RTCSignalingState) {}
-    func peerConnection(_ peerConnection: RTCPeerConnection, didAdd stream: RTCMediaStream) {}
-    func peerConnection(_ peerConnection: RTCPeerConnection, didRemove stream: RTCMediaStream) {}
-    func peerConnectionShouldNegotiate(_ peerConnection: RTCPeerConnection) {}
-    func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceConnectionState) {}
-    func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceGatheringState) {}
-    func peerConnection(_ peerConnection: RTCPeerConnection, didGenerate candidate: RTCIceCandidate) {}
-    func peerConnection(_ peerConnection: RTCPeerConnection, didRemove candidates: [RTCIceCandidate]) {}
+    nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didChange stateChanged: RTCSignalingState) {}
+    nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didAdd stream: RTCMediaStream) {}
+    nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didRemove stream: RTCMediaStream) {}
+    nonisolated func peerConnectionShouldNegotiate(_ peerConnection: RTCPeerConnection) {}
+    nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceConnectionState) {}
+    nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceGatheringState) {}
+    nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didGenerate candidate: RTCIceCandidate) {}
+    nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didRemove candidates: [RTCIceCandidate]) {}
 
-    func peerConnection(_ peerConnection: RTCPeerConnection, didOpen dataChannel: RTCDataChannel) {
-        self.dataChannel = dataChannel
-        dataChannel.delegate = self
-    }
-
-    func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCPeerConnectionState) {
-        switch newState {
-        case .closed, .failed, .disconnected:
-            finishSession(error: URLError(.networkConnectionLost))
-        default:
-            break
+    nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didOpen dataChannel: RTCDataChannel) {
+        Task { @MainActor [weak self] in
+            guard let self, self.peerConnection === peerConnection else { return }
+            self.dataChannel = dataChannel
+            dataChannel.delegate = self
         }
     }
 
-    func peerConnection(_ peerConnection: RTCPeerConnection, didChangeLocalCandidate local: RTCIceCandidate, remoteCandidate remote: RTCIceCandidate, lastReceivedMs: Int32, changeReason: String) {}
-    func peerConnection(_ peerConnection: RTCPeerConnection, didFailToGatherIceCandidate event: RTCIceCandidateErrorEvent) {}
-    func peerConnection(_ peerConnection: RTCPeerConnection, didStartReceivingOn transceiver: RTCRtpTransceiver) {}
-    func peerConnection(_ peerConnection: RTCPeerConnection, didAdd rtpReceiver: RTCRtpReceiver, streams mediaStreams: [RTCMediaStream]) {}
-    func peerConnection(_ peerConnection: RTCPeerConnection, didRemove rtpReceiver: RTCRtpReceiver) {}
+    nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCPeerConnectionState) {
+        Task { @MainActor [weak self] in
+            guard let self, self.peerConnection === peerConnection else { return }
+
+            switch newState {
+            case .closed, .failed, .disconnected:
+                self.finishSession(error: URLError(.networkConnectionLost))
+            default:
+                break
+            }
+        }
+    }
+
+    nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didChangeLocalCandidate local: RTCIceCandidate, remoteCandidate remote: RTCIceCandidate, lastReceivedMs: Int32, changeReason: String) {}
+    nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didFailToGatherIceCandidate event: RTCIceCandidateErrorEvent) {}
+    nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didStartReceivingOn transceiver: RTCRtpTransceiver) {}
+    nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didAdd rtpReceiver: RTCRtpReceiver, streams mediaStreams: [RTCMediaStream]) {}
+    nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didRemove rtpReceiver: RTCRtpReceiver) {}
 }
 
 extension BackendSessionClient: RTCDataChannelDelegate {
-    func dataChannelDidChangeState(_ dataChannel: RTCDataChannel) {
-        switch dataChannel.readyState {
-        case .open:
-            if let openContinuation {
-                self.openContinuation = nil
-                openContinuation.resume(returning: ())
+    nonisolated func dataChannelDidChangeState(_ dataChannel: RTCDataChannel) {
+        Task { @MainActor [weak self] in
+            guard let self, self.dataChannel === dataChannel else { return }
+
+            switch dataChannel.readyState {
+            case .open:
+                self.resumeOpenContinuation(error: nil)
+            case .closed:
+                self.finishSession(error: URLError(.networkConnectionLost))
+            default:
+                break
             }
-        case .closed:
-            finishSession(error: URLError(.networkConnectionLost))
-        default:
-            break
         }
     }
 
-    func dataChannel(_ dataChannel: RTCDataChannel, didReceiveMessageWith buffer: RTCDataBuffer) {
-        handleIncomingData(buffer.data)
+    nonisolated func dataChannel(_ dataChannel: RTCDataChannel, didReceiveMessageWith buffer: RTCDataBuffer) {
+        Task { @MainActor [weak self] in
+            guard let self, self.dataChannel === dataChannel else { return }
+            self.handleIncomingData(buffer.data)
+        }
     }
 }
