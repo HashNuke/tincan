@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os/exec"
+	"sort"
 	"strings"
 
 	tincanconfig "tincan-server/config"
@@ -64,6 +66,28 @@ func (a *OpencodeAdapter) ValidateBackend(name string, backend tincanconfig.Agen
 	return nil
 }
 
+func (a *OpencodeAdapter) SupportsModelDiscovery() bool {
+	return true
+}
+
+func (a *OpencodeAdapter) ListModels(backend tincanconfig.AgentBackendDefinition) ([]string, error) {
+	command := exec.Command("opencode", "models")
+	output, err := command.CombinedOutput()
+	if err != nil {
+		trimmedOutput := strings.TrimSpace(string(output))
+		if trimmedOutput == "" {
+			return nil, fmt.Errorf("run opencode models: %w", err)
+		}
+		return nil, fmt.Errorf("run opencode models: %w: %s", err, trimmedOutput)
+	}
+
+	models := parseOpenCodeModelsOutput(string(output))
+	if len(models) == 0 {
+		return nil, fmt.Errorf("opencode models returned no models")
+	}
+	return models, nil
+}
+
 func (a *OpencodeAdapter) StartConversation(profile tincanconfig.AgentProfile, backend tincanconfig.AgentBackendDefinition, title string, message string) (ConversationStartResult, error) {
 	if err := a.ValidateBackend(profile.AgentBackend, backend); err != nil {
 		return ConversationStartResult{}, err
@@ -96,7 +120,7 @@ func (a *OpencodeAdapter) StartConversation(profile tincanconfig.AgentProfile, b
 	query.Set("directory", profile.WorkingDirectory)
 	promptURL.RawQuery = query.Encode()
 
-	modelRef, err := parseOpenCodeModel(backend.Options.Model)
+	modelRef, err := parseOptionalOpenCodeModel(backend.Options.Model)
 	if err != nil {
 		return ConversationStartResult{}, err
 	}
@@ -156,7 +180,7 @@ func (a *OpencodeAdapter) ContinueConversation(conversation conversations.Conver
 	query.Set("directory", conversation.WorkingDirectory)
 	promptURL.RawQuery = query.Encode()
 
-	modelRef, err := parseOpenCodeModel(backend.Options.Model)
+	modelRef, err := parseOptionalOpenCodeModel(backend.Options.Model)
 	if err != nil {
 		return err
 	}
@@ -252,7 +276,7 @@ func (a *OpencodeAdapter) runMessagePrompt(backend tincanconfig.AgentBackendDefi
 	query.Set("directory", workingDirectory)
 	messageURL.RawQuery = query.Encode()
 
-	modelRef, err := parseOpenCodeModel(backend.Options.Model)
+	modelRef, err := parseOptionalOpenCodeModel(backend.Options.Model)
 	if err != nil {
 		return "", err
 	}
@@ -335,10 +359,51 @@ func (a *OpencodeAdapter) createSession(httpClient *http.Client, baseURL url.URL
 	return session, nil
 }
 
-func parseOpenCodeModel(raw string) (*openCodeModelRef, error) {
+func parseOptionalOpenCodeModel(raw string) (*openCodeModelRef, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
 	parts := strings.SplitN(raw, "/", 2)
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		return nil, fmt.Errorf("expected opencode model in provider/model form")
 	}
 	return &openCodeModelRef{ProviderID: parts[0], ModelID: parts[1]}, nil
+}
+
+func parseOpenCodeModelsOutput(raw string) []string {
+	seen := make(map[string]struct{})
+	models := make([]string, 0)
+
+	for _, line := range strings.Split(raw, "\n") {
+		for _, field := range strings.Fields(strings.TrimSpace(line)) {
+			if !looksLikeOpenCodeModel(field) {
+				continue
+			}
+			if _, exists := seen[field]; exists {
+				continue
+			}
+			seen[field] = struct{}{}
+			models = append(models, field)
+		}
+	}
+
+	sort.Strings(models)
+	return models
+}
+
+func looksLikeOpenCodeModel(value string) bool {
+	if value == "provider/model" {
+		return false
+	}
+	if strings.Count(value, "/") != 1 {
+		return false
+	}
+	parts := strings.SplitN(value, "/", 2)
+	if len(parts) != 2 {
+		return false
+	}
+	if strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+		return false
+	}
+	return !strings.Contains(value, "://")
 }

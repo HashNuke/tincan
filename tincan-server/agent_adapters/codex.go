@@ -15,10 +15,15 @@ func (a *CodexAdapter) Backend() string {
 }
 
 func (a *CodexAdapter) ValidateBackend(name string, backend tincanconfig.AgentBackendDefinition) error {
-	if backend.Options.Model == "" {
-		return fmt.Errorf("agent backend %q requires options.model for codex", name)
-	}
 	return nil
+}
+
+func (a *CodexAdapter) SupportsModelDiscovery() bool {
+	return false
+}
+
+func (a *CodexAdapter) ListModels(backend tincanconfig.AgentBackendDefinition) ([]string, error) {
+	return nil, fmt.Errorf("codex adapter model discovery is not implemented yet")
 }
 
 func (a *CodexAdapter) StartConversation(profile tincanconfig.AgentProfile, backend tincanconfig.AgentBackendDefinition, title string, message string) (ConversationStartResult, error) {

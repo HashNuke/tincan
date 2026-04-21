@@ -9,6 +9,8 @@ import (
 type Adapter interface {
 	Backend() string
 	ValidateBackend(name string, backend tincanconfig.AgentBackendDefinition) error
+	SupportsModelDiscovery() bool
+	ListModels(backend tincanconfig.AgentBackendDefinition) ([]string, error)
 	StartConversation(profile tincanconfig.AgentProfile, backend tincanconfig.AgentBackendDefinition, title string, message string) (ConversationStartResult, error)
 	ContinueConversation(conversation conversations.Conversation, backend tincanconfig.AgentBackendDefinition, message string) error
 	RunRouterPrompt(backend tincanconfig.AgentBackendDefinition, prompt string, rawTranscript string) (tincanrouter.RouteUserInputResult, error)
