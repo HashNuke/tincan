@@ -9,7 +9,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -22,9 +21,11 @@ import (
 	"github.com/google/uuid"
 	"tincan-server/agent_adapters"
 	"tincan-server/calls"
+	"tincan-server/controllers"
+	tincanconfig "tincan-server/config"
 	"tincan-server/conversations"
 	"tincan-server/db"
-	tincanrouter "tincan-server/router"
+	"tincan-server/output"
 )
 
 type server struct {
@@ -32,35 +33,18 @@ type server struct {
 	callManager         *calls.Manager
 	linphoneServer      *calls.LinphoneServer
 	inference           *inferenceClient
-	profiles            *AgentProfileStore
-	backends            *AgentBackendStore
+	profiles            *tincanconfig.AgentProfileStore
+	backends            *tincanconfig.AgentBackendStore
 	conversations       *conversations.Store
 	agentAdapters       map[string]agent_adapters.Adapter
 	conversationService *ConversationService
-	router              *Router
-	dispatcher          *tincanrouter.Dispatcher
-}
-
-type openCodeHookEvent struct {
-	EventType    string `json:"event_type"`
-	SessionID    string `json:"session_id"`
-	StatusType   string `json:"status_type,omitempty"`
-	ErrorName    string `json:"error_name,omitempty"`
-	ErrorMessage string `json:"error_message,omitempty"`
+	userInputController *controllers.UserInputController
+	hookController      *controllers.HookController
+	outputPublisher     *output.Publisher
 }
 
 type pendingUpdateResponse struct {
 	Updates []conversations.ConversationUpdate `json:"updates"`
-}
-
-type openCodeMessageWithParts struct {
-	Info struct {
-		Role string `json:"role"`
-	} `json:"info"`
-	Parts []struct {
-		Type string `json:"type"`
-		Text string `json:"text,omitempty"`
-	} `json:"parts"`
 }
 
 type inferenceEnvelope struct {
@@ -148,12 +132,12 @@ func main() {
 }
 
 func newServer() (*server, error) {
-	profiles, err := NewAgentProfileStore()
+	profiles, err := tincanconfig.NewAgentProfileStore()
 	if err != nil {
 		return nil, fmt.Errorf("init agent profiles: %w", err)
 	}
 
-	backends, err := NewAgentBackendStore()
+	backends, err := tincanconfig.NewAgentBackendStore()
 	if err != nil {
 		return nil, fmt.Errorf("init agent backends: %w", err)
 	}
@@ -199,8 +183,9 @@ func newServer() (*server, error) {
 	}
 
 	conversationService := NewConversationService(profiles, backends, conversationStore, agentAdapters)
+	routerService := NewRouter(routerBackend, routerAdapter, profiles)
 
-	return &server{
+	srv := &server{
 		inference:           &inferenceClient{socketPath: inferenceSocketPath()},
 		callManager:         callManager,
 		linphoneServer:      linphoneServer,
@@ -209,14 +194,23 @@ func newServer() (*server, error) {
 		conversations:       conversationStore,
 		agentAdapters:       agentAdapters,
 		conversationService: conversationService,
-		router:              NewRouter(routerBackend, routerAdapter, profiles),
-		dispatcher: &tincanrouter.Dispatcher{
+		userInputController: &controllers.UserInputController{
+			Router:             routerService,
 			Calls:              callManager,
 			Conversations:      conversationStore,
 			ConversationCreate: conversationCreator{service: conversationService},
-			Audio:              sessionAudioNotifier{server: nil},
+			ConversationSend:   conversationMessenger{service: conversationService},
 		},
-	}, nil
+		hookController: &controllers.HookController{
+			Conversations: conversationStore,
+			Backends:      backends,
+			Sessions:      callManager,
+		},
+	}
+	srv.outputPublisher = output.NewPublisher(output.CallAudioListener{
+		Renderer: callAudioRenderer{server: srv},
+	})
+	return srv, nil
 }
 
 func (s *server) handleHealth(w http.ResponseWriter, _ *http.Request) {
@@ -327,7 +321,7 @@ func (s *server) handleOpenCodeHook(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
-	var event openCodeHookEvent
+	var event controllers.OpenCodeHookEvent
 	if err := json.NewDecoder(r.Body).Decode(&event); err != nil {
 		http.Error(w, "invalid json body", http.StatusBadRequest)
 		return
@@ -337,45 +331,18 @@ func (s *server) handleOpenCodeHook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	conversation, ok, err := s.conversations.GetConversationByBackendConversationID(event.SessionID)
+	result, handled, err := s.hookController.HandleOpenCodeHook(event)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("failed to find conversation: %v", err), http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("failed to handle hook: %v", err), http.StatusInternalServerError)
 		return
 	}
-	if !ok {
+	if !handled {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-
-	switch event.EventType {
-	case "session.idle":
-		if err := s.createConversationUpdateFromLatestAssistant(conversation); err != nil {
-			log.Printf("failed to create conversation update for %s: %v", conversation.DisplayHandle, err)
-		}
-	case "session.error":
-		_, err := s.conversations.UpsertPendingUpdate(conversations.ConversationUpdate{
-			ConversationID:     conversation.ID,
-			ConversationHandle: conversation.DisplayHandle,
-			SummaryText:        event.ErrorMessage,
-			NotificationText:   conversation.DisplayHandle + " has an update.",
-			RawUpdateJSON:      mustMarshalJSON(event),
-			Status:             "pending",
-		})
-		if err != nil {
-			log.Printf("failed to store error update for %s: %v", conversation.DisplayHandle, err)
-		}
-	}
-
-	sessionID, hasSession := s.callManager.SessionIDForConversation(conversation.BackendConversationID)
-	if hasSession {
-		notificationText := conversation.DisplayHandle + " has an update."
-		audioURL := "/debug/audio/processing"
-		if generatedAudioURL, err := s.generateFeedbackAudio(notificationText); err != nil {
-			log.Printf("failed to generate update notification audio for %s: %v", conversation.DisplayHandle, err)
-		} else {
-			audioURL = generatedAudioURL
-		}
-		s.sendSessionEvent(sessionID, calls.NewNotifyEvent(notificationText, audioURL))
+	if err := s.publishOutput(result.OutputEvents...); err != nil {
+		http.Error(w, fmt.Sprintf("failed to publish hook output: %v", err), http.StatusInternalServerError)
+		return
 	}
 
 	w.WriteHeader(http.StatusNoContent)
@@ -462,106 +429,21 @@ func (s *server) handleUtteranceUpload(w http.ResponseWriter, r *http.Request, s
 
 	log.Printf("peer %s transcript: %s", sessionID, transcript)
 
-	routeRequest, err := s.buildRouteUserInputRequest(sessionID, transcript)
+	handleResult, err := s.userInputController.HandleTranscript(sessionID, transcript)
 	if err != nil {
-		log.Printf("peer %s failed to build router input context: %v", sessionID, err)
-		http.Error(w, fmt.Sprintf("failed to build router input context: %v", err), http.StatusInternalServerError)
+		log.Printf("peer %s handle transcript failed: %v", sessionID, err)
+		http.Error(w, fmt.Sprintf("handle transcript failed: %v", err), http.StatusBadGateway)
 		return
 	}
-
-	routerResult, err := s.router.RouteUserInput(routeRequest)
-	if err != nil {
-		log.Printf("peer %s router failed: %v", sessionID, err)
-		http.Error(w, fmt.Sprintf("router failed: %v", err), http.StatusBadGateway)
-		return
-	}
+	routerResult := handleResult.RouteResult
 	log.Printf("peer %s router action: %s agent_profile=%q handle=%q feedback=%q", sessionID, routerResult.Action, routerResult.AgentProfile, routerResult.ConversationHandle, routerResult.ImmediateFeedback)
 
-	responsePayload := map[string]any{
-		"text":   transcript,
-		"router": routerResult,
-	}
-	if routerResult.ImmediateFeedback != "" {
-		feedbackAudioURL, err := s.generateFeedbackAudio(routerResult.ImmediateFeedback)
-		if err != nil {
-			log.Printf("peer %s immediate feedback tts failed: %v", sessionID, err)
-		} else {
-			responsePayload["feedback_audio_url"] = feedbackAudioURL
-			s.sendSessionEvent(sessionID, calls.NewPlayAudioEvent(routerResult.ImmediateFeedback, feedbackAudioURL))
-		}
-	}
-
-	s.dispatcher.Audio = sessionAudioNotifier{server: s}
-	dispatchResult, err := s.dispatcher.DispatchUserInput(sessionID, routeRequest, routerResult)
-	if err != nil {
-		log.Printf("peer %s dispatch failed for action %s: %v", sessionID, routerResult.Action, err)
-		http.Error(w, fmt.Sprintf("dispatch failed: %v", err), http.StatusBadGateway)
+	if err := s.publishOutput(handleResult.OutputEvents...); err != nil {
+		log.Printf("peer %s publish output failed: %v", sessionID, err)
+		http.Error(w, fmt.Sprintf("publish output failed: %v", err), http.StatusBadGateway)
 		return
 	}
-	for key, value := range dispatchResult.Fields {
-		responsePayload[key] = value
-	}
-
-	if conversationValue, ok := responsePayload["conversation"]; ok && strings.TrimSpace(routerResult.UpdatedConversationNotes) != "" {
-		if conversation, ok := conversationValue.(tincanrouter.ConversationCreateResult); ok {
-			if _, err := s.conversations.UpsertConversationNotes(conversation.ID, routerResult.UpdatedConversationNotes); err != nil {
-				log.Printf("peer %s failed to persist conversation notes for %s: %v", sessionID, conversation.DisplayHandle, err)
-			}
-		}
-	}
-
-	writeJSON(w, http.StatusOK, responsePayload)
-}
-
-func (s *server) buildRouteUserInputRequest(sessionID string, transcript string) (tincanrouter.RouteUserInputRequest, error) {
-	request := tincanrouter.RouteUserInputRequest{Transcript: transcript}
-
-	conversationHandles, err := s.conversations.ListConversationHandles()
-	if err != nil {
-		return tincanrouter.RouteUserInputRequest{}, err
-	}
-	request.ConversationHandles = conversationHandles
-
-	pendingUpdateHandles, err := s.conversations.ListPendingUpdateHandles(20)
-	if err != nil {
-		return tincanrouter.RouteUserInputRequest{}, err
-	}
-	request.PendingUpdateHandles = pendingUpdateHandles
-
-	currentConversationHandle, hasCurrentHandle := s.callManager.CurrentConversationHandleForSession(sessionID)
-	currentBackendConversationID, hasCurrentBackendConversationID := s.callManager.CurrentBackendConversationIDForSession(sessionID)
-	if !hasCurrentHandle && !hasCurrentBackendConversationID {
-		return request, nil
-	}
-	request.CurrentConversationHandle = currentConversationHandle
-	for _, message := range s.callManager.ClarificationHistoryForSession(sessionID) {
-		request.ClarificationHistory = append(request.ClarificationHistory, tincanrouter.ClarificationMessage{
-			Role: message.Role,
-			Text: message.Text,
-		})
-	}
-
-	if !hasCurrentBackendConversationID {
-		return request, nil
-	}
-
-	currentConversation, ok, err := s.conversations.GetConversationByBackendConversationID(currentBackendConversationID)
-	if err != nil {
-		return tincanrouter.RouteUserInputRequest{}, err
-	}
-	if !ok {
-		return request, nil
-	}
-
-	note, ok, err := s.conversations.GetConversationNotes(currentConversation.ID)
-	if err != nil {
-		return tincanrouter.RouteUserInputRequest{}, err
-	}
-	if ok {
-		request.CurrentConversationNotes = note.NotesText
-	}
-
-	return request, nil
+	writeJSON(w, http.StatusOK, handleResult.ResponseBody)
 }
 
 func (s *server) generateFeedbackAudio(text string) (string, error) {
@@ -582,76 +464,6 @@ func (s *server) generateFeedbackAudio(text string) (string, error) {
 	}
 
 	return "/debug/audio/generated/" + fileName, nil
-}
-
-func (s *server) createConversationUpdateFromLatestAssistant(conversation conversations.Conversation) error {
-	backend, ok := s.backends.Get(conversation.AgentBackend)
-	if !ok {
-		return fmt.Errorf("unknown backend %q for conversation", conversation.AgentBackend)
-	}
-	if backend.Type != "opencode" || backend.Options.BaseURL == "" {
-		return fmt.Errorf("conversation backend does not support OpenCode message fetch")
-	}
-
-	baseURL, err := url.Parse(backend.Options.BaseURL)
-	if err != nil {
-		return err
-	}
-	messageURL := baseURL.ResolveReference(&url.URL{Path: strings.TrimRight(baseURL.Path, "/") + "/session/" + conversation.BackendConversationID + "/message"})
-	query := messageURL.Query()
-	query.Set("directory", conversation.WorkingDirectory)
-	messageURL.RawQuery = query.Encode()
-
-	resp, err := http.Get(messageURL.String())
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("fetch session messages failed with status %d", resp.StatusCode)
-	}
-
-	var messages []openCodeMessageWithParts
-	if err := json.NewDecoder(resp.Body).Decode(&messages); err != nil {
-		return err
-	}
-
-	latestText := ""
-	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Info.Role != "assistant" {
-			continue
-		}
-		for _, part := range messages[i].Parts {
-			if part.Type == "text" && strings.TrimSpace(part.Text) != "" {
-				latestText = strings.TrimSpace(part.Text)
-				break
-			}
-		}
-		if latestText != "" {
-			break
-		}
-	}
-	if latestText == "" {
-		latestText = "The agent has an update."
-	}
-
-	_, err = s.conversations.UpsertPendingUpdate(conversations.ConversationUpdate{
-		ConversationID:     conversation.ID,
-		ConversationHandle: conversation.DisplayHandle,
-		SummaryText:        latestText,
-		NotificationText:   conversation.DisplayHandle + " has an update.",
-		RawUpdateJSON:      mustMarshalJSON(messages),
-		Status:             "pending",
-	})
-	return err
-}
-
-func mustMarshalJSON(v any) string {
-	data, err := json.Marshal(v)
-	if err != nil {
-		return ""
-	}
-	return string(data)
 }
 
 func (s *server) sendSessionEvent(sessionID string, payload any) {

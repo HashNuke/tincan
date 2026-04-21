@@ -12,10 +12,10 @@ import (
 type Router struct {
 	backend  tincanconfig.AgentBackendDefinition
 	adapter  agent_adapters.Adapter
-	profiles *AgentProfileStore
+	profiles *tincanconfig.AgentProfileStore
 }
 
-func NewRouter(backend tincanconfig.AgentBackendDefinition, adapter agent_adapters.Adapter, profiles *AgentProfileStore) *Router {
+func NewRouter(backend tincanconfig.AgentBackendDefinition, adapter agent_adapters.Adapter, profiles *tincanconfig.AgentProfileStore) *Router {
 	return &Router{backend: backend, adapter: adapter, profiles: profiles}
 }
 

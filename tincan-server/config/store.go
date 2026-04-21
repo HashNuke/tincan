@@ -1,35 +1,33 @@
-package main
+package config
 
 import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
 	"strings"
-
-	tincanconfig "tincan-server/config"
 )
 
-//go:embed config/agent_profiles.json
+//go:embed agent_profiles.json
 var agentProfilesJSON []byte
 
-//go:embed config/agent_backends.json
+//go:embed agent_backends.json
 var agentBackendsJSON []byte
 
 type AgentProfileStore struct {
-	profiles map[string]tincanconfig.AgentProfile
+	profiles map[string]AgentProfile
 }
 
 type AgentBackendStore struct {
-	backends map[string]tincanconfig.AgentBackendDefinition
+	backends map[string]AgentBackendDefinition
 }
 
 func NewAgentProfileStore() (*AgentProfileStore, error) {
-	var decoded []tincanconfig.AgentProfile
+	var decoded []AgentProfile
 	if err := json.Unmarshal(agentProfilesJSON, &decoded); err != nil {
 		return nil, fmt.Errorf("decode agent profiles: %w", err)
 	}
 
-	profiles := make(map[string]tincanconfig.AgentProfile, len(decoded))
+	profiles := make(map[string]AgentProfile, len(decoded))
 	for _, profile := range decoded {
 		if profile.Name == "" {
 			return nil, fmt.Errorf("agent profile name must not be empty")
@@ -51,12 +49,12 @@ func NewAgentProfileStore() (*AgentProfileStore, error) {
 }
 
 func NewAgentBackendStore() (*AgentBackendStore, error) {
-	var decoded map[string]tincanconfig.AgentBackendDefinition
+	var decoded map[string]AgentBackendDefinition
 	if err := json.Unmarshal(agentBackendsJSON, &decoded); err != nil {
 		return nil, fmt.Errorf("decode agent backends: %w", err)
 	}
 
-	backends := make(map[string]tincanconfig.AgentBackendDefinition, len(decoded))
+	backends := make(map[string]AgentBackendDefinition, len(decoded))
 	for name, backend := range decoded {
 		if name == "" {
 			return nil, fmt.Errorf("agent backend name must not be empty")
@@ -76,15 +74,15 @@ func NewAgentBackendStore() (*AgentBackendStore, error) {
 	return &AgentBackendStore{backends: backends}, nil
 }
 
-func (s *AgentProfileStore) List() []tincanconfig.AgentProfile {
-	result := make([]tincanconfig.AgentProfile, 0, len(s.profiles))
+func (s *AgentProfileStore) List() []AgentProfile {
+	result := make([]AgentProfile, 0, len(s.profiles))
 	for _, profile := range s.profiles {
 		result = append(result, profile)
 	}
 	return result
 }
 
-func (s *AgentProfileStore) Get(name string) (tincanconfig.AgentProfile, bool) {
+func (s *AgentProfileStore) Get(name string) (AgentProfile, bool) {
 	profile, ok := s.profiles[normalizeAgentProfileName(name)]
 	return profile, ok
 }
@@ -93,7 +91,15 @@ func normalizeAgentProfileName(name string) string {
 	return strings.ToLower(strings.TrimSpace(name))
 }
 
-func (s *AgentBackendStore) Get(name string) (tincanconfig.AgentBackendDefinition, bool) {
+func (s *AgentBackendStore) Get(name string) (AgentBackendDefinition, bool) {
 	backend, ok := s.backends[name]
 	return backend, ok
+}
+
+func (s *AgentBackendStore) BackendBaseURL(name string) (string, bool) {
+	backend, ok := s.backends[name]
+	if !ok {
+		return "", false
+	}
+	return backend.Options.BaseURL, true
 }

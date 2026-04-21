@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	tincanconfig "tincan-server/config"
+	"tincan-server/conversations"
 	tincanrouter "tincan-server/router"
 )
 
@@ -129,6 +130,62 @@ func (a *OpencodeAdapter) StartConversation(profile tincanconfig.AgentProfile, b
 		BackendConversationID: session.ID,
 		Status:                "running",
 	}, nil
+}
+
+func (a *OpencodeAdapter) ContinueConversation(conversation conversations.Conversation, backend tincanconfig.AgentBackendDefinition, message string) error {
+	if err := a.ValidateBackend(conversation.AgentBackend, backend); err != nil {
+		return err
+	}
+	if message == "" {
+		return fmt.Errorf("continue conversation requires non-empty message")
+	}
+
+	httpClient := a.httpClient
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+
+	baseURL, err := url.Parse(backend.Options.BaseURL)
+	if err != nil {
+		return fmt.Errorf("parse opencode base url: %w", err)
+	}
+
+	promptURL := *baseURL
+	promptURL.Path = strings.TrimRight(baseURL.Path, "/") + "/session/" + conversation.BackendConversationID + "/prompt_async"
+	query := promptURL.Query()
+	query.Set("directory", conversation.WorkingDirectory)
+	promptURL.RawQuery = query.Encode()
+
+	modelRef, err := parseOpenCodeModel(backend.Options.Model)
+	if err != nil {
+		return err
+	}
+
+	promptBody, err := json.Marshal(openCodePromptAsyncRequest{
+		Model: modelRef,
+		Agent: backend.Options.Agent,
+		Parts: []openCodePromptPart{{Type: "text", Text: message}},
+	})
+	if err != nil {
+		return fmt.Errorf("marshal continue prompt request: %w", err)
+	}
+
+	promptReq, err := http.NewRequest(http.MethodPost, promptURL.String(), bytes.NewReader(promptBody))
+	if err != nil {
+		return fmt.Errorf("build continue prompt request: %w", err)
+	}
+	promptReq.Header.Set("Content-Type", "application/json")
+
+	promptResp, err := httpClient.Do(promptReq)
+	if err != nil {
+		return fmt.Errorf("opencode continue prompt_async request failed: %w", err)
+	}
+	defer promptResp.Body.Close()
+
+	if promptResp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("opencode continue prompt_async failed with status %d", promptResp.StatusCode)
+	}
+	return nil
 }
 
 func (a *OpencodeAdapter) RunRouterPrompt(backend tincanconfig.AgentBackendDefinition, prompt string, rawTranscript string) (tincanrouter.RouteUserInputResult, error) {

@@ -148,12 +148,12 @@ func (s *Store) GetMostRecentConversationByBackendConversationIDs(backendConvers
 	return conversation, true, nil
 }
 
-func (s *Store) UpsertPendingUpdate(update ConversationUpdate) (ConversationUpdate, error) {
+func (s *Store) UpsertPendingUpdate(update ConversationUpdate) (ConversationUpdate, bool, error) {
 	now := time.Now().UTC()
 	var existing ConversationUpdate
 	err := s.db.Where("conversation_id = ? AND status = ?", update.ConversationID, "pending").First(&existing).Error
 	if err != nil && err != gorm.ErrRecordNotFound {
-		return ConversationUpdate{}, fmt.Errorf("lookup pending conversation update: %w", err)
+		return ConversationUpdate{}, false, fmt.Errorf("lookup pending conversation update: %w", err)
 	}
 
 	if err == gorm.ErrRecordNotFound {
@@ -162,9 +162,18 @@ func (s *Store) UpsertPendingUpdate(update ConversationUpdate) (ConversationUpda
 		update.CreatedAt = now
 		update.UpdatedAt = now
 		if err := s.db.Create(&update).Error; err != nil {
-			return ConversationUpdate{}, fmt.Errorf("create pending conversation update: %w", err)
+			return ConversationUpdate{}, false, fmt.Errorf("create pending conversation update: %w", err)
 		}
-		return update, nil
+		return update, true, nil
+	}
+
+	changed := existing.SummaryText != update.SummaryText ||
+		existing.NotificationText != update.NotificationText ||
+		existing.RawUpdateJSON != update.RawUpdateJSON ||
+		existing.Status != "pending" ||
+		existing.ConsumedAt != nil
+	if !changed {
+		return existing, false, nil
 	}
 
 	existing.SummaryText = update.SummaryText
@@ -174,9 +183,9 @@ func (s *Store) UpsertPendingUpdate(update ConversationUpdate) (ConversationUpda
 	existing.UpdatedAt = now
 	existing.ConsumedAt = nil
 	if err := s.db.Save(&existing).Error; err != nil {
-		return ConversationUpdate{}, fmt.Errorf("update pending conversation update: %w", err)
+		return ConversationUpdate{}, false, fmt.Errorf("update pending conversation update: %w", err)
 	}
-	return existing, nil
+	return existing, true, nil
 }
 
 func (s *Store) ListPendingUpdates(limit int) ([]ConversationUpdate, error) {

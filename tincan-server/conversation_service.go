@@ -4,12 +4,13 @@ import (
 	"fmt"
 
 	"tincan-server/agent_adapters"
+	tincanconfig "tincan-server/config"
 	"tincan-server/conversations"
 )
 
 type ConversationService struct {
-	profiles      *AgentProfileStore
-	backends      *AgentBackendStore
+	profiles      *tincanconfig.AgentProfileStore
+	backends      *tincanconfig.AgentBackendStore
 	conversations *conversations.Store
 	agentAdapters map[string]agent_adapters.Adapter
 }
@@ -18,6 +19,11 @@ type ConversationCreateInput struct {
 	ProfileName       string
 	ConversationTitle string
 	Message           string
+}
+
+type ConversationMessageInput struct {
+	Conversation conversations.Conversation
+	Message      string
 }
 
 type ConversationCreateResult struct {
@@ -31,7 +37,7 @@ type ConversationCreateResult struct {
 	Status                string `json:"status"`
 }
 
-func NewConversationService(profiles *AgentProfileStore, backends *AgentBackendStore, conversationsStore *conversations.Store, agentAdapters map[string]agent_adapters.Adapter) *ConversationService {
+func NewConversationService(profiles *tincanconfig.AgentProfileStore, backends *tincanconfig.AgentBackendStore, conversationsStore *conversations.Store, agentAdapters map[string]agent_adapters.Adapter) *ConversationService {
 	return &ConversationService{
 		profiles:      profiles,
 		backends:      backends,
@@ -94,4 +100,26 @@ func (s *ConversationService) CreateConversation(input ConversationCreateInput) 
 		BackendConversationID: conversation.BackendConversationID,
 		Status:                conversation.Status,
 	}, nil
+}
+
+func (s *ConversationService) ContinueConversation(input ConversationMessageInput) error {
+	if input.Message == "" {
+		return fmt.Errorf("continue conversation requires non-empty message")
+	}
+
+	backend, ok := s.backends.Get(input.Conversation.AgentBackend)
+	if !ok {
+		return fmt.Errorf("unknown agent backend %q", input.Conversation.AgentBackend)
+	}
+
+	adapter, ok := s.agentAdapters[backend.Type]
+	if !ok {
+		return fmt.Errorf("no agent adapter for backend type %q", backend.Type)
+	}
+
+	if err := adapter.ContinueConversation(input.Conversation, backend, input.Message); err != nil {
+		return fmt.Errorf("continue backend conversation: %w", err)
+	}
+
+	return nil
 }

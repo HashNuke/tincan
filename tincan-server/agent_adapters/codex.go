@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	tincanconfig "tincan-server/config"
+	"tincan-server/conversations"
 	tincanrouter "tincan-server/router"
 )
 
@@ -31,6 +32,16 @@ func (a *CodexAdapter) StartConversation(profile tincanconfig.AgentProfile, back
 		return ConversationStartResult{}, fmt.Errorf("start conversation requires non-empty message")
 	}
 	return ConversationStartResult{}, fmt.Errorf("codex adapter is not implemented yet")
+}
+
+func (a *CodexAdapter) ContinueConversation(conversation conversations.Conversation, backend tincanconfig.AgentBackendDefinition, message string) error {
+	if err := a.ValidateBackend(conversation.AgentBackend, backend); err != nil {
+		return err
+	}
+	if message == "" {
+		return fmt.Errorf("continue conversation requires non-empty message")
+	}
+	return fmt.Errorf("codex adapter is not implemented yet")
 }
 
 func (a *CodexAdapter) RunRouterPrompt(backend tincanconfig.AgentBackendDefinition, prompt string, rawTranscript string) (tincanrouter.RouteUserInputResult, error) {
