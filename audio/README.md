@@ -47,3 +47,9 @@ The generated sketches are generally designed to loop cleanly by leaving enough 
 ## Attributions
 
 - `phone-ring-out-call-end-tone.wav` by [kalhan on Freesound](https://freesound.org/s/677458/) — License: Creative Commons 0
+
+## More sounds I like
+
+* [Mandolin Plucks - 130bpm - C#min by by nnaudio](https://freesound.org/people/nnaudio/sounds/518197/) - License: Attribution 4.0
+* [koto and shamisen loop](https://freesound.org/people/zagi2/sounds/222655/)
+* [Best RnB Analog Keys - 125bpm - F#min](https://freesound.org/people/nnaudio/sounds/570286/)

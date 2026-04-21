@@ -6,57 +6,60 @@ Gain master => LPF soften => Gain dry => dac;
 soften => JCRev rev => LPF revTone => Gain wet => dac;
 dac => WvOut2 capture => blackhole;
 (me.dir() + "output/call_ringing.wav", IO.INT24) => capture.wavFilename;
-0.94 => capture.fileGain;
-1.20 => master.gain;
-1900.0 => soften.freq;
-0.86 => dry.gain;
-0.14 => wet.gain;
-0.08 => rev.mix;
-1500.0 => revTone.freq;
+0.98 => capture.fileGain;
+2.20 => master.gain;
+1500.0 => soften.freq;
+0.92 => dry.gain;
+0.08 => wet.gain;
+0.05 => rev.mix;
+1200.0 => revTone.freq;
 
 fun void strike(float freq, float amp, float pan, dur hold, dur releaseTime)
 {
     SawOsc buzzA => Gain blend => ADSR env => LPF tone => Gain voice => Pan2 p => master;
     SqrOsc buzzB => blend;
-    Noise grit => HPF gritHPF => LPF gritLPF => Gain airy => blend;
+    Noise grit => HPF gritHPF => LPF gritLPF => ADSR gritEnv => Gain airy => blend;
     SinOsc wobble => blackhole;
 
     pan => p.pan;
-    22.0 => wobble.freq;
+    18.0 => wobble.freq;
     freq => buzzA.freq;
     freq * 1.005 => buzzB.freq;
 
-    0.11 => buzzA.gain;
-    0.06 => buzzB.gain;
-    700.0 => gritHPF.freq;
-    1800.0 => gritLPF.freq;
-    0.012 => grit.gain;
-    0.03 => airy.gain;
+    0.08 => buzzA.gain;
+    0.045 => buzzB.gain;
+    500.0 => gritHPF.freq;
+    1300.0 => gritLPF.freq;
+    0.014 => grit.gain;
+    0.05 => airy.gain;
 
-    1200.0 => tone.freq;
+    980.0 => tone.freq;
     amp => voice.gain;
 
-    env.set(3::ms, 24::ms, 0.74, releaseTime);
+    env.set(6::ms, 34::ms, 0.68, releaseTime);
+    gritEnv.set(2::ms, 18::ms, 0.0, releaseTime + 20::ms);
     env.keyOn();
+    gritEnv.keyOn();
     12 => int steps;
     hold / steps => dur stepDur;
     for (0 => int i; i < steps; i++)
     {
-        freq + (wobble.last() * 5.0) => buzzA.freq;
-        (freq * 1.005) + (wobble.last() * 3.5) => buzzB.freq;
+        freq + (wobble.last() * 3.0) => buzzA.freq;
+        (freq * 1.005) + (wobble.last() * 2.2) => buzzB.freq;
         stepDur => now;
     }
     env.keyOff();
+    gritEnv.keyOff();
     releaseTime => now;
 }
 
 fun void ringPhrase(float panBias)
 {
-    spork ~ strike(760.0, 0.74, -0.08 * panBias, 135::ms, 165::ms);
-    spork ~ strike(640.0, 0.38, 0.05 * panBias, 135::ms, 175::ms);
+    spork ~ strike(610.0, 0.58, -0.03 * panBias, 150::ms, 185::ms);
+    spork ~ strike(560.0, 0.26, 0.02 * panBias, 150::ms, 195::ms);
     210::ms => now;
-    spork ~ strike(760.0, 0.68, 0.08 * panBias, 135::ms, 165::ms);
-    spork ~ strike(640.0, 0.34, -0.05 * panBias, 135::ms, 175::ms);
+    spork ~ strike(610.0, 0.54, 0.03 * panBias, 150::ms, 185::ms);
+    spork ~ strike(560.0, 0.24, -0.02 * panBias, 150::ms, 195::ms);
     980::ms => now;
 }
 
