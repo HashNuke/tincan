@@ -19,6 +19,16 @@ enum AppPaths {
         return directory
     }()
 
+    nonisolated static let generatedConfigDirectory: URL = {
+        let directory = appSupportDirectory.appendingPathComponent("config", isDirectory: true)
+        try? FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true,
+            attributes: nil
+        )
+        return directory
+    }()
+
     nonisolated static let temporaryDirectory: URL = {
         let directory = appSupportDirectory.appendingPathComponent("tmp", isDirectory: true)
         try? FileManager.default.createDirectory(
@@ -29,7 +39,15 @@ enum AppPaths {
         return directory
     }()
 
+    nonisolated static let generatedAgentProfilesURL = generatedConfigDirectory.appendingPathComponent("agent_profiles.json")
+    nonisolated static let generatedAgentBackendsURL = generatedConfigDirectory.appendingPathComponent("agent_backends.json")
     nonisolated static let ownerProfileURL = appSupportDirectory.appendingPathComponent("owner-voice-profile.json")
     nonisolated static let backendDirectory = projectRoot.appendingPathComponent("backend", isDirectory: true)
     nonisolated static let backendServerModule = "backend.server"
+
+    static func bootstrap() {
+        _ = appSupportDirectory
+        _ = generatedConfigDirectory
+        _ = temporaryDirectory
+    }
 }

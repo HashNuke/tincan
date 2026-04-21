@@ -8,6 +8,7 @@ final class TincanAppModel: ObservableObject {
 #endif
 
 #if os(macOS)
+    let macOnboarding = MacOnboardingViewModel()
     let macCallSession = MacCallSessionViewModel()
 #endif
 }

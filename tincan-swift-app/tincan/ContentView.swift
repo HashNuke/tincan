@@ -7,7 +7,11 @@ struct ContentView: View {
 #if os(iOS)
         IOSCallView(viewModel: appModel.callSession)
 #elseif os(macOS)
-        MacCallView(callSession: appModel.macCallSession)
+        if appModel.macOnboarding.isCompleted {
+            MacCallView(callSession: appModel.macCallSession)
+        } else {
+            MacOnboardingView(viewModel: appModel.macOnboarding)
+        }
 #else
         Text("tincan is currently configured for iOS and macOS.")
             .padding()
