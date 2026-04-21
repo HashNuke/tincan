@@ -5,7 +5,7 @@ import Foundation
 
 @MainActor
 final class CallSessionViewModel: ObservableObject {
-    @Published var backendURLString: String = Self.initialBackendURL()
+    @Published var backendURLString: String
     @Published var callStateDescription = "Idle"
     @Published var lastServerTranscript = ""
     @Published var logLines: [String] = []
@@ -30,6 +30,7 @@ final class CallSessionViewModel: ObservableObject {
     ]
 
     init() {
+        backendURLString = Self.initialBackendURL()
         callKitController.delegate = self
         audioPipeline.setDelegate(self)
         appendLog("Ready")

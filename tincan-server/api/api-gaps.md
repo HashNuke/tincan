@@ -16,14 +16,12 @@ The server currently exposes these routes:
 
 - `GET /healthz`
   - Basic health response.
-- `POST /linphone/session`
-  - Register a new call session and return `session_id`.
-- `DELETE /linphone/session/{id}`
-  - Remove a call session.
-- `GET /linphone/session/{id}/events`
-  - SSE stream for live call events.
-- `POST /session/{id}/utterance`
-  - Upload captured speech audio for STT and routing.
+- `POST /webrtc/session`
+  - Submit a WebRTC offer and return `session_id` plus the answer SDP.
+- `DELETE /webrtc/session/{id}`
+  - Remove a WebRTC call session.
+- WebRTC data channel messages
+  - Carry utterance uploads and server playback notifications after signaling completes.
 - `POST /session/{id}/push-to-talk/start`
   - Enable push-to-talk for a call session.
 - `POST /session/{id}/push-to-talk/stop`
@@ -36,6 +34,12 @@ The server currently exposes these routes:
   - Debug/demo page.
 
 For the UI, the important thing is that the current API surface is almost entirely call-transport oriented. It is not yet a read API for conversations, transcript history, profiles, or backends.
+
+Important scope decision:
+
+- We should not repurpose the Linphone SSE route for the native app UI.
+- The app should use a separate live update path for text/UI events.
+- That path should be a WebSocket, not SSE.
 
 ## Data Already Available Internally
 
@@ -55,7 +59,7 @@ The server already has these internal data sources:
   - `updated_at`
   - `last_message_at`
   - `ended_at`
-- Conversation updates table
+- Conversation updates table today
   - `summary_text`
   - `detail_text`
   - `notification_text`
@@ -69,17 +73,23 @@ The server already has these internal data sources:
   - push-to-talk state
   - clarification history
 
+Planned storage change:
+
+- Rename `conversation_updates` to `messages`.
+- Persist every conversation update as its own message row.
+- Phase 1 transcript means "agent update history", and the `messages` table is enough for that.
+
 ## Important Limitations In The Current Internal Model
 
 There are a few gaps between "data exists" and "UI can use it":
 
 - There is no public HTTP API to read conversation summaries.
-- There is no public HTTP API to read conversation updates or notes.
+- There is no public HTTP API to read conversation messages or notes.
 - There is no public HTTP API to read agent profiles or backends.
-- There is no public HTTP API to read active call state for a session.
-- The SSE stream currently carries only `play_audio` and `notify` style events.
+- There is no app-specific live WebSocket for text/UI state changes.
+- The existing SSE stream carries only Linphone/browser call events such as `play_audio` and `notify`.
 - `Conversation.LastMessageAt` exists in the model but does not appear to be updated anywhere yet.
-- The transcript screen wants a thread-like history, but the server currently persists only pending update summaries, not a full user/assistant timeline.
+- The transcript screen wants an update history, but the current `conversation_updates` model is a pending/consumed queue, not an append-only history.
 
 That last point is the biggest transcript-related gap.
 
@@ -99,26 +109,26 @@ Minimum fields needed per row:
 - preview text
 - whether there is a pending/unread text update
 
-When a call is active, the UI also needs to know:
+List behavior:
 
-- which conversation is the current active call context
+- Do not hard-cap the UI to 10 threads.
+- The server should support incremental loading so the app can auto-load more rows while scrolling.
+- The SwiftUI implementation should still render lazily even if the user eventually browses all conversations.
 
 ### 2. Active Call Home State
 
 The in-call home state needs:
 
-- active call session state
-- current conversation handle
-- linked conversation handles for the session
-- push-to-talk state
-- continued live events for notifications/audio
+- a live feed for current conversation changes
+- a live feed for new text/update messages
+- an initial snapshot when the WebSocket connects so the app can recover after reconnect/backgrounding
 
 ### 3. Conversation Transcript
 
 The transcript screen needs:
 
-- a way to fetch history for a single conversation thread
-- enough data to render a timeline of updates/messages/artifacts
+- a way to fetch message history for a single conversation by conversation ID
+- enough data to render a timeline of agent updates
 - a way to know whether opening the thread should clear the "new update" highlight
 
 ### 4. Settings
@@ -142,11 +152,14 @@ On Mac, if we want in-app editing later, we will also need write APIs for:
 Purpose:
 
 - Drive the home conversation list.
+- Return the newest conversations first.
+- Support incremental loading while the user scrolls.
 
 Suggested response shape:
 
 ```json
 {
+  "next_cursor": "opaque-cursor",
   "conversations": [
     {
       "id": "uuid",
@@ -167,13 +180,20 @@ Suggested response shape:
 Notes:
 
 - `preview_text` is not currently stored directly in a durable conversation summary record.
-- We will need to derive it from the latest pending update, latest message history, or a newly persisted summary field.
+- We will need to derive it from the latest message row or persist it on the conversation row.
+- Use cursor pagination or equivalent. The UI should not request "all conversations" in one response just because the design shows an infinitely scrollable list.
 
-### `GET /api/v1/conversations/{handle}`
+Suggested query parameters:
+
+- `cursor`
+- `page_size`
+
+### `GET /api/v1/conversations/{id}/messages`
 
 Purpose:
 
-- Fetch one conversation summary for focused UI state.
+- Drive the transcript screen.
+- Use conversation ID, not handle, because handles are user-facing references and IDs are already returned by `/conversations`.
 
 Suggested response shape:
 
@@ -185,37 +205,17 @@ Suggested response shape:
     "agent_profile_name": "emma",
     "agent_backend": "opencode-1",
     "working_directory": "/Users/akash/code/apple/tincan",
-    "status": "running",
-    "updated_at": "2026-04-21T07:11:00Z",
-    "last_message_at": "2026-04-21T07:11:00Z",
-    "notes_text": "Home screen redesign thread"
-  }
-}
-```
-
-### `GET /api/v1/conversations/{handle}/updates`
-
-Purpose:
-
-- Drive the transcript screen.
-
-Suggested response shape:
-
-```json
-{
-  "conversation": {
-    "handle": "emma#16"
+    "status": "running"
   },
-  "updates": [
+  "next_cursor": "opaque-cursor",
+  "messages": [
     {
       "id": "uuid",
-      "kind": "conversation_update",
+      "kind": "agent_update",
       "summary_text": "Finished the patch.",
       "detail_text": "Updated the home screen so the active thread stays featured.",
       "notification_text": "I have an update.",
-      "status": "pending",
-      "updated_at": "2026-04-21T07:11:00Z",
-      "consumed_at": null
+      "created_at": "2026-04-21T07:11:00Z"
     }
   ]
 }
@@ -223,35 +223,9 @@ Suggested response shape:
 
 Important:
 
-- This is enough for an update-history screen.
-- It is **not** enough for a rich transcript if we want user messages and assistant messages as a full thread.
-
-### `GET /api/v1/calls/{session_id}/state`
-
-Purpose:
-
-- Support the in-call home state.
-- Tell the app which conversation is currently active for the call.
-
-Suggested response shape:
-
-```json
-{
-  "session_id": "transport-session-id",
-  "push_to_talk": false,
-  "current_conversation_handle": "emma#16",
-  "current_backend_conversation_id": "backend-id",
-  "linked_backend_conversation_ids": [
-    "backend-id",
-    "backend-id-2"
-  ]
-}
-```
-
-Notes:
-
-- The server already knows this data in `calls.Manager`.
-- It just is not exposed yet.
+- This is enough for the phase 1 transcript.
+- The table behind this endpoint should become `messages`, not `conversation_updates`.
+- Each agent update should be persisted as its own message row rather than overwriting one pending record.
 
 ### `GET /api/v1/agent-profiles`
 
@@ -299,29 +273,32 @@ Suggested response shape:
 
 ## Phase 2: Better Live/UI Sync APIs
 
-### Extend SSE event payloads
+### `GET /api/v1/live` (WebSocket)
 
-The existing SSE stream is useful for audio playback and notification summaries, but the UI will likely need more structured live events.
+Purpose:
 
-Suggested additions:
+- Deliver app-facing live text/UI updates.
+- Stay separate from the Linphone SSE transport path.
 
-- `session_state`
-  - current conversation handle
-  - push-to-talk state
+Recommended behavior:
+
+- The first WebSocket message after connect should be an initial snapshot.
+- That avoids a separate required `GET /api/v1/calls/{session_id}/state` endpoint in phase 1.
+- Reconnect behavior should be: reconnect socket, receive snapshot, then continue receiving deltas.
+
+Suggested event types:
+
+- `snapshot`
+  - current active conversation ID, if any
+  - whether a call is active, if needed by the UI
+- `conversation_message_created`
+  - when a thread gets a new text/update message
 - `conversation_context_changed`
-  - when a voice command switches the active thread
-- `conversation_update_created`
-  - when a thread gets a new update that should highlight in the list
+  - when voice routing switches the active thread
+- `conversation_updated`
+  - if summary metadata like preview text or timestamps change
 
-This could either extend:
-
-- `GET /linphone/session/{id}/events`
-
-or live under a new namespaced route such as:
-
-- `GET /api/v1/calls/{session_id}/events`
-
-### `POST /api/v1/conversations/{handle}/mark-viewed`
+### `POST /api/v1/conversations/{id}/mark-viewed`
 
 Purpose:
 
@@ -332,10 +309,13 @@ Open question:
 - Do we want this to globally consume the update for everyone, or only mark it viewed for this device/session?
 
 Today the server has only a global `pending -> consumed` model for updates.
+That should be revisited once the transcript source becomes append-only `messages`.
 
 ## Phase 3: APIs Needed For A Real Transcript
 
-The current `conversation_updates` table does not represent a full thread transcript.
+Phase 1 transcript is only agent update history, and the planned `messages` table is enough for that.
+
+If we later want a real user/assistant transcript, phase 1 is not enough.
 
 If the transcript screen should show more than summarized update cards, we need one of these approaches:
 
@@ -351,7 +331,7 @@ Add a new server-side timeline/message table and store:
 
 Then expose:
 
-- `GET /api/v1/conversations/{handle}/timeline`
+- `GET /api/v1/conversations/{id}/timeline`
 
 ### Option B: Fetch thread history from the backend adapter
 
@@ -368,7 +348,7 @@ type Adapter interface {
 
 Then expose:
 
-- `GET /api/v1/conversations/{handle}/timeline`
+- `GET /api/v1/conversations/{id}/timeline`
 
 This is likely necessary for OpenCode-backed threads because the transcript UI wants actual thread history, not just pending update summaries.
 
@@ -413,17 +393,14 @@ This is optional, not a blocker.
 
 ## Recommended Implementation Order
 
-1. Add `GET /api/v1/conversations`
-2. Add `GET /api/v1/conversations/{handle}`
-3. Add `GET /api/v1/conversations/{handle}/updates`
-4. Add `GET /api/v1/calls/{session_id}/state`
+1. Add `GET /api/v1/conversations` with cursor pagination
+2. Replace `conversation_updates` with append-only `messages`
+3. Add `GET /api/v1/conversations/{id}/messages`
+4. Add app WebSocket live updates under `/api/v1/live`
 5. Add `GET /api/v1/agent-profiles`
 6. Add `GET /api/v1/agent-backends`
-7. Decide whether transcript means:
-   - update history only
-   - or a true full message timeline
-8. If true timeline is required, add adapter read support or server-side timeline persistence
-9. After config storage is made writable, add Mac-only edit APIs for profiles/backends
+7. If a real user/assistant transcript is required later, add timeline support on top of phase 1 messages
+8. After config storage is made writable, add Mac-only edit APIs for profiles/backends
 
 ## Bottom Line
 
@@ -432,7 +409,9 @@ To build the UI we designed, the server needs a new app-facing read API layer un
 The two biggest gaps are:
 
 - no conversation list/read endpoints
-- no true transcript/timeline endpoint
+- no app-specific live WebSocket
+- no append-only message history for transcript rendering
 
 Settings read APIs are straightforward.
-Transcript fidelity is the part that needs an actual server-side design decision.
+Phase 1 transcript is now well-defined.
+The later decision is only whether we ever need a full user/assistant timeline.

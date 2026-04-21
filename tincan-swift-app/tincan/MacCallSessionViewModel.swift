@@ -15,7 +15,6 @@ final class MacCallSessionViewModel: ObservableObject {
     @Published private(set) var isCallActive = false
     @Published private(set) var isTransitioningCallState = false
 
-    private let linphoneClient = LiblinphoneCallClient()
     private let audioPipeline = AudioTurnPipeline()
     private let identityManager = SpeakerIdentityManager()
     private let promptSpeaker = LocalPromptSpeaker()
@@ -29,7 +28,6 @@ final class MacCallSessionViewModel: ObservableObject {
     private var ignoreCapturedSegmentsUntil = Date.distantPast
 
     init() {
-        linphoneClient.delegate = self
         audioPipeline.setDelegate(self)
         appendLog("Ready")
         Task {
@@ -66,7 +64,7 @@ final class MacCallSessionViewModel: ObservableObject {
                 return
             }
 
-            guard let serverURL = URL(string: BackendConnectionConfig.serverBaseURLString) else {
+            guard let serverURL = URL(string: BackendConnectionConfig.loopbackServerBaseURLString) else {
                 callStateDescription = "Invalid server URL"
                 isTransitioningCallState = false
                 return
@@ -80,7 +78,6 @@ final class MacCallSessionViewModel: ObservableObject {
                 sessionClient = client
                 appendLog("Session registered: \(sid)")
 
-                try linphoneClient.start()
                 let identityStatus = try await identityManager.prepare()
                 applyIdentityStatus(identityStatus)
                 try await audioPipeline.start()
@@ -145,8 +142,6 @@ final class MacCallSessionViewModel: ObservableObject {
             promptTask = nil
 
             await audioPipeline.stop()
-            linphoneClient.stop()
-
             if let client = sessionClient, let sid = sessionID {
                 await client.deregisterSession(sid)
             }
@@ -276,12 +271,6 @@ final class MacCallSessionViewModel: ObservableObject {
                 identityStatusDescription = "Waiting for the current speaker to say the spoken identification phrase."
             }
         }
-    }
-}
-
-extension MacCallSessionViewModel: LiblinphoneCallClientDelegate {
-    func liblinphoneCallClient(_ client: LiblinphoneCallClient, didLog message: String) {
-        appendLog(message)
     }
 }
 

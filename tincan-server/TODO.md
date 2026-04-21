@@ -10,17 +10,12 @@ Reference:
 
 - Add `GET /api/v1/conversations`
   - Return server-backed conversation summaries for the home screen.
-  - Include handle, profile/backend identity, working directory, status, updated time, preview text, and pending/unread update state.
+  - Include conversation ID, handle, profile/backend identity, working directory, status, updated time, preview text, and pending/unread update state.
+  - Support cursor pagination so the app can auto-load more conversations while scrolling instead of using a fixed `limit=10`.
 
-- Add `GET /api/v1/conversations/{handle}`
-  - Return a single conversation summary plus notes.
-
-- Add `GET /api/v1/conversations/{handle}/updates`
-  - Return update history for one conversation thread.
-  - Good enough for an updates-based transcript screen.
-
-- Add `GET /api/v1/calls/{session_id}/state`
-  - Return current active conversation handle, linked backend conversation IDs, and push-to-talk state.
+- Add `GET /api/v1/conversations/{id}/messages`
+  - Return agent update history for one conversation thread.
+  - Good enough for the phase 1 transcript screen.
 
 - Add `GET /api/v1/agent-profiles`
   - Populate Settings > Agent profiles.
@@ -28,12 +23,20 @@ Reference:
 - Add `GET /api/v1/agent-backends`
   - Populate Settings > Agent backends.
 
+- Add an app WebSocket endpoint under `/api/v1/live`
+  - Keep it separate from the Linphone SSE path.
+  - Send an initial snapshot on connect, then incremental UI/text events.
+
 ## Phase 1.5: Data Model Fixes
 
 - Decide how to produce `preview_text` for conversation list rows.
-  - Derive from latest pending update, latest backend message, or persist a summary field.
+  - Derive from latest message row or persist a summary field on the conversation row.
 
 - Start maintaining `conversations.last_message_at` if we want a reliable “last updated” signal in the UI.
+
+- Replace `conversation_updates` with append-only `messages`.
+  - Persist every agent update as its own message row.
+  - Use that table as the transcript source for phase 1.
 
 - Define how “new/unread text update” is represented.
   - Current model only has global pending/consumed updates.
@@ -41,27 +44,29 @@ Reference:
 
 ## Phase 2: Live UI Sync
 
-- Extend SSE/live events beyond `play_audio` and `notify`.
-  - Add session state events if needed.
-  - Add conversation context change events.
-  - Add conversation update created events for list highlighting.
+- Use WebSocket for app-facing live updates.
+  - Do not reintroduce the old `/linphone/session/{id}/events` transport.
+  - Keep transport-layer events and app UI/text events as separate paths.
 
-- Decide whether to keep using `/linphone/session/{id}/events` for all UI live events or add a new `/api/v1/.../events` route.
+- Send a socket snapshot immediately after connect.
+  - Include current active conversation ID if there is one.
+  - This removes the need for a separate required phase 1 call-state endpoint.
+
+- Add incremental socket events for:
+  - new conversation message created
+  - conversation context changed
+  - conversation summary metadata changed
 
 ## Phase 3: Transcript Strategy
 
-- Decide whether the transcript screen is:
-  - update history only, or
-  - a true thread timeline with user and assistant messages.
+- Phase 1 transcript is agent update history only.
+  - `GET /api/v1/conversations/{id}/messages` plus append-only `messages` storage is enough.
 
-- If transcript means update history only:
-  - the `/conversations/{handle}/updates` endpoint may be enough.
-
-- If transcript means a true thread timeline:
+- If we later want a true thread timeline:
   - either persist timeline entries in tincan-server, or
   - add adapter read support to fetch thread history from the backend.
 
-- If needed, add `GET /api/v1/conversations/{handle}/timeline`.
+- If needed, add `GET /api/v1/conversations/{id}/timeline`.
 
 ## Phase 4: Settings Write APIs
 

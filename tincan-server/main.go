@@ -22,6 +22,7 @@ import (
 
 	"github.com/google/uuid"
 	"tincan-server/agent_adapters"
+	tincanapi "tincan-server/api"
 	"tincan-server/calls"
 	tincanconfig "tincan-server/config"
 	"tincan-server/controllers"
@@ -34,7 +35,7 @@ import (
 type server struct {
 	mu                  sync.Mutex
 	callManager         *calls.Manager
-	linphoneServer      *calls.LinphoneServer
+	webrtcTransport     *webrtcTransport
 	inference           *inferenceClient
 	profiles            *tincanconfig.AgentProfileStore
 	backends            *tincanconfig.AgentBackendStore
@@ -111,12 +112,21 @@ func main() {
 		}
 	}()
 	mux := http.NewServeMux()
+	apiAdapters := make(map[string]tincanapi.ModelDiscoveringAdapter, len(srv.agentAdapters))
+	for name, adapter := range srv.agentAdapters {
+		apiAdapters[name] = adapter
+	}
 	mux.HandleFunc("/healthz", srv.handleHealth)
 	mux.HandleFunc("/speak", srv.handleSpeakPage)
 	mux.HandleFunc("/debug/audio/generated/", srv.handleGeneratedAudio)
 	mux.HandleFunc("/hooks/opencode", srv.handleOpenCodeHook)
+	tincanapi.Routes{
+		Profiles: srv.profiles,
+		Backends: srv.backends,
+		Adapters: apiAdapters,
+	}.Register(mux)
 	mux.HandleFunc("/session/", srv.handleSessionControl)
-	srv.linphoneServer.RegisterRoutes(mux)
+	srv.webrtcTransport.RegisterRoutes(mux)
 
 	addr := "0.0.0.0:" + port
 	log.Printf("tincan-server listening on %s", addr)
@@ -188,17 +198,11 @@ func newServer(dataDir string) (*server, error) {
 	}
 
 	callManager := calls.NewManager()
-	linphoneServer, err := calls.NewLinphoneServer(callManager)
-	if err != nil {
-		return nil, fmt.Errorf("init linphone server: %w", err)
-	}
-
 	conversationService := NewConversationService(profiles, backends, conversationStore, agentAdapters)
 
 	srv := &server{
 		inference:           &inferenceClient{socketPath: inferenceSocketPath()},
 		callManager:         callManager,
-		linphoneServer:      linphoneServer,
 		profiles:            profiles,
 		backends:            backends,
 		conversations:       conversationStore,
@@ -218,6 +222,7 @@ func newServer(dataDir string) (*server, error) {
 			UpdateProcessor: updateProcessor,
 		},
 	}
+	srv.webrtcTransport = newWebRTCTransport(srv)
 	srv.outputPublisher = output.NewPublisher(output.CallAudioListener{
 		Renderer: callAudioRenderer{server: srv},
 	})
@@ -400,6 +405,15 @@ func (s *server) handleUtteranceUpload(w http.ResponseWriter, r *http.Request, s
 	}
 
 	contentType := r.Header.Get("Content-Type")
+	responseBody, err := s.processUtterance(sessionID, audioData, contentType)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	writeJSON(w, http.StatusOK, responseBody)
+}
+
+func (s *server) processUtterance(sessionID string, audioData []byte, contentType string) (map[string]any, error) {
 	if contentType == "" {
 		contentType = "audio/wav"
 	}
@@ -415,8 +429,7 @@ func (s *server) handleUtteranceUpload(w http.ResponseWriter, r *http.Request, s
 	transcript, err := s.inference.transcribe(audioData, contentType)
 	if err != nil {
 		log.Printf("peer %s transcription failed: %v", sessionID, err)
-		http.Error(w, fmt.Sprintf("transcription failed: %v", err), http.StatusBadGateway)
-		return
+		return nil, fmt.Errorf("transcription failed: %w", err)
 	}
 
 	log.Printf("peer %s transcript: %s", sessionID, transcript)
@@ -424,18 +437,17 @@ func (s *server) handleUtteranceUpload(w http.ResponseWriter, r *http.Request, s
 	handleResult, err := s.userInputController.HandleTranscript(sessionID, transcript)
 	if err != nil {
 		log.Printf("peer %s handle transcript failed: %v", sessionID, err)
-		http.Error(w, fmt.Sprintf("handle transcript failed: %v", err), http.StatusBadGateway)
-		return
+		return nil, fmt.Errorf("handle transcript failed: %w", err)
 	}
 	routerResult := handleResult.RouteResult
 	log.Printf("peer %s router action: %s agent_profile=%q handle=%q feedback=%q", sessionID, routerResult.Action, routerResult.AgentProfile, routerResult.ConversationHandle, routerResult.ImmediateFeedback)
 
 	if err := s.publishOutput(handleResult.OutputEvents...); err != nil {
 		log.Printf("peer %s publish output failed: %v", sessionID, err)
-		http.Error(w, fmt.Sprintf("publish output failed: %v", err), http.StatusBadGateway)
-		return
+		return nil, fmt.Errorf("publish output failed: %w", err)
 	}
-	writeJSON(w, http.StatusOK, handleResult.ResponseBody)
+
+	return handleResult.ResponseBody, nil
 }
 
 func (s *server) generateFeedbackAudio(text string) (string, error) {
