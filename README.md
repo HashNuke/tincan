@@ -2,5 +2,5 @@
 
 Copyright 2026 Akash Manohar John
 
-* `tincan-swift-app` and `linphone-multiplatform` is licensed under AGPL (See `LICENSE-AGPL.txt`). License inherited from linphone.
-* Other compontents are MIT (See `LICENSE-MIT.txt`).
+* `tincan-swift-app`, `tincan-server` and all tincan components are licensed under FSL (See LICENSE.md).
+* `webrtc-multiplatform` is licensed under [WebRTC license](https://webrtc.org/support/license).
