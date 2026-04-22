@@ -39,9 +39,10 @@ type openCodePromptPart struct {
 }
 
 type openCodePromptAsyncRequest struct {
-	Model *openCodeModelRef    `json:"model,omitempty"`
-	Agent string               `json:"agent,omitempty"`
-	Parts []openCodePromptPart `json:"parts"`
+	Model  *openCodeModelRef    `json:"model,omitempty"`
+	Agent  string               `json:"agent,omitempty"`
+	System string               `json:"system,omitempty"`
+	Parts  []openCodePromptPart `json:"parts"`
 }
 
 type openCodeMessageResponse struct {
@@ -233,7 +234,7 @@ func (a *OpencodeAdapter) ContinueConversation(conversation conversations.Conver
 	return nil
 }
 
-func (a *OpencodeAdapter) RunRouterPrompt(profile tincanconfig.AgentProfile, backend tincanconfig.AgentBackendDefinition, prompt string, rawTranscript string) (tincanrouter.RouteUserInputResult, error) {
+func (a *OpencodeAdapter) RunRouterPrompt(profile tincanconfig.AgentProfile, backend tincanconfig.AgentBackendDefinition, prompt Prompt, rawTranscript string) (tincanrouter.RouteUserInputResult, error) {
 	if err := a.ValidateBackend(profile.AgentBackend, backend); err != nil {
 		return tincanrouter.RouteUserInputResult{}, err
 	}
@@ -256,7 +257,7 @@ func (a *OpencodeAdapter) RunRouterPrompt(profile tincanconfig.AgentProfile, bac
 	return result, nil
 }
 
-func (a *OpencodeAdapter) RunConversationUpdatePrompt(profile tincanconfig.AgentProfile, backend tincanconfig.AgentBackendDefinition, prompt string, rawUpdate string) (tincanrouter.ProcessConversationUpdateResult, error) {
+func (a *OpencodeAdapter) RunConversationUpdatePrompt(profile tincanconfig.AgentProfile, backend tincanconfig.AgentBackendDefinition, prompt Prompt, rawUpdate string) (tincanrouter.ProcessConversationUpdateResult, error) {
 	if err := a.ValidateBackend(profile.AgentBackend, backend); err != nil {
 		return tincanrouter.ProcessConversationUpdateResult{}, err
 	}
@@ -276,7 +277,7 @@ func (a *OpencodeAdapter) RunConversationUpdatePrompt(profile tincanconfig.Agent
 	return result, nil
 }
 
-func (a *OpencodeAdapter) runMessagePrompt(backend tincanconfig.AgentBackendDefinition, workingDirectory string, title string, prompt string) (string, error) {
+func (a *OpencodeAdapter) runMessagePrompt(backend tincanconfig.AgentBackendDefinition, workingDirectory string, title string, prompt Prompt) (string, error) {
 	httpClient := a.httpClient
 	if httpClient == nil {
 		httpClient = http.DefaultClient
@@ -303,9 +304,10 @@ func (a *OpencodeAdapter) runMessagePrompt(backend tincanconfig.AgentBackendDefi
 	}
 
 	body, err := json.Marshal(openCodePromptAsyncRequest{
-		Model: modelRef,
-		Agent: backend.Options.Agent,
-		Parts: []openCodePromptPart{{Type: "text", Text: prompt}},
+		Model:  modelRef,
+		Agent:  backend.Options.Agent,
+		System: prompt.System,
+		Parts:  []openCodePromptPart{{Type: "text", Text: prompt.User}},
 	})
 	if err != nil {
 		return "", fmt.Errorf("marshal prompt request: %w", err)

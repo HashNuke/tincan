@@ -96,7 +96,7 @@ func (r *Router) resolveRuntime() (tincanconfig.AgentProfile, tincanconfig.Agent
 	return profile, backend, adapter, nil
 }
 
-func (r *Router) buildUserRouterPrompt(routerProfileName string, input tincanrouter.RouteUserInputRequest) (string, error) {
+func (r *Router) buildUserRouterPrompt(routerProfileName string, input tincanrouter.RouteUserInputRequest) (agent_adapters.Prompt, error) {
 	var profileNames []string
 	for _, profile := range r.profiles.List() {
 		profileNames = append(profileNames, profile.Name)
@@ -109,7 +109,7 @@ func (r *Router) buildUserRouterPrompt(routerProfileName string, input tincanrou
 		clarificationHistory = append(clarificationHistory, fmt.Sprintf("%s: %s", message.Role, message.Text))
 	}
 
-	return prompts.RenderRouterUserPrompt(prompts.RouterUserPromptData{
+	promptData := prompts.RouterUserPromptData{
 		RouterProfileName:            routerProfileName,
 		DefinedAgentProfiles:         profileNames,
 		KnownConversationHandles:     input.ConversationHandles,
@@ -118,12 +118,40 @@ func (r *Router) buildUserRouterPrompt(routerProfileName string, input tincanrou
 		PendingUpdateHandles:         input.PendingUpdateHandles,
 		UnresolvedClarificationLines: clarificationHistory,
 		UserTranscript:               input.Transcript,
-	})
+	}
+
+	systemPrompt, err := prompts.RenderRouterUserSystemPrompt(promptData)
+	if err != nil {
+		return agent_adapters.Prompt{}, err
+	}
+	userPrompt, err := prompts.RenderRouterUserPrompt(promptData)
+	if err != nil {
+		return agent_adapters.Prompt{}, err
+	}
+
+	return agent_adapters.Prompt{
+		System: systemPrompt,
+		User:   userPrompt,
+	}, nil
 }
 
-func (r *Router) buildConversationUpdatePrompt(input tincanrouter.ProcessConversationUpdateRequest) (string, error) {
-	return prompts.RenderConversationUpdatePrompt(prompts.ConversationUpdatePromptData{
+func (r *Router) buildConversationUpdatePrompt(input tincanrouter.ProcessConversationUpdateRequest) (agent_adapters.Prompt, error) {
+	promptData := prompts.ConversationUpdatePromptData{
 		ConversationHandle: input.ConversationHandle,
 		DetailText:         input.DetailText,
-	})
+	}
+
+	systemPrompt, err := prompts.RenderConversationUpdateSystemPrompt(promptData)
+	if err != nil {
+		return agent_adapters.Prompt{}, err
+	}
+	userPrompt, err := prompts.RenderConversationUpdatePrompt(promptData)
+	if err != nil {
+		return agent_adapters.Prompt{}, err
+	}
+
+	return agent_adapters.Prompt{
+		System: systemPrompt,
+		User:   userPrompt,
+	}, nil
 }

@@ -6,6 +6,11 @@ import (
 	tincanrouter "tincan-server/router"
 )
 
+type Prompt struct {
+	System string
+	User   string
+}
+
 type Adapter interface {
 	Backend() string
 	ValidateBackend(name string, backend tincanconfig.AgentBackendDefinition) error
@@ -13,8 +18,8 @@ type Adapter interface {
 	ListModels(backend tincanconfig.AgentBackendDefinition) ([]string, error)
 	StartConversation(profile tincanconfig.AgentProfile, backend tincanconfig.AgentBackendDefinition, title string, message string) (ConversationStartResult, error)
 	ContinueConversation(conversation conversations.Conversation, backend tincanconfig.AgentBackendDefinition, message string) error
-	RunRouterPrompt(profile tincanconfig.AgentProfile, backend tincanconfig.AgentBackendDefinition, prompt string, rawTranscript string) (tincanrouter.RouteUserInputResult, error)
-	RunConversationUpdatePrompt(profile tincanconfig.AgentProfile, backend tincanconfig.AgentBackendDefinition, prompt string, rawUpdate string) (tincanrouter.ProcessConversationUpdateResult, error)
+	RunRouterPrompt(profile tincanconfig.AgentProfile, backend tincanconfig.AgentBackendDefinition, prompt Prompt, rawTranscript string) (tincanrouter.RouteUserInputResult, error)
+	RunConversationUpdatePrompt(profile tincanconfig.AgentProfile, backend tincanconfig.AgentBackendDefinition, prompt Prompt, rawUpdate string) (tincanrouter.ProcessConversationUpdateResult, error)
 }
 
 type ConversationStartResult struct {

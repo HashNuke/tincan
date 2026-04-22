@@ -28,8 +28,16 @@ type ConversationUpdatePromptData struct {
 
 var promptTemplates = template.Must(template.New("prompts").ParseFS(templateFS, "*.tmpl"))
 
+func RenderRouterUserSystemPrompt(data RouterUserPromptData) (string, error) {
+	return renderTemplate("router_user_system", data)
+}
+
 func RenderRouterUserPrompt(data RouterUserPromptData) (string, error) {
 	return renderTemplate("router_user", data)
+}
+
+func RenderConversationUpdateSystemPrompt(data ConversationUpdatePromptData) (string, error) {
+	return renderTemplate("conversation_update_system", data)
 }
 
 func RenderConversationUpdatePrompt(data ConversationUpdatePromptData) (string, error) {

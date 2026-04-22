@@ -16,7 +16,8 @@ type routerTestAdapter struct {
 	lastRouteProfile  tincanconfig.AgentProfile
 	lastRouteBackend  tincanconfig.AgentBackendDefinition
 	lastUpdateProfile tincanconfig.AgentProfile
-	lastRoutePrompt   string
+	lastRoutePrompt   agent_adapters.Prompt
+	lastUpdatePrompt  agent_adapters.Prompt
 }
 
 func (a *routerTestAdapter) Backend() string {
@@ -43,15 +44,16 @@ func (a *routerTestAdapter) ContinueConversation(conversation conversations.Conv
 	return nil
 }
 
-func (a *routerTestAdapter) RunRouterPrompt(profile tincanconfig.AgentProfile, backend tincanconfig.AgentBackendDefinition, prompt string, rawTranscript string) (tincanrouter.RouteUserInputResult, error) {
+func (a *routerTestAdapter) RunRouterPrompt(profile tincanconfig.AgentProfile, backend tincanconfig.AgentBackendDefinition, prompt agent_adapters.Prompt, rawTranscript string) (tincanrouter.RouteUserInputResult, error) {
 	a.lastRouteProfile = profile
 	a.lastRouteBackend = backend
 	a.lastRoutePrompt = prompt
 	return tincanrouter.RouteUserInputResult{Action: "ignore"}, nil
 }
 
-func (a *routerTestAdapter) RunConversationUpdatePrompt(profile tincanconfig.AgentProfile, backend tincanconfig.AgentBackendDefinition, prompt string, rawUpdate string) (tincanrouter.ProcessConversationUpdateResult, error) {
+func (a *routerTestAdapter) RunConversationUpdatePrompt(profile tincanconfig.AgentProfile, backend tincanconfig.AgentBackendDefinition, prompt agent_adapters.Prompt, rawUpdate string) (tincanrouter.ProcessConversationUpdateResult, error) {
 	a.lastUpdateProfile = profile
+	a.lastUpdatePrompt = prompt
 	return tincanrouter.ProcessConversationUpdateResult{
 		NotificationText: "I have an update.",
 		SummaryText:      "Updated.",
@@ -127,8 +129,11 @@ func TestRouterUsesConfiguredRouterProfile(t *testing.T) {
 	if adapter.lastRouteBackend.Type != "test" {
 		t.Fatalf("expected router backend type test, got %q", adapter.lastRouteBackend.Type)
 	}
-	if !strings.HasPrefix(adapter.lastRoutePrompt, "You are Atlas. You are a router for Tincan agents.") {
-		t.Fatalf("expected router prompt to start with %q, got %q", "You are Atlas. You are a router for Tincan agents.", adapter.lastRoutePrompt)
+	if !strings.HasPrefix(adapter.lastRoutePrompt.System, "You are Atlas. You are a router for Tincan agents.") {
+		t.Fatalf("expected router system prompt to start with %q, got %q", "You are Atlas. You are a router for Tincan agents.", adapter.lastRoutePrompt.System)
+	}
+	if !strings.Contains(adapter.lastRoutePrompt.User, "User transcript:\nhello") {
+		t.Fatalf("expected router user prompt to include transcript, got %q", adapter.lastRoutePrompt.User)
 	}
 
 	if _, err := profiles.Update("Atlas", tincanconfig.AgentProfile{
@@ -153,5 +158,11 @@ func TestRouterUsesConfiguredRouterProfile(t *testing.T) {
 	}
 	if adapter.lastUpdateProfile.WorkingDirectory != "/tmp/atlas-updated" {
 		t.Fatalf("expected renamed profile working directory to be used, got %q", adapter.lastUpdateProfile.WorkingDirectory)
+	}
+	if !strings.HasPrefix(adapter.lastUpdatePrompt.System, "You are the Tincan conversation update processor.") {
+		t.Fatalf("expected update system prompt to start with %q, got %q", "You are the Tincan conversation update processor.", adapter.lastUpdatePrompt.System)
+	}
+	if !strings.Contains(adapter.lastUpdatePrompt.User, "Conversation handle:\natlas#1") {
+		t.Fatalf("expected update user prompt to include conversation handle, got %q", adapter.lastUpdatePrompt.User)
 	}
 }
