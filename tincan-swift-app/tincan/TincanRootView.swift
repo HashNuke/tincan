@@ -394,17 +394,6 @@ private struct TincanPinnedCallControlsHeader: View {
             .padding(.top, 4)
             .padding(.bottom, 12)
         }
-        .background(
-            LinearGradient(
-                colors: [
-                    TincanPalette.canvasTop.opacity(0.98),
-                    TincanPalette.canvasTop.opacity(0.92),
-                    TincanPalette.canvasTop.opacity(0.0)
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-        )
     }
 }
 #endif
