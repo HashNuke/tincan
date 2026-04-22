@@ -44,6 +44,27 @@ final class CallTonePlayer: NSObject, AVAudioPlayerDelegate {
         ])
     }
 
+    func playProcessingTone() {
+        stopOutgoingRing()
+        if let url = bundledAudioAssetURL(named: "processing_soft_rhyme") {
+            do {
+                let player = try AVAudioPlayer(contentsOf: url)
+                player.delegate = self
+                player.prepareToPlay()
+                activePlayers.append(player)
+                player.play()
+                return
+            } catch {
+                assertionFailure("Failed to play processing audio asset: \(error.localizedDescription)")
+            }
+        }
+
+        playTone(sequence: [
+            ToneSegment(frequency: 523.25, duration: 0.08),
+            ToneSegment(frequency: 659.25, duration: 0.12),
+        ])
+    }
+
     func startOutgoingRing() {
         guard outgoingRingPlayer?.isPlaying != true else { return }
         guard let url = outgoingRingURL() else {

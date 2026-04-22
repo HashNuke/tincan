@@ -26,6 +26,8 @@ final class CallSessionViewModel: ObservableObject {
     private var sessionID: String?
     private var eventTask: Task<Void, Never>?
     private var muteGeneration: UInt64 = 0
+    private var isTransportRecovering = false
+    private var shouldPlayDisconnectToneOnDeactivate = true
 
     init(serverSettings: ServerConnectionStore) {
         self.serverSettings = serverSettings
@@ -104,15 +106,51 @@ final class CallSessionViewModel: ObservableObject {
     }
 
     private func subscribeToServerEvents(client: BackendSessionClient, sessionID: String) {
-        eventTask = Task {
+        eventTask = Task { [weak self] in
+            guard let self else { return }
             for await event in client.eventStream(sessionID: sessionID) {
-                switch event {
-                case .playAudio(let text, _):
-                    appendLog("Server: \(text)")
-                case .notify(let text, _, let summaryText, _):
-                    appendLog("Notify: \(BackendSessionClient.notificationDisplayText(text: text, summaryText: summaryText))")
-                }
+                guard !Task.isCancelled else { break }
+                await self.handleServerEvent(event)
             }
+        }
+    }
+
+    private func handleServerEvent(_ event: BackendSessionClient.ServerEvent) async {
+        switch event {
+        case .playAudio(let text, _):
+            appendLog("Server: \(text)")
+        case .notify(let text, _, let summaryText, _):
+            appendLog("Notify: \(BackendSessionClient.notificationDisplayText(text: text, summaryText: summaryText))")
+        case .transportStatus(let status):
+            await handleTransportStatus(status)
+        }
+    }
+
+    private func handleTransportStatus(_ status: BackendSessionClient.TransportStatus) async {
+        switch status {
+        case .reconnecting(let reason):
+            guard sessionClient != nil else { return }
+            if !isTransportRecovering {
+                tonePlayer.playProcessingTone()
+            }
+            isTransportRecovering = true
+            callStateDescription = "Reconnecting"
+            appendLog(reason)
+        case .reconnected(let reason):
+            guard sessionClient != nil else { return }
+            isTransportRecovering = false
+            callStateDescription = "Listening"
+            appendLog(reason)
+        case .disconnected(let reason):
+            appendLog("Call disconnected: \(reason)")
+            guard isCallActive || isTransitioningCallState || sessionClient != nil else { return }
+            isTransportRecovering = false
+            shouldPlayDisconnectToneOnDeactivate = false
+            tonePlayer.stopOutgoingRing()
+            tonePlayer.playDisconnectTone()
+            callStateDescription = "Call lost"
+            isTransitioningCallState = true
+            callKitController.endCall()
         }
     }
 
@@ -158,6 +196,8 @@ extension CallSessionViewModel: CallKitControllerDelegate {
                 sessionID = sid
                 sessionClient = client
                 client.setRemoteAudioEnabled(isSpeakerEnabled)
+                isTransportRecovering = false
+                shouldPlayDisconnectToneOnDeactivate = true
                 appendLog("Session registered: \(sid)")
 
                 startupPhase = "microphone capture"
@@ -179,6 +219,7 @@ extension CallSessionViewModel: CallKitControllerDelegate {
                 }
                 sessionID = nil
                 sessionClient = nil
+                isTransportRecovering = false
             }
 
             isTransitioningCallState = false
@@ -198,12 +239,16 @@ extension CallSessionViewModel: CallKitControllerDelegate {
             }
             sessionID = nil
             sessionClient = nil
+            isTransportRecovering = false
 
             callStateDescription = "Idle"
             isCallActive = false
             callStartedAt = nil
             resetInputLevels()
-            tonePlayer.playDisconnectTone()
+            if shouldPlayDisconnectToneOnDeactivate {
+                tonePlayer.playDisconnectTone()
+            }
+            shouldPlayDisconnectToneOnDeactivate = true
             isTransitioningCallState = false
         }
     }
@@ -215,6 +260,8 @@ extension CallSessionViewModel: CallKitControllerDelegate {
         callStartedAt = nil
         resetInputLevels()
         isTransitioningCallState = false
+        isTransportRecovering = false
+        shouldPlayDisconnectToneOnDeactivate = true
         muteGeneration &+= 1
         appendLog("CallKit error: \(message)")
     }

@@ -37,6 +37,7 @@ final class MacCallSessionViewModel: ObservableObject {
     private var sessionID: String?
     private var eventTask: Task<Void, Never>?
     private var muteGeneration: UInt64 = 0
+    private var isTransportRecovering = false
 
     init(serverSettings: ServerConnectionStore) {
         self.serverSettings = serverSettings
@@ -116,6 +117,7 @@ final class MacCallSessionViewModel: ObservableObject {
                 sessionID = sid
                 sessionClient = client
                 client.setRemoteAudioEnabled(isSpeakerEnabled)
+                isTransportRecovering = false
                 appendLog("Session registered: \(sid)")
 
                 subscribeToServerEvents(client: client, sessionID: sid)
@@ -135,6 +137,7 @@ final class MacCallSessionViewModel: ObservableObject {
                 }
                 sessionID = nil
                 sessionClient = nil
+                isTransportRecovering = false
             }
 
             isTransitioningCallState = false
@@ -158,6 +161,7 @@ final class MacCallSessionViewModel: ObservableObject {
             }
             sessionID = nil
             sessionClient = nil
+            isTransportRecovering = false
 
             callStateDescription = "Disconnected"
             isCallActive = false
@@ -169,16 +173,66 @@ final class MacCallSessionViewModel: ObservableObject {
     }
 
     private func subscribeToServerEvents(client: BackendSessionClient, sessionID: String) {
-        eventTask = Task {
+        eventTask = Task { [weak self] in
+            guard let self else { return }
             for await event in client.eventStream(sessionID: sessionID) {
-                switch event {
-                case .playAudio(let text, _):
-                    appendLog("Server: \(text)")
-                case .notify(let text, _, let summaryText, _):
-                    appendLog("Notify: \(BackendSessionClient.notificationDisplayText(text: text, summaryText: summaryText))")
-                }
+                guard !Task.isCancelled else { break }
+                await self.handleServerEvent(event)
             }
         }
+    }
+
+    private func handleServerEvent(_ event: BackendSessionClient.ServerEvent) async {
+        switch event {
+        case .playAudio(let text, _):
+            appendLog("Server: \(text)")
+        case .notify(let text, _, let summaryText, _):
+            appendLog("Notify: \(BackendSessionClient.notificationDisplayText(text: text, summaryText: summaryText))")
+        case .transportStatus(let status):
+            await handleTransportStatus(status)
+        }
+    }
+
+    private func handleTransportStatus(_ status: BackendSessionClient.TransportStatus) async {
+        switch status {
+        case .reconnecting(let reason):
+            guard sessionClient != nil else { return }
+            if !isTransportRecovering {
+                tonePlayer.playProcessingTone()
+            }
+            isTransportRecovering = true
+            callStateDescription = "Reconnecting"
+            appendLog(reason)
+        case .reconnected(let reason):
+            guard sessionClient != nil else { return }
+            isTransportRecovering = false
+            callStateDescription = "Connected"
+            appendLog(reason)
+        case .disconnected(let reason):
+            await handleUnexpectedTransportDisconnection(reason: reason)
+        }
+    }
+
+    private func handleUnexpectedTransportDisconnection(reason: String) async {
+        guard isCallActive || isTransitioningCallState || sessionClient != nil else { return }
+
+        appendLog("Call disconnected: \(reason)")
+        tonePlayer.stopOutgoingRing()
+        tonePlayer.playDisconnectTone()
+        muteGeneration &+= 1
+        isTransportRecovering = false
+
+        eventTask = nil
+
+        await audioPipeline.stop()
+        sessionClient = nil
+        sessionID = nil
+
+        callStateDescription = "Idle"
+        isCallActive = false
+        isTransitioningCallState = false
+        callStartedAt = nil
+        resetInputLevels()
     }
 
     private func requestMicrophonePermission() async -> Bool {

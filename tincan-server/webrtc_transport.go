@@ -9,9 +9,16 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/pion/webrtc/v4"
+)
+
+const (
+	webrtcDisconnectGracePeriod = 15 * time.Second
+	webrtcHeartbeatInterval     = 5 * time.Second
+	webrtcHeartbeatTimeout      = 30 * time.Second
 )
 
 type webrtcTransport struct {
@@ -28,6 +35,10 @@ type webrtcSession struct {
 	eventSink      *webrtcDataChannelSink
 	audioTrack     *webrtc.TrackLocalStaticSample
 	audioWriter    *sessionAudioWriter
+
+	mu                   sync.Mutex
+	lastHeartbeatAt      time.Time
+	disconnectGraceTimer *time.Timer
 }
 
 type webrtcOfferRequest struct {
@@ -54,6 +65,11 @@ type webrtcUtteranceResult struct {
 	Error            string `json:"error,omitempty"`
 }
 
+type webrtcPongMessage struct {
+	Type       string `json:"type"`
+	ServerTime string `json:"server_time"`
+}
+
 type webrtcDataChannelSink struct {
 	channel *webrtc.DataChannel
 	mu      sync.Mutex
@@ -68,8 +84,18 @@ func newWebRTCTransport(server *server) *webrtcTransport {
 }
 
 func (t *webrtcTransport) RegisterRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("/webrtc/config", t.handleSessionConfig)
 	mux.HandleFunc("/webrtc/session", t.handleRegisterSession)
 	mux.HandleFunc("/webrtc/session/", t.handleSessionSubpath)
+}
+
+func (t *webrtcTransport) handleSessionConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, currentWebRTCConfigResponse())
 }
 
 func (t *webrtcTransport) handleRegisterSession(w http.ResponseWriter, r *http.Request) {
@@ -91,7 +117,7 @@ func (t *webrtcTransport) handleRegisterSession(w http.ResponseWriter, r *http.R
 
 	sessionID := uuid.NewString()
 	log.Printf("webrtc: registering session %s", sessionID)
-	peerConnection, err := webrtc.NewPeerConnection(webrtc.Configuration{})
+	peerConnection, err := webrtc.NewPeerConnection(serverPeerConnectionConfiguration())
 	if err != nil {
 		log.Printf("webrtc: create peer connection failed for session %s: %v", sessionID, err)
 		http.Error(w, fmt.Sprintf("create peer connection: %v", err), http.StatusInternalServerError)
@@ -125,12 +151,25 @@ func (t *webrtcTransport) handleRegisterSession(w http.ResponseWriter, r *http.R
 		audioTrack:     audioTrack,
 		audioWriter:    newSessionAudioWriter(sessionID, audioTrack),
 	}
+	session.touchHeartbeat(time.Now())
 	t.storeSession(session)
+	go t.monitorSessionHeartbeat(sessionID)
 
 	peerConnection.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
 		log.Printf("webrtc: session %s state=%s", sessionID, state.String())
 		switch state {
-		case webrtc.PeerConnectionStateClosed, webrtc.PeerConnectionStateFailed, webrtc.PeerConnectionStateDisconnected:
+		case webrtc.PeerConnectionStateConnected:
+			session.cancelDisconnectGrace()
+			session.touchHeartbeat(time.Now())
+		case webrtc.PeerConnectionStateDisconnected:
+			session.scheduleDisconnectGrace(webrtcDisconnectGracePeriod, func() {
+				if peerConnection.ConnectionState() != webrtc.PeerConnectionStateDisconnected {
+					return
+				}
+				log.Printf("webrtc: disconnect grace elapsed for session %s", sessionID)
+				t.closeSession(sessionID)
+			})
+		case webrtc.PeerConnectionStateClosed, webrtc.PeerConnectionStateFailed:
 			t.closeSession(sessionID)
 		}
 	})
@@ -142,6 +181,7 @@ func (t *webrtcTransport) handleRegisterSession(w http.ResponseWriter, r *http.R
 		sink := &webrtcDataChannelSink{channel: dataChannel}
 		t.attachDataChannel(sessionID, dataChannel, sink)
 		dataChannel.OnOpen(func() {
+			session.touchHeartbeat(time.Now())
 			sink.setOpen(true)
 			t.server.callManager.SetEventSink(sessionID, sink)
 			log.Printf("webrtc: data channel open for session %s", sessionID)
@@ -200,19 +240,87 @@ func (t *webrtcTransport) handleRegisterSession(w http.ResponseWriter, r *http.R
 }
 
 func (t *webrtcTransport) handleSessionSubpath(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodDelete {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	sessionID := strings.TrimPrefix(r.URL.Path, "/webrtc/session/")
-	if strings.TrimSpace(sessionID) == "" {
+	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, "/webrtc/session/"), "/")
+	if rest == "" {
 		http.NotFound(w, r)
 		return
 	}
 
-	t.closeSession(sessionID)
+	parts := strings.Split(rest, "/")
+	if len(parts) == 2 && parts[1] == "restart" {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		t.handleRestartSession(w, r, parts[0])
+		return
+	}
+
+	if len(parts) != 1 || r.Method != http.MethodDelete {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	t.closeSession(parts[0])
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (t *webrtcTransport) handleRestartSession(w http.ResponseWriter, r *http.Request, sessionID string) {
+	defer r.Body.Close()
+
+	var request webrtcOfferRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(request.OfferSDP) == "" {
+		http.Error(w, "offer_sdp is required", http.StatusBadRequest)
+		return
+	}
+
+	t.mu.Lock()
+	session, ok := t.sessions[sessionID]
+	t.mu.Unlock()
+	if !ok || session.peerConnection == nil {
+		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	}
+
+	session.touchHeartbeat(time.Now())
+	session.cancelDisconnectGrace()
+
+	offer := webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: request.OfferSDP}
+	if err := session.peerConnection.SetRemoteDescription(offer); err != nil {
+		log.Printf("webrtc: restart set remote description failed for session %s: %v", sessionID, err)
+		http.Error(w, fmt.Sprintf("set remote description: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	gatherComplete := webrtc.GatheringCompletePromise(session.peerConnection)
+	answer, err := session.peerConnection.CreateAnswer(nil)
+	if err != nil {
+		log.Printf("webrtc: restart create answer failed for session %s: %v", sessionID, err)
+		http.Error(w, fmt.Sprintf("create answer: %v", err), http.StatusInternalServerError)
+		return
+	}
+	if err := session.peerConnection.SetLocalDescription(answer); err != nil {
+		log.Printf("webrtc: restart set local description failed for session %s: %v", sessionID, err)
+		http.Error(w, fmt.Sprintf("set local description: %v", err), http.StatusInternalServerError)
+		return
+	}
+	<-gatherComplete
+
+	localDescription := session.peerConnection.LocalDescription()
+	if localDescription == nil {
+		http.Error(w, "missing local description", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("webrtc: restart answered for session %s", sessionID)
+	writeJSON(w, http.StatusOK, webrtcAnswerResponse{
+		SessionID: sessionID,
+		AnswerSDP: localDescription.SDP,
+	})
 }
 
 func (t *webrtcTransport) handleClientMessage(sessionID string, sink *webrtcDataChannelSink, payload []byte) {
@@ -222,7 +330,17 @@ func (t *webrtcTransport) handleClientMessage(sessionID string, sink *webrtcData
 		return
 	}
 
+	t.touchSessionHeartbeat(sessionID)
+
 	switch message.Type {
+	case "ping":
+		if err := sink.SendJSON(webrtcPongMessage{
+			Type:       "pong",
+			ServerTime: time.Now().UTC().Format(time.RFC3339Nano),
+		}); err != nil {
+			log.Printf("webrtc: failed to send pong for session %s: %v", sessionID, err)
+		}
+		return
 	case "utterance":
 		audioData, err := base64.StdEncoding.DecodeString(message.AudioBase64)
 		if err != nil {
@@ -294,6 +412,7 @@ func (t *webrtcTransport) closeSession(sessionID string) {
 
 	t.server.callManager.SetEventSink(sessionID, nil)
 	t.server.callManager.RemoveSession(sessionID)
+	session.cancelDisconnectGrace()
 	if session.audioWriter != nil {
 		session.audioWriter.Close()
 	}
@@ -356,4 +475,71 @@ func drainRTCP(sessionID string, sender *webrtc.RTPSender) {
 			return
 		}
 	}
+}
+
+func (t *webrtcTransport) touchSessionHeartbeat(sessionID string) {
+	t.mu.Lock()
+	session, ok := t.sessions[sessionID]
+	t.mu.Unlock()
+	if !ok {
+		return
+	}
+	session.touchHeartbeat(time.Now())
+}
+
+func (t *webrtcTransport) monitorSessionHeartbeat(sessionID string) {
+	ticker := time.NewTicker(webrtcHeartbeatInterval)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		t.mu.Lock()
+		session, ok := t.sessions[sessionID]
+		t.mu.Unlock()
+		if !ok {
+			return
+		}
+		if session.eventSink == nil || !session.eventSink.Ready() {
+			continue
+		}
+		if session.heartbeatAge(time.Now()) <= webrtcHeartbeatTimeout {
+			continue
+		}
+		log.Printf("webrtc: heartbeat timeout for session %s", sessionID)
+		t.closeSession(sessionID)
+		return
+	}
+}
+
+func (s *webrtcSession) touchHeartbeat(now time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lastHeartbeatAt = now
+}
+
+func (s *webrtcSession) heartbeatAge(now time.Time) time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.lastHeartbeatAt.IsZero() {
+		return time.Duration(1<<63 - 1)
+	}
+	return now.Sub(s.lastHeartbeatAt)
+}
+
+func (s *webrtcSession) scheduleDisconnectGrace(after time.Duration, onElapsed func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.disconnectGraceTimer != nil {
+		s.disconnectGraceTimer.Stop()
+	}
+	s.disconnectGraceTimer = time.AfterFunc(after, onElapsed)
+}
+
+func (s *webrtcSession) cancelDisconnectGrace() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.disconnectGraceTimer == nil {
+		return
+	}
+	s.disconnectGraceTimer.Stop()
+	s.disconnectGraceTimer = nil
 }
