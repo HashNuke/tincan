@@ -30,8 +30,6 @@ The server currently exposes these routes:
   - Internal hook endpoint for backend agent updates.
 - `GET /debug/audio/generated/{name}`
   - Debug/generated audio fetch.
-- `GET /speak`
-  - Debug/demo page.
 
 For the UI, the important thing is that the current API surface is almost entirely call-transport oriented. It is not yet a read API for conversations, transcript history, profiles, or backends.
 

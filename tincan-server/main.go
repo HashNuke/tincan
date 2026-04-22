@@ -138,7 +138,6 @@ func main() {
 		apiAdapters[name] = adapter
 	}
 	mux.HandleFunc("/healthz", srv.handleHealth)
-	mux.HandleFunc("/speak", srv.handleSpeakPage)
 	mux.HandleFunc("/debug/audio/generated/", srv.handleGeneratedAudio)
 	mux.HandleFunc("/hooks/opencode", srv.handleOpenCodeHook)
 	tincanapi.Routes{
@@ -278,16 +277,6 @@ func (s *server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 		"status":              "ok",
 		"agent_profile_count": len(s.profiles.List()),
 	})
-}
-
-func (s *server) handleSpeakPage(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write([]byte(speakPageHTML))
 }
 
 func (s *server) handleGeneratedAudio(w http.ResponseWriter, r *http.Request) {
