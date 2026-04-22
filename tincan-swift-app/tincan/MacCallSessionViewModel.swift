@@ -17,6 +17,7 @@ final class MacCallSessionViewModel: ObservableObject {
     @Published private(set) var identityStatusDescription = "Identity not ready"
     @Published private(set) var ownerProfileDescription = "Wake word unavailable"
     @Published private(set) var speakerIdentityPhase: SpeakerIdentityPhase = .unavailable
+    @Published private(set) var lastLocalTranscript = ""
     @Published private(set) var lastServerTranscript = ""
     @Published private(set) var logLines: [String] = []
     @Published private(set) var isCallActive = false
@@ -270,6 +271,7 @@ final class MacCallSessionViewModel: ObservableObject {
     private func applyIdentityStatus(_ status: SpeakerIdentityStatus) {
         speakerIdentityPhase = status.phase
         identityStatusDescription = status.description
+        lastLocalTranscript = status.lastChallengeTranscript?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if let wakeWord = status.ownerProfileName, !wakeWord.isEmpty {
             if let transcript = status.lastChallengeTranscript, !transcript.isEmpty {
                 ownerProfileDescription = "Wake word: \(wakeWord) · Last heard: \(transcript)"

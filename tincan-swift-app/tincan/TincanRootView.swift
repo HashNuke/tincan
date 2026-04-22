@@ -14,6 +14,7 @@ struct TincanCallPresentationState {
     let isMuted: Bool
     let isSpeakerEnabled: Bool
     let inputLevelHistory: [Double]
+    let lastLocalTranscript: String
     let lastServerTranscript: String
     let logLines: [String]
     let speakerIdentity: TincanSpeakerIdentityPresentation?
@@ -53,6 +54,7 @@ struct TincanIOSRootView: View {
                 isMuted: callSession.isMuted,
                 isSpeakerEnabled: callSession.isSpeakerEnabled,
                 inputLevelHistory: callSession.inputLevelHistory,
+                lastLocalTranscript: "",
                 lastServerTranscript: callSession.lastServerTranscript,
                 logLines: callSession.logLines,
                 speakerIdentity: nil
@@ -98,6 +100,7 @@ struct TincanMacRootView: View {
                 isMuted: callSession.isMuted,
                 isSpeakerEnabled: callSession.isSpeakerEnabled,
                 inputLevelHistory: callSession.inputLevelHistory,
+                lastLocalTranscript: callSession.lastLocalTranscript,
                 lastServerTranscript: callSession.lastServerTranscript,
                 logLines: callSession.logLines,
                 speakerIdentity: TincanSpeakerIdentityPresentation(
@@ -240,6 +243,15 @@ private struct TincanHomeScreen: View {
         "\(connectionLabel) · \(healthSummary(healthStatus)) · \(liveSummary(liveConnectionStatus))"
     }
 
+    private var shouldShowStandaloneTranscriptCard: Bool {
+#if os(macOS)
+        return false
+#else
+        let hasTranscript = !callState.lastServerTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return hasTranscript
+#endif
+    }
+
     var body: some View {
         ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 18) {
@@ -261,15 +273,12 @@ private struct TincanHomeScreen: View {
                         callActions: callActions
                     )
                 }
+#else
+                TincanMacCallTranscriptCard(
+                    callState: callState,
+                    callActions: callActions
+                )
 #endif
-
-                if let speakerIdentity = callState.speakerIdentity {
-                    TincanIdentityStatusCard(
-                        speakerIdentity: speakerIdentity,
-                        onIdentify: callActions.beginSpeakerIdentification,
-                        onReset: callActions.resetSpeakerProfile
-                    )
-                }
 
                 if let highlightedLiveUpdate {
                     TincanHighlightedUpdateCard(
@@ -329,7 +338,7 @@ private struct TincanHomeScreen: View {
                     }
                 }
 
-                if !callState.lastServerTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                if shouldShowStandaloneTranscriptCard {
                     TincanLastTranscriptCard(text: callState.lastServerTranscript)
                 }
             }
@@ -346,16 +355,12 @@ private struct TincanHomeHeader: View {
 
     var body: some View {
 #if os(macOS)
-        ZStack {
-            HStack(alignment: .center, spacing: 16) {
-                brandMark
+        HStack(alignment: .center, spacing: 16) {
+            brandMark
 
-                Spacer()
+            Spacer()
 
-                TincanIconButton(systemImage: "gearshape.fill", tone: TincanPalette.panelRaised, action: onOpenSettings)
-            }
-
-            TincanMacCallStage(callState: callState, callActions: callActions)
+            TincanIconButton(systemImage: "gearshape.fill", tone: TincanPalette.panelRaised, action: onOpenSettings)
         }
         .frame(maxWidth: .infinity)
 #else
@@ -398,6 +403,132 @@ private struct TincanHomeHeader: View {
 }
 
 #if os(macOS)
+private struct TincanMacCallTranscriptCard: View {
+    let callState: TincanCallPresentationState
+    let callActions: TincanCallActions
+
+    private var statusTone: Color {
+        callState.isCallActive ? TincanTone.mint.accent : TincanTone.blue.accent
+    }
+
+    private var isIdle: Bool {
+        !callState.isCallActive && !callState.isTransitioning
+    }
+
+    private var isStartingOrCanceling: Bool {
+        callState.isTransitioning && !callState.isCallActive
+    }
+
+    private var transcriptText: String {
+        let trimmedTranscript = callState.lastLocalTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedTranscript.isEmpty ? "Waiting for a local wake-word transcript." : trimmedTranscript
+    }
+
+    private var hasTranscript: Bool {
+        !callState.lastLocalTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 0) {
+            leftColumn
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.trailing, 18)
+
+            Rectangle()
+                .fill(TincanPalette.divider)
+                .frame(width: 1)
+                .padding(.vertical, 4)
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("recent transcript")
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .foregroundStyle(TincanPalette.textMuted)
+
+                Text(transcriptText)
+                    .font(.system(size: 14, weight: .medium, design: .rounded))
+                    .foregroundStyle(hasTranscript ? TincanPalette.textPrimary : TincanPalette.textSecondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .lineLimit(4)
+                    .multilineTextAlignment(.leading)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.leading, 18)
+        }
+        .padding(18)
+        .background(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(TincanPalette.panelMuted.opacity(0.95))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .stroke(statusTone.opacity(0.22), lineWidth: 1)
+                )
+        )
+    }
+
+    @ViewBuilder
+    private var leftColumn: some View {
+        if isIdle {
+            HStack {
+                Spacer(minLength: 0)
+                TincanMacStartCallButton(action: callActions.startCall)
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, minHeight: 72)
+        } else {
+            HStack(spacing: 12) {
+                if isStartingOrCanceling {
+                    TincanMacStageProgressBadge(accent: statusTone)
+                } else {
+                    TincanMacStageButton(
+                        systemImage: callState.isMuted ? "mic.slash.fill" : "mic.fill",
+                        foreground: callState.isMuted ? TincanTone.amber.accent : TincanPalette.textPrimary,
+                        background: TincanPalette.panelRaised,
+                        border: callState.isMuted ? TincanTone.amber.accent.opacity(0.28) : TincanPalette.shellBorder,
+                        action: callActions.toggleMute
+                    )
+                    .disabled(!callState.isCallActive)
+                }
+
+                TincanMacCallMeter(callState: callState, accent: statusTone)
+                    .frame(maxWidth: .infinity)
+
+                TincanMacStageButton(
+                    systemImage: isStartingOrCanceling ? "xmark" : "phone.down.fill",
+                    foreground: TincanPalette.textPrimary,
+                    background: TincanPalette.callRed,
+                    border: TincanPalette.callRed.opacity(0.72),
+                    action: callActions.endCall
+                )
+            }
+            .frame(maxWidth: .infinity, minHeight: 72)
+        }
+    }
+}
+
+private struct TincanMacStartCallButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Image(systemName: "phone.fill")
+                    .font(.system(size: 14, weight: .bold))
+                Text("call")
+                    .font(.system(size: 13, weight: .bold, design: .monospaced))
+                    .lineLimit(1)
+            }
+            .foregroundStyle(TincanPalette.textOnAccent)
+            .padding(.horizontal, 18)
+            .frame(height: 48)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(TincanTone.mint.accent)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 private struct TincanMacCallStage: View {
     let callState: TincanCallPresentationState
     let callActions: TincanCallActions
@@ -646,55 +777,6 @@ private struct TincanCallControlPanel: View {
                         .stroke(TincanTone.mint.accent.opacity(0.25), lineWidth: 1)
                 )
         )
-    }
-}
-
-private struct TincanIdentityStatusCard: View {
-    let speakerIdentity: TincanSpeakerIdentityPresentation
-    let onIdentify: (() -> Void)?
-    let onReset: (() -> Void)?
-
-    private var tone: Color {
-        switch speakerIdentity.phase {
-        case .ownerVerified:
-            return TincanTone.mint.accent
-        case .awaitingChallengeResponse:
-            return TincanTone.amber.accent
-        case .identificationRequired:
-            return TincanTone.blue.accent
-        case .preparing:
-            return TincanPalette.textSecondary
-        case .unavailable:
-            return TincanTone.coral.accent
-        }
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
-                TincanCapsuleTag(text: speakerIdentity.title.lowercased(), tone: tone)
-                Spacer()
-            }
-
-            Text(speakerIdentity.description)
-                .font(.system(size: 14, weight: .semibold, design: .rounded))
-                .foregroundStyle(TincanPalette.textPrimary)
-
-            Text(speakerIdentity.detail)
-                .font(.system(size: 11, weight: .medium, design: .monospaced))
-                .foregroundStyle(TincanPalette.textSecondary)
-
-            HStack(spacing: 10) {
-                if let onIdentify {
-                    TincanToolbarButton(label: "identify", systemImage: "waveform.badge.mic", tone: TincanPalette.panelRaised, action: onIdentify)
-                }
-                if let onReset {
-                    TincanToolbarButton(label: "reset voice", systemImage: "arrow.counterclockwise", tone: TincanPalette.panelRaised, action: onReset)
-                }
-            }
-        }
-        .padding(16)
-        .tincanCard(accent: tone, cornerRadius: 24, raised: true)
     }
 }
 
