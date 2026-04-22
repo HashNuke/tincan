@@ -1542,6 +1542,51 @@ private struct TincanEmptyTranscriptCard: View {
     }
 }
 
+private enum TincanSettingsDestination: String, CaseIterable, Hashable, Identifiable {
+    case connectPhone
+    case agentBackends
+    case agentServices
+    case speech
+    case services
+    case diagnostics
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .connectPhone:
+            return "Connect Phone"
+        case .agentBackends:
+            return "Agent Backends"
+        case .agentServices:
+            return "Agent Services"
+        case .speech:
+            return "Speech"
+        case .services:
+            return "Services"
+        case .diagnostics:
+            return "Diagnostics"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .connectPhone:
+            return "iphone.gen3.radiowaves.left.and.right"
+        case .agentBackends:
+            return "square.stack.3d.up.fill"
+        case .agentServices:
+            return "person.2.fill"
+        case .speech:
+            return "waveform"
+        case .services:
+            return "switch.2"
+        case .diagnostics:
+            return "stethoscope"
+        }
+    }
+}
+
 private struct TincanSettingsScreen: View {
     @ObservedObject var workspace: TincanWorkspaceStore
     @ObservedObject var serverSettings: ServerConnectionStore
@@ -1552,174 +1597,261 @@ private struct TincanSettingsScreen: View {
     let title: String
     let allowEditing: Bool
     let onDismiss: () -> Void
+    @State private var selectedDestination: TincanSettingsDestination?
 
     var body: some View {
         TincanCanvas {
-            ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 18) {
-                    #if os(iOS)
-                    HStack(alignment: .center, spacing: 12) {
-                        Button(action: onDismiss) {
-                            Image(systemName: "chevron.left")
-                                .font(.system(size: 15, weight: .bold))
-                                .foregroundStyle(TincanPalette.textPrimary)
-                                .frame(width: 36, height: 36)
-                                .background(
-                                    Circle()
-                                        .fill(TincanPalette.panel)
-                                )
-                        }
-                        .buttonStyle(.plain)
-
-                        Text(title.lowercased())
-                            .font(.system(size: 30, weight: .heavy, design: .rounded))
-                            .foregroundStyle(TincanPalette.textPrimary)
-
-                        Spacer()
+            NavigationSplitView {
+                List(TincanSettingsDestination.allCases, selection: $selectedDestination) { destination in
+                    NavigationLink(value: destination) {
+                        TincanSettingsSidebarRow(destination: destination)
                     }
-                    #else
-                    HStack(alignment: .top) {
-                        Text(title.lowercased())
-                            .font(.system(size: 30, weight: .heavy, design: .rounded))
-                            .foregroundStyle(TincanPalette.textPrimary)
-
-                        Spacer()
-
-                        TincanToolbarButton(
-                            label: "back",
-                            systemImage: "chevron.left",
-                            tone: TincanPalette.panelRaised,
-                            action: onDismiss
-                        )
-                    }
-                    #endif
-
-                    TincanServerSettingsSection(
-                        serverSettings: serverSettings,
-                        onApplyConnection: {
-                            let changed = serverSettings.applyRemoteDraft()
-                            if changed {
-                                Task {
-                                    await workspace.refreshAll()
-                                }
-                            }
-                        },
-                        onRefreshHealth: {
-                            Task {
-                                await serverSettings.refreshHealth()
-                            }
+                }
+                .listStyle(.sidebar)
+                .scrollContentBackground(.hidden)
+                .background(TincanPalette.panelMuted.opacity(0.72))
+                .navigationTitle(title)
+#if os(iOS)
+                .navigationBarTitleDisplayMode(.inline)
+#endif
+            } detail: {
+                Group {
+                    if let selectedDestination {
+                        TincanSettingsPageLayout {
+                            settingsContent(for: selectedDestination)
                         }
-                    )
-
+                    } else {
+                        TincanSettingsPageLayout {
+                            TincanSettingsSelectionPlaceholder()
+                        }
+                    }
+                }
+                .navigationTitle(selectedDestination?.title ?? title)
+#if os(iOS)
+                .navigationBarTitleDisplayMode(.inline)
+#endif
+            }
+        }
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Done", action: onDismiss)
+            }
+        }
 #if os(macOS)
-                    TincanSpeechSettingsSection(speechSettings: speechSettings)
-                        .task(id: serverSettings.connectionRevision) {
-                            await speechSettings.load()
+        .task(id: serverSettings.connectionRevision) {
+            await speechSettings.load()
+        }
+        .task {
+            if selectedDestination == nil {
+                selectedDestination = .connectPhone
+            }
+        }
+#endif
+    }
+
+    @ViewBuilder
+    private func settingsContent(for destination: TincanSettingsDestination) -> some View {
+        switch destination {
+        case .connectPhone:
+            TincanServerSettingsSection(
+                title: "Connect phone",
+                subtitle: "Share the bundled Mac server with your phone or point the app at a remote server.",
+                serverSettings: serverSettings,
+                onApplyConnection: {
+                    let changed = serverSettings.applyRemoteDraft()
+                    if changed {
+                        Task {
+                            await workspace.refreshAll()
                         }
+                    }
+                },
+                onRefreshHealth: {
+                    Task {
+                        await serverSettings.refreshHealth()
+                    }
+                }
+            )
+
+        case .agentBackends:
+            TincanSettingsSectionCard(
+                title: "Agent backends",
+                subtitle: allowEditing ? "Server-backed. Editing can be layered on top of this list next." : "Read-only on iPhone."
+            ) {
+                VStack(spacing: 10) {
+                    if workspace.agentBackends.isEmpty {
+                        TincanSettingsPlaceholderRow(text: "No backends loaded from the server.")
+                    } else {
+                        ForEach(workspace.agentBackends) { backend in
+                            TincanBackendRow(backend: backend)
+                        }
+                    }
+                }
+            }
+
+        case .agentServices:
+            TincanSettingsSectionCard(
+                title: "Agent services",
+                subtitle: allowEditing ? "Server-backed routing profiles for conversations." : "Read-only on iPhone."
+            ) {
+                VStack(spacing: 10) {
+                    if workspace.agentProfiles.isEmpty {
+                        TincanSettingsPlaceholderRow(text: "No profiles loaded from the server.")
+                    } else {
+                        ForEach(workspace.agentProfiles) { profile in
+                            TincanProfileRow(profile: profile)
+                        }
+                    }
+                }
+            }
+
+        case .speech:
+#if os(macOS)
+            TincanSpeechPageContent(speechSettings: speechSettings)
+#else
+            TincanSettingsUnavailableCard(
+                title: "Speech",
+                message: "Speech model selection is configured from the Mac app because the bundled speech server runs there."
+            )
 #endif
 
-                    TincanSettingsSectionCard(
-                        title: "Agent backends",
-                        subtitle: allowEditing ? "Server-backed. Editing can be layered on top of this list next." : "Read-only on iPhone."
-                    ) {
-                        VStack(spacing: 10) {
-                            if workspace.agentBackends.isEmpty {
-                                TincanSettingsPlaceholderRow(text: "No backends loaded from the server.")
-                            } else {
-                                ForEach(workspace.agentBackends) { backend in
-                                    TincanBackendRow(backend: backend)
-                                }
-                            }
+        case .services:
+#if os(macOS)
+            TincanServicesPageContent(speechSettings: speechSettings)
+#else
+            TincanSettingsUnavailableCard(
+                title: "Services",
+                message: "Provider credentials and local service toggles are managed from the Mac app."
+            )
+#endif
+
+        case .diagnostics:
+            TincanSettingsSectionCard(title: "Diagnostics") {
+                VStack(alignment: .leading, spacing: 12) {
+                    TincanSettingsValueRow(label: "Call", value: callState.callStateDescription)
+                    TincanSettingsValueRow(label: "Live", value: liveSummary(workspace.liveConnectionStatus))
+                    TincanSettingsValueRow(label: "Health", value: healthSummary(serverSettings.healthStatus))
+
+                    if let lastRefreshAt = workspace.lastRefreshAt {
+                        TincanSettingsValueRow(
+                            label: "Last sync",
+                            value: lastRefreshAt.formatted(date: .omitted, time: .shortened)
+                        )
+                    }
+
+                    if let speakerIdentity = callState.speakerIdentity {
+                        TincanSettingsValueRow(label: "Speaker", value: speakerIdentity.description)
+                    }
+
+                    if let lastSyncError = workspace.lastSyncError, !lastSyncError.isEmpty {
+                        Text(lastSyncError)
+                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                            .foregroundStyle(TincanTone.coral.accent)
+                            .padding(12)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .fill(TincanTone.coral.tint.opacity(0.52))
+                            )
+                    }
+
+                    if !callState.lastServerTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Last transcript")
+                                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                .foregroundStyle(TincanPalette.textMuted)
+                            Text(callState.lastServerTranscript)
+                                .font(.system(size: 13, weight: .medium, design: .rounded))
+                                .foregroundStyle(TincanPalette.textSecondary)
                         }
                     }
 
-                    TincanSettingsSectionCard(
-                        title: "Agent profiles",
-                        subtitle: allowEditing ? "Server-backed profiles for routing conversations." : "Read-only on iPhone."
-                    ) {
-                        VStack(spacing: 10) {
-                            if workspace.agentProfiles.isEmpty {
-                                TincanSettingsPlaceholderRow(text: "No profiles loaded from the server.")
-                            } else {
-                                ForEach(workspace.agentProfiles) { profile in
-                                    TincanProfileRow(profile: profile)
-                                }
-                            }
-                        }
-                    }
+                    if !callState.logLines.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Recent activity")
+                                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                .foregroundStyle(TincanPalette.textMuted)
 
-                    TincanSettingsSectionCard(title: "Diagnostics") {
-                        VStack(alignment: .leading, spacing: 12) {
-                            TincanSettingsValueRow(label: "Call", value: callState.callStateDescription)
-                            TincanSettingsValueRow(label: "Live", value: liveSummary(workspace.liveConnectionStatus))
-                            TincanSettingsValueRow(label: "Health", value: healthSummary(serverSettings.healthStatus))
-
-                            if let lastRefreshAt = workspace.lastRefreshAt {
-                                TincanSettingsValueRow(
-                                    label: "Last sync",
-                                    value: lastRefreshAt.formatted(date: .omitted, time: .shortened)
-                                )
-                            }
-
-                            if let speakerIdentity = callState.speakerIdentity {
-                                TincanSettingsValueRow(label: "Speaker", value: speakerIdentity.description)
-                            }
-
-                            if let lastSyncError = workspace.lastSyncError, !lastSyncError.isEmpty {
-                                Text(lastSyncError)
+                            ForEach(Array(callState.logLines.prefix(6).enumerated()), id: \.offset) { _, line in
+                                Text(line)
                                     .font(.system(size: 11, weight: .medium, design: .monospaced))
-                                    .foregroundStyle(TincanTone.coral.accent)
-                                    .padding(12)
+                                    .foregroundStyle(TincanPalette.textSecondary)
                                     .frame(maxWidth: .infinity, alignment: .leading)
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                            .fill(TincanTone.coral.tint.opacity(0.52))
-                                    )
-                            }
-
-                            if !callState.lastServerTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                                VStack(alignment: .leading, spacing: 6) {
-                                    Text("Last transcript")
-                                        .font(.system(size: 11, weight: .bold, design: .monospaced))
-                                        .foregroundStyle(TincanPalette.textMuted)
-                                    Text(callState.lastServerTranscript)
-                                        .font(.system(size: 13, weight: .medium, design: .rounded))
-                                        .foregroundStyle(TincanPalette.textSecondary)
-                                }
-                            }
-
-                            if !callState.logLines.isEmpty {
-                                VStack(alignment: .leading, spacing: 6) {
-                                    Text("Recent activity")
-                                        .font(.system(size: 11, weight: .bold, design: .monospaced))
-                                        .foregroundStyle(TincanPalette.textMuted)
-
-                                    ForEach(Array(callState.logLines.prefix(6).enumerated()), id: \.offset) { _, line in
-                                        Text(line)
-                                            .font(.system(size: 11, weight: .medium, design: .monospaced))
-                                            .foregroundStyle(TincanPalette.textSecondary)
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                    }
-                                }
                             }
                         }
                     }
                 }
-                .frame(maxWidth: 940)
-                .padding(.horizontal, 20)
-                .padding(.vertical, 16)
             }
         }
     }
 }
 
+private struct TincanSettingsSidebarRow: View {
+    let destination: TincanSettingsDestination
+
+    var body: some View {
+        Label(destination.title, systemImage: destination.systemImage)
+            .font(.system(size: 13, weight: .semibold, design: .rounded))
+            .foregroundStyle(TincanPalette.textPrimary)
+            .padding(.vertical, 4)
+    }
+}
+
+private struct TincanSettingsPageLayout<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        ScrollView(showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 18) {
+                content
+            }
+            .frame(maxWidth: 940)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 16)
+            .frame(maxWidth: .infinity, alignment: .top)
+        }
+    }
+}
+
+private struct TincanSettingsSelectionPlaceholder: View {
+    var body: some View {
+        TincanSettingsSectionCard(
+            title: "Select a page",
+            subtitle: "Choose a settings category from the sidebar."
+        ) {
+            Text("Split settings into smaller pages so each category is easier to scan and maintain.")
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .foregroundStyle(TincanPalette.textSecondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+private struct TincanSettingsUnavailableCard: View {
+    let title: String
+    let message: String
+
+    var body: some View {
+        TincanSettingsSectionCard(
+            title: title,
+            subtitle: "This page is configured from the Mac app."
+        ) {
+            Text(message)
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .foregroundStyle(TincanPalette.textSecondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
 private struct TincanServerSettingsSection: View {
+    let title: String
+    var subtitle: String? = nil
     @ObservedObject var serverSettings: ServerConnectionStore
     let onApplyConnection: () -> Void
     let onRefreshHealth: () -> Void
 
     var body: some View {
-        TincanSettingsSectionCard(title: "Server") {
+        TincanSettingsSectionCard(title: title, subtitle: subtitle) {
             VStack(alignment: .leading, spacing: 16) {
                 HStack(spacing: 12) {
 #if os(macOS)
