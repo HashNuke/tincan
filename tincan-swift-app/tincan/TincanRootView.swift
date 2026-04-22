@@ -56,34 +56,6 @@ private enum TincanScrollAnchor {
     static let transcriptTop = "tincan-transcript-top"
 }
 
-private enum TincanScrollSpace {
-    static let home = "tincan-home-scroll"
-    static let transcript = "tincan-transcript-scroll"
-}
-
-private struct TincanVerticalScrollOffsetPreferenceKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
-    }
-}
-
-private struct TincanScrollOffsetReader: View {
-    let coordinateSpaceName: String
-
-    var body: some View {
-        GeometryReader { geometry in
-            Color.clear
-                .preference(
-                    key: TincanVerticalScrollOffsetPreferenceKey.self,
-                    value: geometry.frame(in: .named(coordinateSpaceName)).minY
-                )
-        }
-        .frame(height: 0)
-    }
-}
-
 #if os(iOS)
 struct TincanIOSRootView: View {
     @ObservedObject var callSession: CallSessionViewModel
@@ -423,7 +395,8 @@ private struct TincanHomeScreen: View {
 #if os(iOS)
         ScrollViewReader { proxy in
             ScrollView(showsIndicators: false) {
-                TincanScrollOffsetReader(coordinateSpaceName: TincanScrollSpace.home)
+                Color.clear
+                    .frame(height: 1)
                     .id(TincanScrollAnchor.homeTop)
 
                 LazyVStack(alignment: .leading, spacing: 18, pinnedViews: [.sectionHeaders]) {
@@ -446,9 +419,10 @@ private struct TincanHomeScreen: View {
                 .padding(.bottom, 8)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .coordinateSpace(name: TincanScrollSpace.home)
-            .onPreferenceChange(TincanVerticalScrollOffsetPreferenceKey.self) { value in
-                scrollOffset = max(0, -value)
+            .onScrollGeometryChange(for: CGFloat.self, of: { geometry in
+                geometry.visibleRect.minY
+            }) { _, newValue in
+                scrollOffset = max(0, newValue)
             }
             .overlay(alignment: .bottomTrailing) {
                 if shouldShowScrollToTopButton {
@@ -477,7 +451,8 @@ private struct TincanHomeScreen: View {
 
             ScrollViewReader { proxy in
                 ScrollView(showsIndicators: false) {
-                    TincanScrollOffsetReader(coordinateSpaceName: TincanScrollSpace.home)
+                    Color.clear
+                        .frame(height: 1)
                         .id(TincanScrollAnchor.homeTop)
 
                     VStack(alignment: .leading, spacing: 18) {
@@ -485,9 +460,10 @@ private struct TincanHomeScreen: View {
                     }
                     .padding(.bottom, 24)
                 }
-                .coordinateSpace(name: TincanScrollSpace.home)
-                .onPreferenceChange(TincanVerticalScrollOffsetPreferenceKey.self) { value in
-                    scrollOffset = max(0, -value)
+                .onScrollGeometryChange(for: CGFloat.self, of: { geometry in
+                    geometry.visibleRect.minY
+                }) { _, newValue in
+                    scrollOffset = max(0, newValue)
                 }
                 .overlay(alignment: .bottomTrailing) {
                     if shouldShowScrollToTopButton {
@@ -1302,7 +1278,8 @@ private struct TincanTranscriptScreen: View {
 
             ScrollViewReader { proxy in
                 ScrollView(showsIndicators: false) {
-                    TincanScrollOffsetReader(coordinateSpaceName: TincanScrollSpace.transcript)
+                    Color.clear
+                        .frame(height: 1)
                         .id(TincanScrollAnchor.transcriptTop)
 
                     LazyVStack(alignment: .leading, spacing: 14) {
@@ -1317,9 +1294,10 @@ private struct TincanTranscriptScreen: View {
                     }
                     .padding(18)
                 }
-                .coordinateSpace(name: TincanScrollSpace.transcript)
-                .onPreferenceChange(TincanVerticalScrollOffsetPreferenceKey.self) { value in
-                    scrollOffset = max(0, -value)
+                .onScrollGeometryChange(for: CGFloat.self, of: { geometry in
+                    geometry.visibleRect.minY
+                }) { _, newValue in
+                    scrollOffset = max(0, newValue)
                 }
                 .overlay(alignment: .bottomTrailing) {
                     if shouldShowScrollToTopButton {
