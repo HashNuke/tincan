@@ -2,12 +2,12 @@
 import FluidAudio
 import Foundation
 
-struct SpeakerTranscript: Sendable, Equatable {
+nonisolated struct SpeakerTranscript: Sendable, Equatable {
     let speakerId: String
     let transcript: String
 }
 
-struct SpeakerSegmentSpan: Sendable, Equatable {
+nonisolated struct SpeakerSegmentSpan: Sendable, Equatable {
     let speakerId: String
     let startSample: Int
     let endSample: Int
@@ -15,14 +15,14 @@ struct SpeakerSegmentSpan: Sendable, Equatable {
     let embedding: [Float]
 }
 
-struct SpeakerSegmentGroup: Sendable, Equatable {
+nonisolated struct SpeakerSegmentGroup: Sendable, Equatable {
     let speakerId: String
     let spans: [SpeakerSegmentSpan]
     let totalDuration: TimeInterval
     let mergedEmbedding: [Float]
 }
 
-struct SpeakerIsolatedSegment: Sendable {
+nonisolated struct SpeakerIsolatedSegment: Sendable {
     let speakerId: String
     let samples: [Float]
     let wavData: Data
@@ -31,7 +31,7 @@ struct SpeakerIsolatedSegment: Sendable {
     let embedding: [Float]
 }
 
-enum SpeakerIdentityHelpers {
+nonisolated enum SpeakerIdentityHelpers {
     static func groupSpeakerSegments(
         _ diarizedSegments: [TimedSpeakerSegment],
         sampleRate: Int,
@@ -100,7 +100,26 @@ enum SpeakerIdentityHelpers {
 
         return transcripts
             .prefix(3)
-            .map { "\($0.speakerId): \($0.transcript)" }
+            .map(\.transcript)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " | ")
+    }
+
+    static func wakeWordTranscriptSummary(
+        in transcripts: [SpeakerTranscript],
+        wakeWord: String
+    ) -> String? {
+        let matchingTranscripts = transcripts
+            .filter { containsWakeWord(transcript: $0.transcript, wakeWord: wakeWord) }
+            .map(\.transcript)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        guard !matchingTranscripts.isEmpty else { return nil }
+
+        return matchingTranscripts
+            .prefix(3)
             .joined(separator: " | ")
     }
 
@@ -241,7 +260,11 @@ actor SpeakerIdentityManager {
             }
 
             let transcripts = try await transcribeSpeakerSegments(eligibleSpeakerSegments)
-            lastWakeWordTranscript = SpeakerIdentityHelpers.challengeTranscriptSummary(for: transcripts)
+            let heardTranscriptSummary = SpeakerIdentityHelpers.challengeTranscriptSummary(for: transcripts)
+            lastWakeWordTranscript = SpeakerIdentityHelpers.wakeWordTranscriptSummary(
+                in: transcripts,
+                wakeWord: resolvedWakeWord
+            )
 
             let matchingSpeakerIDs = SpeakerIdentityHelpers.wakeWordMatchingSpeakerIDs(
                 in: transcripts,
@@ -263,7 +286,7 @@ actor SpeakerIdentityManager {
                         phase: .ownerVerified,
                         description: "Wake word heard. Only audio from the speaker who said “\(resolvedWakeWord)” is being sent."
                     ),
-                    logMessage: "Matched wake word “\(resolvedWakeWord)” to diarized speaker clip \(matchedSpeakerID) and filtered the rest."
+                    logMessage: "Matched wake word “\(resolvedWakeWord)” to one diarized speaker clip and filtered the rest."
                 )
             }
 
@@ -278,7 +301,7 @@ actor SpeakerIdentityManager {
             return blockedOutcome(
                 transcripts.isEmpty
                     ? "No diarized speaker clip produced a usable transcript for the wake word “\(resolvedWakeWord)”."
-                    : "No diarized speaker said the wake word “\(resolvedWakeWord)”. Heard \(lastWakeWordTranscript ?? "no transcript").",
+                    : "No diarized speaker said the wake word “\(resolvedWakeWord)”. Heard \(heardTranscriptSummary ?? "no transcript").",
                 phase: .identificationRequired,
                 description: "Say “\(resolvedWakeWord)” and tincan will send only that speaker’s audio."
             )

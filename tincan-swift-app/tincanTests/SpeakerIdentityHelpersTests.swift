@@ -183,7 +183,7 @@ struct SpeakerIdentityHelpersTests {
         #expect(matchingSpeakerIDs == ["speaker-a", "speaker-c"])
         #expect(
             SpeakerIdentityHelpers.challengeTranscriptSummary(for: transcripts)
-                == "speaker-a: I like apples | speaker-b: I like oranges | speaker-c: I like apples."
+                == "I like apples | I like oranges | I like apples."
         )
     }
 
@@ -200,6 +200,35 @@ struct SpeakerIdentityHelpersTests {
         )
 
         #expect(matchingSpeakerIDs == ["speaker-a", "speaker-c"])
+    }
+
+    @Test func wakeWordTranscriptSummaryOnlyIncludesMatchingTranscriptText() {
+        let transcripts = [
+            SpeakerTranscript(speakerId: "1", transcript: "Can you check the logs?"),
+            SpeakerTranscript(speakerId: "2", transcript: "Atlas, open the router."),
+            SpeakerTranscript(speakerId: "3", transcript: "I said at last we should merge it.")
+        ]
+
+        #expect(
+            SpeakerIdentityHelpers.wakeWordTranscriptSummary(
+                in: transcripts,
+                wakeWord: "Atlas"
+            ) == "Atlas, open the router."
+        )
+    }
+
+    @Test func wakeWordTranscriptSummaryIsEmptyWhenWakeWordIsMissing() {
+        let transcripts = [
+            SpeakerTranscript(speakerId: "1", transcript: "Can you check the logs?"),
+            SpeakerTranscript(speakerId: "2", transcript: "I said at last we should merge it.")
+        ]
+
+        #expect(
+            SpeakerIdentityHelpers.wakeWordTranscriptSummary(
+                in: transcripts,
+                wakeWord: "Atlas"
+            ) == nil
+        )
     }
 
     @Test func wakeWordMatchingSupportsMultiWordWakeWord() {
