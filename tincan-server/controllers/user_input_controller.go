@@ -68,6 +68,7 @@ func (c *UserInputController) HandleTranscript(sessionID string, transcript stri
 	if err != nil {
 		return HandleResult{}, err
 	}
+	routeResult = normalizeImmediateFeedback(routeRequest, routeResult)
 
 	result := HandleResult{
 		RouteRequest: routeRequest,
@@ -103,6 +104,37 @@ func (c *UserInputController) HandleTranscript(sessionID string, transcript stri
 	}
 
 	return result, nil
+}
+
+func normalizeImmediateFeedback(
+	routeRequest tincanrouter.RouteUserInputRequest,
+	routeResult tincanrouter.RouteUserInputResult,
+) tincanrouter.RouteUserInputResult {
+	if strings.TrimSpace(routeResult.ImmediateFeedback) != "" {
+		return routeResult
+	}
+
+	switch routeResult.Action {
+	case "new_conversation":
+		agentProfile := strings.TrimSpace(routeResult.AgentProfile)
+		if agentProfile == "" {
+			routeResult.ImmediateFeedback = "Starting a new conversation."
+		} else {
+			routeResult.ImmediateFeedback = fmt.Sprintf("Starting %s.", agentProfile)
+		}
+	case "message":
+		targetHandle := strings.TrimSpace(routeResult.ConversationHandle)
+		if targetHandle == "" {
+			targetHandle = strings.TrimSpace(routeRequest.CurrentConversationHandle)
+		}
+		if targetHandle == "" {
+			routeResult.ImmediateFeedback = "Sending that now."
+		} else {
+			routeResult.ImmediateFeedback = fmt.Sprintf("Sending that to %s.", targetHandle)
+		}
+	}
+
+	return routeResult
 }
 
 func (c *UserInputController) buildRouteUserInputRequest(sessionID string, transcript string) (tincanrouter.RouteUserInputRequest, error) {

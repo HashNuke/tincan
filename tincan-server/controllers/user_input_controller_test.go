@@ -303,6 +303,101 @@ func TestUserInputControllerMessageUsesCurrentConversationContext(t *testing.T) 
 	}
 }
 
+func TestUserInputControllerNewConversationFallsBackToImmediateFeedback(t *testing.T) {
+	store := newTestConversationStore(t)
+	router := &fakeRouter{
+		result: tincanrouter.RouteUserInputResult{
+			Action:       "new_conversation",
+			AgentProfile: "Atlas",
+			Message:      "run the date command",
+		},
+	}
+	creator := &fakeConversationCreator{
+		result: ConversationCreateResult{
+			ID:                    "conv-1",
+			DisplayHandle:         "atlas#1",
+			ConversationNumber:    1,
+			AgentProfileName:      "Atlas",
+			AgentBackend:          "opencode",
+			WorkingDirectory:      "/tmp/project",
+			BackendConversationID: "backend-1",
+			Status:                "running",
+		},
+	}
+	callState := &fakeCallState{}
+	controller := &UserInputController{
+		Router:             router,
+		Calls:              callState,
+		Conversations:      store,
+		ConversationCreate: creator,
+	}
+
+	result, err := controller.HandleTranscript("session-1", "Atlas, run the date command")
+	if err != nil {
+		t.Fatalf("HandleTranscript returned error: %v", err)
+	}
+
+	if result.RouteResult.ImmediateFeedback != "Starting Atlas." {
+		t.Fatalf("unexpected fallback immediate feedback: %q", result.RouteResult.ImmediateFeedback)
+	}
+	if len(result.OutputEvents) != 1 {
+		t.Fatalf("expected one output event, got %+v", result.OutputEvents)
+	}
+	if result.OutputEvents[0].Kind != output.KindImmediateFeedback {
+		t.Fatalf("expected immediate feedback event, got %q", result.OutputEvents[0].Kind)
+	}
+	if result.OutputEvents[0].Text != "Starting Atlas." {
+		t.Fatalf("unexpected immediate feedback text: %q", result.OutputEvents[0].Text)
+	}
+}
+
+func TestUserInputControllerMessageFallsBackToCurrentHandleImmediateFeedback(t *testing.T) {
+	store := newTestConversationStore(t)
+	conversation := createTestConversation(t, store, conversations.Conversation{
+		ID:                    "conv-3",
+		DisplayHandle:         "emma#3",
+		AgentProfileName:      "emma",
+		ConversationNumber:    3,
+		AgentBackend:          "opencode-1",
+		WorkingDirectory:      "/tmp/project",
+		BackendConversationID: "backend-3",
+		Status:                "running",
+	})
+
+	router := &fakeRouter{
+		result: tincanrouter.RouteUserInputResult{
+			Action:  "message",
+			Message: "keep going",
+		},
+	}
+	callState := &fakeCallState{
+		currentHandle:    conversation.DisplayHandle,
+		currentBackendID: conversation.BackendConversationID,
+	}
+	messenger := &fakeConversationMessenger{}
+	controller := &UserInputController{
+		Router:           router,
+		Calls:            callState,
+		Conversations:    store,
+		ConversationSend: messenger,
+	}
+
+	result, err := controller.HandleTranscript("session-1", "keep going")
+	if err != nil {
+		t.Fatalf("HandleTranscript returned error: %v", err)
+	}
+
+	if result.RouteResult.ImmediateFeedback != "Sending that to emma#3." {
+		t.Fatalf("unexpected fallback immediate feedback: %q", result.RouteResult.ImmediateFeedback)
+	}
+	if len(result.OutputEvents) != 1 {
+		t.Fatalf("expected one output event, got %+v", result.OutputEvents)
+	}
+	if result.OutputEvents[0].Text != "Sending that to emma#3." {
+		t.Fatalf("unexpected immediate feedback text: %q", result.OutputEvents[0].Text)
+	}
+}
+
 func newTestConversationStore(t *testing.T) *conversations.Store {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
