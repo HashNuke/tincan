@@ -35,7 +35,10 @@ type server struct {
 	mu                  sync.Mutex
 	callManager         *calls.Manager
 	webrtcTransport     *webrtcTransport
-	inference           *inferenceClient
+	speechRuntime       speechRuntime
+	stt                 speechToTextService
+	tts                 textToSpeechService
+	credentials         serviceCredentialReader
 	appConfig           *tincanconfig.AppConfigStore
 	profiles            *tincanconfig.AgentProfileStore
 	backends            *tincanconfig.AgentBackendStore
@@ -74,6 +77,9 @@ type sttResult struct {
 
 type inferenceClient struct {
 	socketPath string
+	sttModel   string
+	ttsModel   string
+	ttsVoice   string
 }
 
 type inferenceSupervisor struct {
@@ -145,11 +151,10 @@ func main() {
 		}
 	}()
 
-	inference := newInferenceSupervisor(inferenceSocketPath(), srv.appConfig, runtimeOutput)
-	if err := inference.EnsureRunning(ctx); err != nil {
-		log.Fatalf("failed to start inference service: %v", err)
+	if err := srv.speechRuntime.EnsureRunning(ctx); err != nil {
+		log.Fatalf("failed to start speech services: %v", err)
 	}
-	defer inference.Shutdown()
+	defer srv.speechRuntime.Shutdown()
 	mux := http.NewServeMux()
 	apiAdapters := make(map[string]tincanapi.ModelDiscoveringAdapter, len(srv.agentAdapters))
 	for name, adapter := range srv.agentAdapters {
@@ -209,6 +214,7 @@ func newServer(dataDir string, port int, runtimeOutput io.Writer) (*server, erro
 	conversationStore := conversations.NewStore(gormDB)
 
 	agentAdapters := agent_adapters.Default()
+	credentials := newServiceCredentialReader()
 	for _, profile := range profiles.List() {
 		backend, ok := backends.Get(profile.AgentBackend)
 		if !ok {
@@ -241,9 +247,16 @@ func newServer(dataDir string, port int, runtimeOutput io.Writer) (*server, erro
 		managedScheduler.stderr = runtimeOutput
 	}
 	conversationService := NewConversationService(profiles, backends, conversationStore, agentAdapters, managedScheduler)
+	speechServices, err := newSpeechServiceSet(appConfig, runtimeOutput, credentials)
+	if err != nil {
+		return nil, fmt.Errorf("init speech services: %w", err)
+	}
 
 	srv := &server{
-		inference:           &inferenceClient{socketPath: inferenceSocketPath()},
+		speechRuntime:       speechServices.runtime,
+		stt:                 speechServices.stt,
+		tts:                 speechServices.tts,
+		credentials:         credentials,
 		callManager:         callManager,
 		appConfig:           appConfig,
 		profiles:            profiles,
@@ -516,7 +529,7 @@ func (s *server) processUtterance(sessionID string, audioData []byte, contentTyp
 
 	log.Printf("peer %s utterance upload: bytes=%d content_type=%s", sessionID, len(audioData), contentType)
 
-	transcript, err := s.inference.transcribe(audioData, contentType)
+	transcript, err := s.stt.transcribe(audioData, contentType)
 	if err != nil {
 		log.Printf("peer %s transcription failed: %v", sessionID, err)
 		return nil, fmt.Errorf("transcription failed: %w", err)
@@ -557,7 +570,7 @@ func (s *server) writeGeneratedAudio(audioData []byte) (string, error) {
 }
 
 func (s *server) generateFeedbackAudio(text string) (string, error) {
-	audioData, err := s.inference.synthesize(text)
+	audioData, err := s.tts.synthesize(text)
 	if err != nil {
 		return "", err
 	}
@@ -622,10 +635,10 @@ func (c *inferenceClient) synthesize(text string) ([]byte, error) {
 			Kind:        "request",
 			RequestID:   uuid.NewString(),
 			Action:      "tts",
-			Model:       "pockettts",
+			Model:       c.ttsModel,
 			ContentType: "text/plain",
 			BodyLength:  len(body),
-			Voice:       "alba",
+			Voice:       c.ttsVoice,
 		},
 		Body: body,
 	}
@@ -661,7 +674,7 @@ func (c *inferenceClient) transcribeOnce(audioData []byte, contentType string) (
 			Kind:        "request",
 			RequestID:   requestID,
 			Action:      "stt",
-			Model:       "nvidia-parakeet",
+			Model:       c.sttModel,
 			ContentType: contentType,
 			BodyLength:  len(audioData),
 		},
@@ -959,27 +972,8 @@ func resolveSourceTreeInferenceLaunch(socketPath string, appConfig *tincanconfig
 }
 
 func configuredInferenceModels(appConfig *tincanconfig.AppConfigStore) (string, string) {
-	sttModel := ""
-	if appConfig != nil {
-		if configuredSTTModel, ok := appConfig.STTModel(); ok {
-			sttModel = configuredSTTModel
-		}
-	}
-	if sttModel == "" {
-		sttModel = defaultBundledSTTModel
-	}
-
-	ttsModel := ""
-	if appConfig != nil {
-		if configuredTTSModel, ok := appConfig.TTSModel(); ok {
-			ttsModel = configuredTTSModel
-		}
-	}
-	if ttsModel == "" {
-		ttsModel = defaultBundledTTSModel
-	}
-
-	return sttModel, ttsModel
+	return inferenceModelForSelection(configuredSTTSelection(appConfig), defaultBundledSTTModel),
+		inferenceModelForSelection(configuredTTSSelection(appConfig), defaultBundledTTSModel)
 }
 
 func compiledInferenceLaunch(

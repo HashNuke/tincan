@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -195,10 +196,10 @@ func TestNewAppConfigStoreCreatesEmptyFileWhenMissing(t *testing.T) {
 	if _, ok := store.RouterProfile(); ok {
 		t.Fatalf("expected router_profile to be unset")
 	}
-	if sttModel, ok := store.STTModel(); !ok || sttModel != DefaultSTTModel {
+	if sttModel, ok := store.STTModel(); !ok || sttModel != SpeechProviderMacOS+"/"+DefaultSTTModel {
 		t.Fatalf("expected default stt_model %q, got %q ok=%v", DefaultSTTModel, sttModel, ok)
 	}
-	if ttsModel, ok := store.TTSModel(); !ok || ttsModel != DefaultTTSModel {
+	if ttsModel, ok := store.TTSModel(); !ok || ttsModel != SpeechProviderMacOS+"/"+DefaultTTSModel {
 		t.Fatalf("expected default tts_model %q, got %q ok=%v", DefaultTTSModel, ttsModel, ok)
 	}
 
@@ -222,8 +223,13 @@ func TestAppConfigStoreLoadsAndUpdatesRouterProfile(t *testing.T) {
 	configPath := filepath.Join(configDir, "config.json")
 	if err := os.WriteFile(configPath, []byte(`{
   "router_profile": "Atlas",
-  "stt_model": "parakeet-tdt-0.6b-v3-coreml",
-  "tts_model": "kitten-tts-mini-0.8",
+  "stt_model": "macos/parakeet-tdt-0.6b-v3-coreml",
+  "tts_model": "grok/grok-tts-v1",
+  "services": {
+    "grok": {
+      "base_url": "https://api.x.ai/v1"
+    }
+  },
   "transcription_backend": "parakeet"
 }
 `), 0o644); err != nil {
@@ -239,11 +245,14 @@ func TestAppConfigStoreLoadsAndUpdatesRouterProfile(t *testing.T) {
 	if !ok || routerProfile != "Atlas" {
 		t.Fatalf("expected router_profile Atlas, got %q ok=%v", routerProfile, ok)
 	}
-	if sttModel, ok := store.STTModel(); !ok || sttModel != "parakeet-tdt-0.6b-v3-coreml" {
-		t.Fatalf("expected stt_model parakeet-tdt-0.6b-v3-coreml, got %q ok=%v", sttModel, ok)
+	if sttModel, ok := store.STTModel(); !ok || sttModel != "macos/parakeet-tdt-0.6b-v3-coreml" {
+		t.Fatalf("expected stt_model macos/parakeet-tdt-0.6b-v3-coreml, got %q ok=%v", sttModel, ok)
 	}
-	if ttsModel, ok := store.TTSModel(); !ok || ttsModel != "kitten-tts-mini-0.8" {
-		t.Fatalf("expected tts_model kitten-tts-mini-0.8, got %q ok=%v", ttsModel, ok)
+	if ttsModel, ok := store.TTSModel(); !ok || ttsModel != "grok/grok-tts-v1" {
+		t.Fatalf("expected tts_model grok/grok-tts-v1, got %q ok=%v", ttsModel, ok)
+	}
+	if services := store.Services(); services.Grok.BaseURL != "https://api.x.ai/v1" {
+		t.Fatalf("expected grok base_url to load, got %#v", services)
 	}
 
 	updated, err := store.UpdateRouterProfileReference("Atlas", "Atlas Updated")
@@ -270,11 +279,14 @@ func TestAppConfigStoreLoadsAndUpdatesRouterProfile(t *testing.T) {
 	if !bytes.Contains(data, []byte(`"transcription_backend": "parakeet"`)) {
 		t.Fatalf("expected unknown config keys to be preserved, got %s", string(data))
 	}
-	if !bytes.Contains(data, []byte(`"stt_model": "parakeet-tdt-0.6b-v3-coreml"`)) {
+	if !bytes.Contains(data, []byte(`"stt_model": "macos/parakeet-tdt-0.6b-v3-coreml"`)) {
 		t.Fatalf("expected stt_model to be preserved, got %s", string(data))
 	}
-	if !bytes.Contains(data, []byte(`"tts_model": "kitten-tts-mini-0.8"`)) {
+	if !bytes.Contains(data, []byte(`"tts_model": "grok/grok-tts-v1"`)) {
 		t.Fatalf("expected tts_model to be preserved, got %s", string(data))
+	}
+	if !bytes.Contains(data, []byte(`"services": {`)) {
+		t.Fatalf("expected services to be preserved, got %s", string(data))
 	}
 
 	updated, err = store.UpdateRouterProfileReference("Atlas Updated", "")
@@ -295,11 +307,82 @@ func TestAppConfigStoreLoadsAndUpdatesRouterProfile(t *testing.T) {
 	if _, ok := store.RouterProfile(); ok {
 		t.Fatalf("expected router_profile to be unset after clear")
 	}
-	if sttModel, ok := store.STTModel(); !ok || sttModel != "parakeet-tdt-0.6b-v3-coreml" {
+	if sttModel, ok := store.STTModel(); !ok || sttModel != "macos/parakeet-tdt-0.6b-v3-coreml" {
 		t.Fatalf("expected stt_model to remain set, got %q ok=%v", sttModel, ok)
 	}
-	if ttsModel, ok := store.TTSModel(); !ok || ttsModel != "kitten-tts-mini-0.8" {
+	if ttsModel, ok := store.TTSModel(); !ok || ttsModel != "grok/grok-tts-v1" {
 		t.Fatalf("expected tts_model to remain set, got %q ok=%v", ttsModel, ok)
+	}
+}
+
+func TestNewAppConfigStoreNormalizesLegacySpeechModels(t *testing.T) {
+	tempDir := t.TempDir()
+	configDir := filepath.Join(tempDir, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("create config dir: %v", err)
+	}
+
+	configPath := filepath.Join(configDir, "config.json")
+	if err := os.WriteFile(configPath, []byte(`{
+  "stt_model": "parakeet-tdt-0.6b-v3-coreml",
+  "tts_model": "kitten-tts-mini-0.8"
+}
+`), 0o644); err != nil {
+		t.Fatalf("write config.json: %v", err)
+	}
+
+	store, err := NewAppConfigStore(tempDir)
+	if err != nil {
+		t.Fatalf("NewAppConfigStore returned error: %v", err)
+	}
+
+	if sttModel, ok := store.STTModel(); !ok || sttModel != "macos/parakeet-tdt-0.6b-v3-coreml" {
+		t.Fatalf("expected legacy stt_model to normalize, got %q ok=%v", sttModel, ok)
+	}
+	if ttsModel, ok := store.TTSModel(); !ok || ttsModel != "macos/kitten-tts-mini-0.8" {
+		t.Fatalf("expected legacy tts_model to normalize, got %q ok=%v", ttsModel, ok)
+	}
+}
+
+func TestAppConfigStoreApplyPatchUpdatesSpeechSettings(t *testing.T) {
+	tempDir := t.TempDir()
+
+	store, err := NewAppConfigStore(tempDir)
+	if err != nil {
+		t.Fatalf("NewAppConfigStore returned error: %v", err)
+	}
+
+	err = store.ApplyPatch(map[string]json.RawMessage{
+		"stt_model": json.RawMessage(`"grok/grok-stt-v1"`),
+		"tts_model": json.RawMessage(`"grok/grok-tts-v1"`),
+		"services": json.RawMessage(`{
+		  "grok": {
+		    "base_url": "https://api.x.ai/v1",
+		    "tts": {
+		      "voice_id": "eve",
+		      "language": "en",
+		      "output_format": {
+		        "codec": "wav",
+		        "sample_rate": 44100
+		      }
+		    }
+		  }
+		}`),
+	})
+	if err != nil {
+		t.Fatalf("ApplyPatch returned error: %v", err)
+	}
+
+	if sttModel, ok := store.STTModel(); !ok || sttModel != "grok/grok-stt-v1" {
+		t.Fatalf("expected patched stt_model, got %q ok=%v", sttModel, ok)
+	}
+	if ttsModel, ok := store.TTSModel(); !ok || ttsModel != "grok/grok-tts-v1" {
+		t.Fatalf("expected patched tts_model, got %q ok=%v", ttsModel, ok)
+	}
+
+	snapshot := store.Snapshot()
+	if snapshot.Services.Grok.BaseURL != "https://api.x.ai/v1" {
+		t.Fatalf("expected grok base_url in snapshot, got %#v", snapshot.Services)
 	}
 }
 
@@ -352,10 +435,10 @@ func TestSampleDataDirLoadsRuntimeConfig(t *testing.T) {
 	if !ok || routerProfile != "emma" {
 		t.Fatalf("expected router_profile emma, got %q ok=%v", routerProfile, ok)
 	}
-	if sttModel, ok := appConfig.STTModel(); !ok || sttModel != "parakeet-tdt-0.6b-v3-coreml" {
+	if sttModel, ok := appConfig.STTModel(); !ok || sttModel != "macos/parakeet-tdt-0.6b-v3-coreml" {
 		t.Fatalf("expected stt_model parakeet-tdt-0.6b-v3-coreml, got %q ok=%v", sttModel, ok)
 	}
-	if ttsModel, ok := appConfig.TTSModel(); !ok || ttsModel != "kitten-tts-mini-0.8" {
+	if ttsModel, ok := appConfig.TTSModel(); !ok || ttsModel != "macos/kitten-tts-mini-0.8" {
 		t.Fatalf("expected tts_model kitten-tts-mini-0.8, got %q ok=%v", ttsModel, ok)
 	}
 

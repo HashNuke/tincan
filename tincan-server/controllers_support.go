@@ -61,7 +61,7 @@ func (r callAudioRenderer) PlaySpeech(sessionID string, text string) error {
 	if r.server == nil || strings.TrimSpace(text) == "" {
 		return nil
 	}
-	audioData, err := r.server.inference.synthesize(text)
+	audioData, err := r.server.tts.synthesize(text)
 	if err != nil {
 		return err
 	}
@@ -96,7 +96,7 @@ func (r callAudioRenderer) NotifySpeech(sessionID string, text string, summaryTe
 		spokenText = notificationText
 	}
 
-	audioData, err := r.server.inference.synthesize(spokenText)
+	audioData, err := r.server.tts.synthesize(spokenText)
 	if err != nil {
 		return err
 	}

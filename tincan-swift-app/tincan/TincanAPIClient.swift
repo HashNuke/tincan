@@ -126,8 +126,25 @@ struct TincanAPIClient {
 
     private func requestJSON<Response: Decodable>(
         path: String,
-        queryItems: [URLQueryItem] = []
+        queryItems: [URLQueryItem] = [],
+        method: String = "GET",
+        body: Data? = nil
     ) async throws -> Response {
+        let data = try await requestData(
+            path: path,
+            queryItems: queryItems,
+            method: method,
+            body: body
+        )
+        return try Self.decoder.decode(Response.self, from: data)
+    }
+
+    private func requestData(
+        path: String,
+        queryItems: [URLQueryItem] = [],
+        method: String = "GET",
+        body: Data? = nil
+    ) async throws -> Data {
         guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
             throw URLError(.badURL)
         }
@@ -140,14 +157,22 @@ struct TincanAPIClient {
         }
 
         var request = URLRequest(url: url)
+        request.httpMethod = method
         request.timeoutInterval = 15
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            throw URLError(.badServerResponse)
+        request.httpBody = body
+        if body != nil {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
 
-        return try Self.decoder.decode(Response.self, from: data)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            throw APIRequestError(statusCode: http.statusCode, responseBody: data)
+        }
+
+        return data
     }
 
     private static let decoder: JSONDecoder = {
@@ -179,6 +204,20 @@ struct TincanAPIClient {
         formatter.formatOptions = [.withInternetDateTime]
         return formatter
     }()
+}
+
+private struct APIRequestError: LocalizedError {
+    let statusCode: Int
+    let responseBody: Data
+
+    var errorDescription: String? {
+        let message = String(data: responseBody, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if message.isEmpty {
+            return "Server request failed (\(statusCode))."
+        }
+        return message
+    }
 }
 
 private struct ConversationListResponse: Decodable {

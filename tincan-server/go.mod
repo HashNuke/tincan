@@ -13,6 +13,7 @@ require (
 require (
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/jinzhu/now v1.1.5 // indirect
+	github.com/keybase/go-keychain v0.0.1 // indirect
 	github.com/mattn/go-sqlite3 v1.14.22 // indirect
 	github.com/pion/datachannel v1.6.0 // indirect
 	github.com/pion/dtls/v3 v3.1.2 // indirect
