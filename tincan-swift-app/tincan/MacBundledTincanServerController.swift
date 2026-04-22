@@ -153,6 +153,90 @@ struct BundledServerPortListenerLookup {
     }
 }
 
+final class BundledServerLaunchLock {
+    private let lockURL: URL
+    private let fileDescriptor: Int32
+
+    init(
+        lockURL: URL = AppPaths.tincanServerLaunchLockURL,
+        fileManager: FileManager = .default
+    ) throws {
+        try fileManager.createDirectory(
+            at: lockURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+
+        let descriptor = open(lockURL.path, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
+        guard descriptor >= 0 else {
+            throw LockError.failedToOpen(
+                path: lockURL.path,
+                message: String(cString: strerror(errno))
+            )
+        }
+
+        self.lockURL = lockURL
+        fileDescriptor = descriptor
+    }
+
+    deinit {
+        _ = close(fileDescriptor)
+    }
+
+    func withExclusiveAccess<T>(
+        timeout: TimeInterval = 15,
+        operation: () async throws -> T
+    ) async throws -> T {
+        try await acquire(timeout: timeout)
+        defer { release() }
+        return try await operation()
+    }
+
+    private func acquire(timeout: TimeInterval) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+
+        while true {
+            if flock(fileDescriptor, LOCK_EX | LOCK_NB) == 0 {
+                return
+            }
+
+            let errorCode = errno
+            guard errorCode == EWOULDBLOCK else {
+                throw LockError.failedToAcquire(
+                    path: lockURL.path,
+                    message: String(cString: strerror(errorCode))
+                )
+            }
+
+            guard Date() < deadline else {
+                throw LockError.timedOut(path: lockURL.path, timeout: timeout)
+            }
+
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+    }
+
+    private func release() {
+        _ = flock(fileDescriptor, LOCK_UN)
+    }
+
+    enum LockError: LocalizedError {
+        case failedToOpen(path: String, message: String)
+        case failedToAcquire(path: String, message: String)
+        case timedOut(path: String, timeout: TimeInterval)
+
+        var errorDescription: String? {
+            switch self {
+            case .failedToOpen(let path, let message):
+                return "Failed to open bundled server launch lock at \(path): \(message)"
+            case .failedToAcquire(let path, let message):
+                return "Failed to acquire bundled server launch lock at \(path): \(message)"
+            case .timedOut(let path, let timeout):
+                return "Timed out waiting \(timeout)s for bundled server launch lock at \(path)"
+            }
+        }
+    }
+}
+
 @MainActor
 final class MacBundledTincanServerController {
     private static let timestampFormatter: ISO8601DateFormatter = {
@@ -199,36 +283,42 @@ final class MacBundledTincanServerController {
             return
         }
 
-        await reclaimTrackedBundledServerIfNeeded()
-
         do {
-            try await reclaimPortListenersIfNeeded()
-            try applyStartupLogCleanupIfNeeded()
-            let executableURL = try resolveExecutableURL()
-            writeStartupLog("launching bundled tincan-server from \(executableURL.path)")
-            let process = Process()
-            process.executableURL = executableURL
-            process.currentDirectoryURL = executableURL.deletingLastPathComponent()
-            process.arguments = [
-                "--data-dir", AppPaths.appSupportDirectory.path,
-                "--port", String(port),
-            ]
-            guard let logHandle else {
-                throw LaunchError.logFileUnavailable(AppPaths.tincanServerLogURL.path)
-            }
-            process.standardOutput = logHandle
-            process.standardError = logHandle
-            process.terminationHandler = { [weak self] _ in
-                Task { @MainActor [weak self] in
-                    self?.finishProcessRun()
+            let launchLock = try BundledServerLaunchLock()
+            try await launchLock.withExclusiveAccess {
+                let executableURL = try resolveExecutableURL()
+                if await reuseExistingHealthyBundledServerIfNeeded(executableURL: executableURL) {
+                    return
                 }
+
+                await reclaimTrackedBundledServerIfNeeded()
+                try await reclaimPortListenersIfNeeded()
+                try applyStartupLogCleanupIfNeeded()
+                writeStartupLog("launching bundled tincan-server from \(executableURL.path)")
+                let process = Process()
+                process.executableURL = executableURL
+                process.currentDirectoryURL = executableURL.deletingLastPathComponent()
+                process.arguments = [
+                    "--data-dir", AppPaths.appSupportDirectory.path,
+                    "--port", String(port),
+                ]
+                guard let logHandle else {
+                    throw LaunchError.logFileUnavailable(AppPaths.tincanServerLogURL.path)
+                }
+                process.standardOutput = logHandle
+                process.standardError = logHandle
+                process.terminationHandler = { [weak self] _ in
+                    Task { @MainActor [weak self] in
+                        self?.finishProcessRun()
+                    }
+                }
+                try process.run()
+                self.process = process
+                writeTrackedProcessID(process.processIdentifier)
+                writeStartupLog("bundled tincan-server started with pid \(process.processIdentifier)")
+                try await waitUntilReachable(timeout: 10)
+                writeStartupLog("bundled tincan-server became healthy on port \(port)")
             }
-            try process.run()
-            self.process = process
-            writeTrackedProcessID(process.processIdentifier)
-            writeStartupLog("bundled tincan-server started with pid \(process.processIdentifier)")
-            try await waitUntilReachable(timeout: 10)
-            writeStartupLog("bundled tincan-server became healthy on port \(port)")
         } catch {
             writeStartupLog("failed to launch bundled tincan-server: \(error.localizedDescription)")
             if process == nil {
@@ -236,6 +326,19 @@ final class MacBundledTincanServerController {
             }
             NSLog("Failed to launch bundled tincan-server: %@", error.localizedDescription)
         }
+    }
+
+    private func reuseExistingHealthyBundledServerIfNeeded(executableURL: URL) async -> Bool {
+        guard await isServerReachable(),
+              let trackedPID = readTrackedProcessID(),
+              isProcessRunning(trackedPID),
+              let trackedExecutablePath = processExecutablePath(trackedPID),
+              sameBundledExecutablePath(trackedExecutablePath, executableURL.path) else {
+            return false
+        }
+
+        writeStartupLog("reusing healthy bundled tincan-server pid \(trackedPID) at \(trackedExecutablePath)")
+        return true
     }
 
     private func reclaimPortListenersIfNeeded() async throws {
@@ -495,6 +598,11 @@ final class MacBundledTincanServerController {
         let length = proc_pidpath(pid, &buffer, UInt32(buffer.count))
         guard length > 0 else { return nil }
         return String(cString: buffer)
+    }
+
+    private func sameBundledExecutablePath(_ lhs: String, _ rhs: String) -> Bool {
+        URL(fileURLWithPath: lhs).resolvingSymlinksInPath().path ==
+            URL(fileURLWithPath: rhs).resolvingSymlinksInPath().path
     }
 
     private func finishProcessRun() {
