@@ -1,40 +1,46 @@
 {{ define "router_user" -}}
-Routing context:
+Routing context below.
 
-Defined agent profiles:
+### Defined agent profiles
 {{- range .DefinedAgentProfiles }}
 - {{ . }}
 {{- else }}
-- 
+-
 {{- end }}
 
-Known conversation handles:
+### Known conversation handles
+
+Below are some agent conversation handles we know are active:
+
 {{- range .KnownConversationHandles }}
 - {{ . }}
 {{- else }}
-- 
+-
 {{- end }}
 
-Current conversation handle:
-{{ .CurrentConversationHandle }}
+## Agent conversation handles with pending updates
+
+{{- range .PendingUpdateHandles }}
+- {{ . }}
+{{- else }}
+-
+{{- end }}
+
+## Current conversation info
+
+Current conversation handle: {{ .CurrentConversationHandle }}
 
 Current conversation notes:
 {{ .CurrentConversationNotes }}
 
-Pending update handles:
-{{- range .PendingUpdateHandles }}
-- {{ . }}
-{{- else }}
-- 
-{{- end }}
+## Unresolved clarification history for current conversation
 
-Unresolved clarification history:
 {{- range .UnresolvedClarificationLines }}
 - {{ . }}
 {{- else }}
-- 
+-
 {{- end }}
 
-User transcript:
+## Latest user transcript
 {{ .UserTranscript }}
 {{- end }}
