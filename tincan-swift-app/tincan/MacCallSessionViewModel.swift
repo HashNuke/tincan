@@ -58,12 +58,14 @@ final class MacCallSessionViewModel: ObservableObject {
         }
 
         isTransitioningCallState = true
+        tonePlayer.startOutgoingRing()
         callStateDescription = "Starting"
         Task {
             callStateDescription = "Checking mic"
             appendLog("Requesting microphone access")
             let hasPermission = await requestMicrophonePermission()
             guard hasPermission else {
+                tonePlayer.stopOutgoingRing()
                 callStateDescription = "Microphone permission required"
                 appendLog("Microphone permission was denied")
                 isTransitioningCallState = false
@@ -76,6 +78,7 @@ final class MacCallSessionViewModel: ObservableObject {
             await identityManager.setSpeechRecognitionAuthorized(hasSpeechPermission)
 
             if !hasSpeechPermission {
+                tonePlayer.stopOutgoingRing()
                 callStateDescription = "Speech recognition permission required"
                 identityStatusDescription = "Wake-word speaker gating requires Speech Recognition permission."
                 appendLog("Speech recognition permission is required for wake-word speaker gating")
@@ -84,6 +87,7 @@ final class MacCallSessionViewModel: ObservableObject {
             }
 
             guard let serverURL = serverSettings.serverBaseURL else {
+                tonePlayer.stopOutgoingRing()
                 callStateDescription = "Invalid server URL"
                 appendLog("Server connection is incomplete")
                 isTransitioningCallState = false
@@ -119,8 +123,10 @@ final class MacCallSessionViewModel: ObservableObject {
                 callStateDescription = "Connected"
                 isCallActive = true
                 callStartedAt = Date()
+                tonePlayer.stopOutgoingRing()
                 appendLog("Connected")
             } catch {
+                tonePlayer.stopOutgoingRing()
                 callStateDescription = "Call start failed"
                 appendLog("Failed during \(startupPhase): \(error.localizedDescription)")
                 await audioPipeline.stop()
@@ -138,6 +144,7 @@ final class MacCallSessionViewModel: ObservableObject {
     func endCall() {
         guard isCallActive || isTransitioningCallState else { return }
         isTransitioningCallState = true
+        tonePlayer.stopOutgoingRing()
         muteGeneration &+= 1
         callStateDescription = isCallActive ? "Ending" : "Canceling"
         appendLog(isCallActive ? "Ending call" : "Canceling call startup")
@@ -156,6 +163,7 @@ final class MacCallSessionViewModel: ObservableObject {
             isCallActive = false
             callStartedAt = nil
             resetInputLevels()
+            tonePlayer.playDisconnectTone()
             isTransitioningCallState = false
         }
     }

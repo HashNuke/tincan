@@ -6,12 +6,14 @@ final class CallTonePlayer: NSObject, AVAudioPlayerDelegate {
     static let shared = CallTonePlayer()
 
     private var activePlayers: [AVAudioPlayer] = []
+    private var outgoingRingPlayer: AVAudioPlayer?
 
     var isPlayingAudio: Bool {
-        !activePlayers.isEmpty
+        outgoingRingPlayer?.isPlaying == true || !activePlayers.isEmpty
     }
 
     func playConnectTone() {
+        stopOutgoingRing()
         playTone(sequence: [
             ToneSegment(frequency: 880, duration: 0.08),
             ToneSegment(frequency: 1320, duration: 0.12),
@@ -19,11 +21,48 @@ final class CallTonePlayer: NSObject, AVAudioPlayerDelegate {
     }
 
     func playDisconnectTone() {
+        stopOutgoingRing()
+        if let url = bundledAudioAssetURL(named: "call_disconnect") {
+            do {
+                let player = try AVAudioPlayer(contentsOf: url)
+                player.delegate = self
+                player.prepareToPlay()
+                activePlayers.append(player)
+                player.play()
+                return
+            } catch {
+                assertionFailure("Failed to play disconnect audio asset: \(error.localizedDescription)")
+            }
+        }
         playTone(sequence: [
             ToneSegment(frequency: 880, duration: 0.08),
             ToneSegment(frequency: 660, duration: 0.1),
             ToneSegment(frequency: 440, duration: 0.12),
         ])
+    }
+
+    func startOutgoingRing() {
+        guard outgoingRingPlayer?.isPlaying != true else { return }
+        guard let url = outgoingRingURL() else {
+            assertionFailure("Failed to locate outgoing ring audio asset")
+            return
+        }
+
+        do {
+            let player = try AVAudioPlayer(contentsOf: url)
+            player.delegate = self
+            player.numberOfLoops = -1
+            player.prepareToPlay()
+            outgoingRingPlayer = player
+            player.play()
+        } catch {
+            assertionFailure("Failed to play outgoing ring audio asset: \(error.localizedDescription)")
+        }
+    }
+
+    func stopOutgoingRing() {
+        outgoingRingPlayer?.stop()
+        outgoingRingPlayer = nil
     }
 
     func playAudioData(_ audioData: Data) {
@@ -48,11 +87,42 @@ final class CallTonePlayer: NSObject, AVAudioPlayerDelegate {
     }
 
     func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        if outgoingRingPlayer === player {
+            outgoingRingPlayer = nil
+            return
+        }
         activePlayers.removeAll { $0 === player }
     }
 
     func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: (any Error)?) {
+        if outgoingRingPlayer === player {
+            outgoingRingPlayer = nil
+            return
+        }
         activePlayers.removeAll { $0 === player }
+    }
+
+    private func outgoingRingURL() -> URL? {
+        bundledAudioAssetURL(named: "phone-ring-out-call-end-tone")
+    }
+
+    private func bundledAudioAssetURL(named resourceName: String) -> URL? {
+        if let bundledURL = Bundle.main.url(forResource: resourceName, withExtension: "wav") {
+            return bundledURL
+        }
+
+        if let frameworkURL = Bundle(for: CallTonePlayer.self).url(forResource: resourceName, withExtension: "wav") {
+            return frameworkURL
+        }
+
+        let sourceAssetURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("AudioAssets", isDirectory: true)
+            .appendingPathComponent("\(resourceName).wav", isDirectory: false)
+        guard FileManager.default.fileExists(atPath: sourceAssetURL.path) else {
+            return nil
+        }
+        return sourceAssetURL
     }
 }
 

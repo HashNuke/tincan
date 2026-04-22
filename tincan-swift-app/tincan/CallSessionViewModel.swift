@@ -41,11 +41,13 @@ final class CallSessionViewModel: ObservableObject {
         }
 
         isTransitioningCallState = true
+        tonePlayer.startOutgoingRing()
         callStateDescription = "Checking mic"
         Task {
             appendLog("Requesting microphone access")
             let hasPermission = await requestMicrophonePermission()
             guard hasPermission else {
+                tonePlayer.stopOutgoingRing()
                 appendLog("Microphone permission was denied")
                 callStateDescription = "Microphone permission required"
                 isTransitioningCallState = false
@@ -61,6 +63,7 @@ final class CallSessionViewModel: ObservableObject {
     func endCall() {
         guard isCallActive || isTransitioningCallState else { return }
         isTransitioningCallState = true
+        tonePlayer.stopOutgoingRing()
         muteGeneration &+= 1
         callStateDescription = isCallActive ? "Ending" : "Canceling"
         appendLog(isCallActive ? "Ending call" : "Canceling call startup")
@@ -140,6 +143,7 @@ extension CallSessionViewModel: CallKitControllerDelegate {
     func callKitControllerDidActivateAudio(_ controller: CallKitController) {
         Task {
             guard let client = makeSessionClient() else {
+                tonePlayer.stopOutgoingRing()
                 callStateDescription = "Invalid server URL"
                 appendLog("Server connection is incomplete")
                 isTransitioningCallState = false
@@ -167,6 +171,7 @@ extension CallSessionViewModel: CallKitControllerDelegate {
                 callStartedAt = Date()
                 tonePlayer.playConnectTone()
             } catch {
+                tonePlayer.stopOutgoingRing()
                 callStateDescription = "Audio start failed"
                 appendLog("Failed during \(startupPhase): \(error.localizedDescription)")
                 if let sid = sessionID {
@@ -204,6 +209,7 @@ extension CallSessionViewModel: CallKitControllerDelegate {
     }
 
     func callKitController(_ controller: CallKitController, didFail message: String) {
+        tonePlayer.stopOutgoingRing()
         callStateDescription = "Call failed"
         isCallActive = false
         callStartedAt = nil
