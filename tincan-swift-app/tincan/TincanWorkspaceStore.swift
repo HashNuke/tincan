@@ -33,6 +33,8 @@ final class TincanWorkspaceStore: ObservableObject {
     private var connectionCancellable: AnyCancellable?
     private var liveWebSocketTask: URLSessionWebSocketTask?
     private var liveReceiveTask: Task<Void, Never>?
+    private var liveReconnectTask: Task<Void, Never>?
+    private var liveConnectionGeneration: UInt64 = 0
     private var hasStarted = false
 
     init(serverSettings: ServerConnectionStore) {
@@ -47,6 +49,7 @@ final class TincanWorkspaceStore: ObservableObject {
     }
 
     deinit {
+        liveReconnectTask?.cancel()
         liveReceiveTask?.cancel()
         liveWebSocketTask?.cancel(with: .goingAway, reason: nil)
     }
@@ -176,6 +179,7 @@ final class TincanWorkspaceStore: ObservableObject {
         liveWebSocketTask = task
         task.resume()
 
+        let generation = liveConnectionGeneration
         liveReceiveTask = Task { @MainActor [weak self] in
             guard let self else { return }
 
@@ -198,11 +202,16 @@ final class TincanWorkspaceStore: ObservableObject {
             } catch {
                 guard !Task.isCancelled else { return }
                 liveConnectionStatus = .disconnected(error.localizedDescription)
+                scheduleLiveReconnect(after: 2, generation: generation)
             }
         }
     }
 
     private func stopLiveUpdates() {
+        liveConnectionGeneration &+= 1
+        liveReconnectTask?.cancel()
+        liveReconnectTask = nil
+
         liveReceiveTask?.cancel()
         liveReceiveTask = nil
 
@@ -211,6 +220,20 @@ final class TincanWorkspaceStore: ObservableObject {
         }
         liveWebSocketTask = nil
         liveConnectionStatus = .idle
+    }
+
+    private func scheduleLiveReconnect(after delaySeconds: TimeInterval, generation: UInt64) {
+        liveReconnectTask?.cancel()
+        liveReconnectTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let delayNanoseconds = UInt64(max(0, delaySeconds) * 1_000_000_000)
+            if delayNanoseconds > 0 {
+                try? await Task.sleep(nanoseconds: delayNanoseconds)
+            }
+            guard !Task.isCancelled else { return }
+            guard generation == liveConnectionGeneration else { return }
+            restartLiveUpdates()
+        }
     }
 
     private func handleLivePayload(_ data: Data) throws {
