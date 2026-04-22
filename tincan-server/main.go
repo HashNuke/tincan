@@ -81,6 +81,7 @@ type inferenceSupervisor struct {
 	cmd        *exec.Cmd
 	launch     inferenceLaunchConfiguration
 	launchErr  error
+	output     io.Writer
 }
 
 type inferenceLaunchConfiguration struct {
@@ -106,8 +107,24 @@ func main() {
 	defer stop()
 
 	dataDirFlag := flag.String("data-dir", "", "directory for tincan-server runtime data")
+	logFileFlag := flag.String("log-file", "", "file path for tincan-server logs")
 	portFlag := flag.Int("port", defaultServerPort, "HTTP port for tincan-server")
 	flag.Parse()
+
+	logFile, resolvedLogFilePath, err := openLogFile(*logFileFlag)
+	if err != nil {
+		log.Fatalf("failed to open log file: %v", err)
+	}
+
+	var runtimeOutput io.Writer
+	if logFile != nil {
+		defer func() {
+			_ = logFile.Close()
+		}()
+		log.SetOutput(logFile)
+		runtimeOutput = logFile
+		log.Printf("tincan-server logging to %s", resolvedLogFilePath)
+	}
 
 	if *portFlag <= 0 || *portFlag > 65535 {
 		log.Fatalf("invalid --port: %d", *portFlag)
@@ -118,7 +135,7 @@ func main() {
 		log.Fatalf("failed to resolve data dir: %v", err)
 	}
 
-	srv, err := newServer(dataDir, *portFlag)
+	srv, err := newServer(dataDir, *portFlag, runtimeOutput)
 	if err != nil {
 		log.Fatalf("failed to initialize server: %v", err)
 	}
@@ -128,7 +145,7 @@ func main() {
 		}
 	}()
 
-	inference := newInferenceSupervisor(inferenceSocketPath(), srv.appConfig)
+	inference := newInferenceSupervisor(inferenceSocketPath(), srv.appConfig, runtimeOutput)
 	if err := inference.EnsureRunning(ctx); err != nil {
 		log.Fatalf("failed to start inference service: %v", err)
 	}
@@ -168,7 +185,7 @@ func main() {
 	}
 }
 
-func newServer(dataDir string, port int) (*server, error) {
+func newServer(dataDir string, port int, runtimeOutput io.Writer) (*server, error) {
 	appConfig, err := tincanconfig.NewAppConfigStore(dataDir)
 	if err != nil {
 		return nil, fmt.Errorf("init app config: %w", err)
@@ -211,7 +228,6 @@ func newServer(dataDir string, port int) (*server, error) {
 		log.Printf("router is not configured; voice command routing is unavailable until config/config.json sets router_profile to a valid agent profile: %v", err)
 	}
 	var routerService controllers.Router = builtRouter
-	var updateProcessor controllers.ConversationUpdateProcessor = builtRouter
 
 	callManager := calls.NewManager()
 	tincanExecPath, err := resolveTincanExecPath()
@@ -220,6 +236,10 @@ func newServer(dataDir string, port int) (*server, error) {
 	}
 	serverURL := fmt.Sprintf("http://127.0.0.1:%d", port)
 	managedScheduler := NewManagedRunScheduler(serverURL, tincanExecPath, conversationStore, backends, agentAdapters)
+	if runtimeOutput != nil {
+		managedScheduler.stdout = runtimeOutput
+		managedScheduler.stderr = runtimeOutput
+	}
 	conversationService := NewConversationService(profiles, backends, conversationStore, agentAdapters, managedScheduler)
 
 	srv := &server{
@@ -242,7 +262,7 @@ func newServer(dataDir string, port int) (*server, error) {
 		hookController: &controllers.HookController{
 			Conversations:   conversationStore,
 			Sessions:        callManager,
-			UpdateProcessor: updateProcessor,
+			UpdateProcessor: builtRouter,
 		},
 	}
 	srv.webrtcTransport = newWebRTCTransport(srv)
@@ -277,6 +297,31 @@ func expandPath(path string) (string, error) {
 		return filepath.Join(homeDir, strings.TrimPrefix(path, "~/")), nil
 	}
 	return path, nil
+}
+
+func openLogFile(flagValue string) (*os.File, string, error) {
+	if strings.TrimSpace(flagValue) == "" {
+		return nil, "", nil
+	}
+
+	logFilePath, err := expandPath(flagValue)
+	if err != nil {
+		return nil, "", fmt.Errorf("expand log file path: %w", err)
+	}
+
+	logDirectory := filepath.Dir(logFilePath)
+	if logDirectory != "." {
+		if err := os.MkdirAll(logDirectory, 0o755); err != nil {
+			return nil, "", fmt.Errorf("create log directory: %w", err)
+		}
+	}
+
+	logFile, err := os.OpenFile(logFilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return nil, "", fmt.Errorf("open log file: %w", err)
+	}
+
+	return logFile, logFilePath, nil
 }
 
 func (s *server) handleHealth(w http.ResponseWriter, _ *http.Request) {
@@ -736,12 +781,13 @@ func saveUtteranceForDebug(sessionID string, audioData []byte) (string, error) {
 	return filePath, nil
 }
 
-func newInferenceSupervisor(socketPath string, appConfig *tincanconfig.AppConfigStore) *inferenceSupervisor {
+func newInferenceSupervisor(socketPath string, appConfig *tincanconfig.AppConfigStore, output io.Writer) *inferenceSupervisor {
 	launch, err := resolveInferenceLaunchConfiguration(socketPath, appConfig)
 	return &inferenceSupervisor{
 		socketPath: socketPath,
 		launch:     launch,
 		launchErr:  err,
+		output:     output,
 	}
 }
 
@@ -759,8 +805,13 @@ func (s *inferenceSupervisor) EnsureRunning(ctx context.Context) error {
 	if s.launch.workingDirectory != "" {
 		command.Dir = s.launch.workingDirectory
 	}
-	command.Stdout = os.Stdout
-	command.Stderr = os.Stderr
+	if s.output == nil {
+		command.Stdout = os.Stdout
+		command.Stderr = os.Stderr
+	} else {
+		command.Stdout = s.output
+		command.Stderr = s.output
+	}
 
 	if err := command.Start(); err != nil {
 		return err
