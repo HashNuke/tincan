@@ -25,6 +25,7 @@ final class CallSessionViewModel: ObservableObject {
     private var sessionClient: BackendSessionClient?
     private var sessionID: String?
     private var eventTask: Task<Void, Never>?
+    private var muteGeneration: UInt64 = 0
 
     init(serverSettings: ServerConnectionStore) {
         self.serverSettings = serverSettings
@@ -60,6 +61,7 @@ final class CallSessionViewModel: ObservableObject {
     func endCall() {
         guard isCallActive || isTransitioningCallState else { return }
         isTransitioningCallState = true
+        muteGeneration &+= 1
         callStateDescription = isCallActive ? "Ending" : "Canceling"
         appendLog(isCallActive ? "Ending call" : "Canceling call startup")
         callKitController.endCall()
@@ -156,7 +158,12 @@ final class CallSessionViewModel: ObservableObject {
 
     func toggleMute() {
         isMuted.toggle()
+        muteGeneration &+= 1
         appendLog(isMuted ? "Muted outgoing audio" : "Resumed outgoing audio")
+        let shouldCaptureAudio = !isMuted
+        Task {
+            await audioPipeline.setCaptureEnabled(shouldCaptureAudio)
+        }
     }
 
     func toggleSpeakerEnabled() {
@@ -194,6 +201,7 @@ extension CallSessionViewModel: CallKitControllerDelegate {
                 callStateDescription = "Starting mic"
                 appendLog("Starting microphone capture")
                 try await audioPipeline.start()
+                await audioPipeline.setCaptureEnabled(!isMuted)
                 subscribeToServerEvents(client: client, sessionID: sid)
                 callStateDescription = "Listening"
                 isCallActive = true
@@ -215,6 +223,7 @@ extension CallSessionViewModel: CallKitControllerDelegate {
 
     func callKitControllerDidDeactivateAudio(_ controller: CallKitController) {
         Task {
+            muteGeneration &+= 1
             eventTask?.cancel()
             eventTask = nil
 
@@ -241,6 +250,7 @@ extension CallSessionViewModel: CallKitControllerDelegate {
         callStartedAt = nil
         resetInputLevels()
         isTransitioningCallState = false
+        muteGeneration &+= 1
         appendLog("CallKit error: \(message)")
     }
 }
@@ -260,15 +270,33 @@ extension CallSessionViewModel: AudioTurnPipelineOutput {
             appendLog("Ignored speech segment while muted")
             return
         }
+        let muteSnapshot = muteGeneration
         Task {
+            guard self.shouldUploadCapturedAudio(sessionID: sid, muteSnapshot: muteSnapshot) else {
+                self.appendLog("Dropped a pending speech segment because mute changed")
+                return
+            }
             do {
                 let response = try await client.uploadUtterance(sessionID: sid, audioWAV: segment.wavData)
+                guard self.shouldAcceptCapturedAudioResponse(sessionID: sid, muteSnapshot: muteSnapshot) else {
+                    return
+                }
                 lastServerTranscript = response.text
                 appendLog("Transcript: \(response.text)")
             } catch {
                 appendLog("Upload failed: \(error.localizedDescription)")
             }
         }
+    }
+}
+
+private extension CallSessionViewModel {
+    func shouldUploadCapturedAudio(sessionID: String, muteSnapshot: UInt64) -> Bool {
+        !isMuted && sessionID == self.sessionID && muteSnapshot == muteGeneration
+    }
+
+    func shouldAcceptCapturedAudioResponse(sessionID: String, muteSnapshot: UInt64) -> Bool {
+        sessionID == self.sessionID && muteSnapshot == muteGeneration
     }
 }
 #endif

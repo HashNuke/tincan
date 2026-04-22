@@ -36,6 +36,7 @@ final class MacCallSessionViewModel: ObservableObject {
     private var sessionClient: BackendSessionClient?
     private var sessionID: String?
     private var eventTask: Task<Void, Never>?
+    private var muteGeneration: UInt64 = 0
 
     init(serverSettings: ServerConnectionStore) {
         self.serverSettings = serverSettings
@@ -102,6 +103,7 @@ final class MacCallSessionViewModel: ObservableObject {
                 callStateDescription = "Starting mic"
                 appendLog("Starting microphone capture")
                 try await audioPipeline.start()
+                await audioPipeline.setCaptureEnabled(!isMuted)
 
                 startupPhase = "session registration"
                 callStateDescription = "Connecting"
@@ -135,6 +137,7 @@ final class MacCallSessionViewModel: ObservableObject {
     func endCall() {
         guard isCallActive || isTransitioningCallState else { return }
         isTransitioningCallState = true
+        muteGeneration &+= 1
         callStateDescription = isCallActive ? "Ending" : "Canceling"
         appendLog(isCallActive ? "Ending call" : "Canceling call startup")
         Task {
@@ -285,7 +288,12 @@ final class MacCallSessionViewModel: ObservableObject {
 
     func toggleMute() {
         isMuted.toggle()
+        muteGeneration &+= 1
         appendLog(isMuted ? "Muted outgoing audio" : "Resumed outgoing audio")
+        let shouldCaptureAudio = !isMuted
+        Task {
+            await audioPipeline.setCaptureEnabled(shouldCaptureAudio)
+        }
     }
 
     func toggleSpeakerEnabled() {
@@ -312,6 +320,7 @@ extension MacCallSessionViewModel: AudioTurnPipelineOutput {
             appendLog("Ignored speech segment while muted")
             return
         }
+        let muteSnapshot = muteGeneration
         let identityManager = self.identityManager
         Task(priority: .userInitiated) {
             let outcome = await identityManager.processSegment(segment)
@@ -321,18 +330,35 @@ extension MacCallSessionViewModel: AudioTurnPipelineOutput {
             guard let approvedSegment = outcome.segmentApprovedForUpload else {
                 return
             }
+            guard self.shouldUploadCapturedAudio(sessionID: sid, muteSnapshot: muteSnapshot) else {
+                self.appendLog("Dropped a pending speech segment because mute changed")
+                return
+            }
 
             do {
                 self.appendLog(
                     "Uploading \(approvedSegment.duration.formatted(.number.precision(.fractionLength(2))))s approved speech segment"
                 )
                 let response = try await self.uploadApprovedSegment(approvedSegment, with: client, sessionID: sid)
+                guard self.shouldAcceptCapturedAudioResponse(sessionID: sid, muteSnapshot: muteSnapshot) else {
+                    return
+                }
                 self.lastServerTranscript = response.text
                 self.appendLog("Transcript: \(response.text)")
             } catch {
                 self.appendLog("Upload failed: \(error.localizedDescription)")
             }
         }
+    }
+}
+
+private extension MacCallSessionViewModel {
+    func shouldUploadCapturedAudio(sessionID: String, muteSnapshot: UInt64) -> Bool {
+        !isMuted && sessionID == self.sessionID && muteSnapshot == muteGeneration
+    }
+
+    func shouldAcceptCapturedAudioResponse(sessionID: String, muteSnapshot: UInt64) -> Bool {
+        sessionID == self.sessionID && muteSnapshot == muteGeneration
     }
 }
 

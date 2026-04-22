@@ -16,11 +16,21 @@ enum BundledServerLogFilePolicy {
         existingSize > truncationThresholdBytes
     }
 
+    static func openLogFileForAppend(
+        at logURL: URL,
+        fileManager: FileManager = .default
+    ) throws -> FileHandle {
+        ensureLogFileExists(at: logURL, fileManager: fileManager)
+        let handle = try FileHandle(forWritingTo: logURL)
+        _ = try handle.seekToEnd()
+        return handle
+    }
+
     static func prepareLogFile(
         at logURL: URL,
         fileManager: FileManager = .default
     ) throws -> BundledServerLogFilePreparationResult {
-        _ = fileManager.createFile(atPath: logURL.path, contents: nil)
+        ensureLogFileExists(at: logURL, fileManager: fileManager)
 
         let existingSize = try currentSizeOfLogFile(at: logURL, fileManager: fileManager)
         let handle = try FileHandle(forWritingTo: logURL)
@@ -46,6 +56,100 @@ enum BundledServerLogFilePolicy {
             return size.uint64Value
         }
         return 0
+    }
+
+    private static func ensureLogFileExists(at logURL: URL, fileManager: FileManager) {
+        if !fileManager.fileExists(atPath: logURL.path) {
+            _ = fileManager.createFile(atPath: logURL.path, contents: nil)
+        }
+    }
+}
+
+struct BundledServerPortListenerLookup {
+    static func listeningPIDs(
+        on port: Int,
+        excluding excludedPIDs: Set<pid_t> = [ProcessInfo.processInfo.processIdentifier]
+    ) throws -> [pid_t] {
+        let result = try runLsof(on: port)
+        switch result.status {
+        case 0:
+            return parseListeningPIDs(from: result.stdout, excluding: excludedPIDs)
+        case 1:
+            return []
+        default:
+            throw LookupError.commandFailed(
+                port: port,
+                status: result.status,
+                message: result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+        }
+    }
+
+    static func parseListeningPIDs(
+        from output: String,
+        excluding excludedPIDs: Set<pid_t> = []
+    ) -> [pid_t] {
+        var seen = Set<pid_t>()
+        var pids: [pid_t] = []
+
+        for line in output.split(whereSeparator: \.isNewline) {
+            let trimmedLine = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let pid = Int32(trimmedLine),
+                  !excludedPIDs.contains(pid),
+                  seen.insert(pid).inserted else {
+                continue
+            }
+            pids.append(pid)
+        }
+
+        return pids
+    }
+
+    private static func runLsof(on port: Int) throws -> CommandResult {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+        process.arguments = [
+            "-nP",
+            "-iTCP:\(port)",
+            "-sTCP:LISTEN",
+            "-t",
+        ]
+
+        let stdout = Pipe()
+        let stderr = Pipe()
+        process.standardOutput = stdout
+        process.standardError = stderr
+
+        try process.run()
+        process.waitUntilExit()
+
+        let stdoutData = stdout.fileHandleForReading.readDataToEndOfFile()
+        let stderrData = stderr.fileHandleForReading.readDataToEndOfFile()
+        return CommandResult(
+            status: process.terminationStatus,
+            stdout: String(decoding: stdoutData, as: UTF8.self),
+            stderr: String(decoding: stderrData, as: UTF8.self)
+        )
+    }
+
+    private struct CommandResult {
+        let status: Int32
+        let stdout: String
+        let stderr: String
+    }
+
+    enum LookupError: LocalizedError {
+        case commandFailed(port: Int, status: Int32, message: String)
+
+        var errorDescription: String? {
+            switch self {
+            case .commandFailed(let port, let status, let message):
+                if message.isEmpty {
+                    return "Failed to inspect listeners on port \(port) with lsof (exit \(status))"
+                }
+                return "Failed to inspect listeners on port \(port) with lsof (exit \(status)): \(message)"
+            }
+        }
     }
 }
 
@@ -97,12 +201,9 @@ final class MacBundledTincanServerController {
 
         await reclaimTrackedBundledServerIfNeeded()
 
-        if await isServerReachable() {
-            writeStartupLog("skipping bundled tincan-server launch because a server is already reachable at 127.0.0.1:\(port)")
-            return
-        }
-
         do {
+            try await reclaimPortListenersIfNeeded()
+            try applyStartupLogCleanupIfNeeded()
             let executableURL = try resolveExecutableURL()
             writeStartupLog("launching bundled tincan-server from \(executableURL.path)")
             let process = Process()
@@ -135,6 +236,28 @@ final class MacBundledTincanServerController {
             }
             NSLog("Failed to launch bundled tincan-server: %@", error.localizedDescription)
         }
+    }
+
+    private func reclaimPortListenersIfNeeded() async throws {
+        let listenerPIDs = try BundledServerPortListenerLookup.listeningPIDs(on: port)
+        guard !listenerPIDs.isEmpty else { return }
+
+        writeStartupLog(
+            "reclaiming port \(port) by terminating existing listener pid(s): \(listenerPIDs.map(String.init).joined(separator: ", "))"
+        )
+
+        for pid in listenerPIDs {
+            let executablePath = processExecutablePath(pid) ?? "unknown executable"
+            writeStartupLog("terminating pid \(pid) listening on port \(port) (\(executablePath))")
+            try await terminatePortListener(pid)
+        }
+
+        let remainingPIDs = try BundledServerPortListenerLookup.listeningPIDs(on: port)
+        guard remainingPIDs.isEmpty else {
+            throw LaunchError.portStillOccupied(port, remainingPIDs)
+        }
+
+        writeStartupLog("port \(port) is clear for bundled tincan-server launch")
     }
 
     func stop() {
@@ -203,6 +326,56 @@ final class MacBundledTincanServerController {
         }
     }
 
+    private func terminatePortListener(_ pid: pid_t) async throws {
+        guard isProcessRunning(pid) else {
+            clearTrackedProcessIDIfMatches(pid)
+            return
+        }
+
+        if kill(pid, SIGTERM) != 0 {
+            let errorCode = errno
+            guard errorCode != ESRCH else {
+                clearTrackedProcessIDIfMatches(pid)
+                return
+            }
+            throw LaunchError.failedToTerminatePortListener(
+                port: port,
+                pid: pid,
+                signal: SIGTERM,
+                message: String(cString: strerror(errorCode))
+            )
+        }
+
+        await waitForProcessToExit(pid, timeout: 5)
+
+        if isProcessRunning(pid) {
+            writeStartupLog("pid \(pid) on port \(port) did not exit after SIGTERM; sending SIGKILL")
+
+            if kill(pid, SIGKILL) != 0 {
+                let errorCode = errno
+                guard errorCode != ESRCH else {
+                    clearTrackedProcessIDIfMatches(pid)
+                    return
+                }
+                throw LaunchError.failedToTerminatePortListener(
+                    port: port,
+                    pid: pid,
+                    signal: SIGKILL,
+                    message: String(cString: strerror(errorCode))
+                )
+            }
+
+            await waitForProcessToExit(pid, timeout: 2)
+        }
+
+        guard !isProcessRunning(pid) else {
+            throw LaunchError.portListenerDidNotExit(port: port, pid: pid)
+        }
+
+        clearTrackedProcessIDIfMatches(pid)
+        writeStartupLog("terminated pid \(pid) that was listening on port \(port)")
+    }
+
     private func isServerReachable() async -> Bool {
         guard let url = URL(string: "http://127.0.0.1:\(port)\(BackendConnectionConfig.healthPath)") else {
             return false
@@ -249,16 +422,22 @@ final class MacBundledTincanServerController {
         guard logHandle == nil else { return }
 
         do {
-            let preparedLogFile = try prepareLogFile()
-            logHandle = preparedLogFile.handle
-            if preparedLogFile.wasTruncated {
-                writeStartupLog(
-                    "truncated tincan-server log before launch because it was \(preparedLogFile.existingSize) bytes"
-                )
-            }
+            logHandle = try BundledServerLogFilePolicy.openLogFileForAppend(at: AppPaths.tincanServerLogURL)
             writeStartupLog("mac launcher initialized; log file at \(AppPaths.tincanServerLogURL.path)")
         } catch {
             NSLog("Failed to prepare tincan-server log file: %@", error.localizedDescription)
+        }
+    }
+
+    private func applyStartupLogCleanupIfNeeded() throws {
+        try? logHandle?.close()
+
+        let preparedLogFile = try prepareLogFile()
+        logHandle = preparedLogFile.handle
+        if preparedLogFile.wasTruncated {
+            writeStartupLog(
+                "truncated tincan-server log before launch because it was \(preparedLogFile.existingSize) bytes"
+            )
         }
     }
 
@@ -334,6 +513,9 @@ extension MacBundledTincanServerController {
         case missingBundledRuntime([String])
         case serverDidNotBecomeHealthy(Int)
         case logFileUnavailable(String)
+        case failedToTerminatePortListener(port: Int, pid: pid_t, signal: Int32, message: String)
+        case portListenerDidNotExit(port: Int, pid: pid_t)
+        case portStillOccupied(Int, [pid_t])
 
         var errorDescription: String? {
             switch self {
@@ -343,6 +525,12 @@ extension MacBundledTincanServerController {
                 return "tincan-server did not become healthy on port \(port)"
             case .logFileUnavailable(let path):
                 return "tincan-server log file could not be opened at \(path)"
+            case .failedToTerminatePortListener(let port, let pid, let signal, let message):
+                return "Failed to terminate pid \(pid) that is listening on port \(port) with signal \(signal): \(message)"
+            case .portListenerDidNotExit(let port, let pid):
+                return "pid \(pid) kept listening on port \(port) after termination attempts"
+            case .portStillOccupied(let port, let pids):
+                return "Port \(port) is still occupied after reclaim attempt by pid(s): \(pids.map(String.init).joined(separator: ", "))"
             }
         }
     }

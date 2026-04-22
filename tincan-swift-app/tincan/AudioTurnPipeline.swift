@@ -16,6 +16,7 @@ final class AudioTurnPipeline {
     private let tapAudioConverter = AudioConverter()
     private let sink = TurnEventSink()
     private let turnDetector: VadTurnDetector
+    private let captureState = AudioTurnPipelineCaptureState()
 
     private var audioStreamContinuation: AsyncStream<[Float]>.Continuation?
     private var processingTask: Task<Void, Never>?
@@ -43,6 +44,7 @@ final class AudioTurnPipeline {
 
         try await turnDetector.prepare()
         audioEngine = AVAudioEngine()
+        captureState.setEnabled(true)
         tapInputDeviceName = AVCaptureDevice.default(for: .audio)?.localizedName ?? "Unknown input device"
         tapCallbackCount = 0
         tapDebugLogCount = 0
@@ -105,9 +107,16 @@ final class AudioTurnPipeline {
         processingTask = nil
         isRunning = false
         audioEngine = AVAudioEngine()
+        captureState.setEnabled(true)
         await turnDetector.reset()
         await sink.resetInputLevel()
         await sink.emitLog("Microphone capture stopped")
+    }
+
+    func setCaptureEnabled(_ enabled: Bool) async {
+        captureState.setEnabled(enabled)
+        await turnDetector.reset()
+        await sink.resetInputLevel()
     }
 
     private static func normalizedInputLevel(from samples: [Float]) -> Float {
@@ -152,6 +161,10 @@ final class AudioTurnPipeline {
                     "Received microphone tap buffer #\(self.tapCallbackCount); frameLength=\(buffer.frameLength), format=\(AudioTapSamples.describe(bufferFormat: buffer.format)), sizes=\(bufferSizes)"
                 )
             }
+        }
+
+        guard captureState.isEnabled else {
+            return
         }
 
         let rawSamples = AudioTapSamples.extractMonoFloatSamples(from: buffer)
@@ -223,6 +236,23 @@ final class AudioTurnPipeline {
             from: buffer.format.sampleRate,
             to: Double(VadManager.sampleRate)
         )
+    }
+}
+
+private final class AudioTurnPipelineCaptureState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var enabled = true
+
+    var isEnabled: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return enabled
+    }
+
+    func setEnabled(_ enabled: Bool) {
+        lock.lock()
+        self.enabled = enabled
+        lock.unlock()
     }
 }
 

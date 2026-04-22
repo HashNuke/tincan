@@ -150,50 +150,48 @@ private struct TincanAppSurface: View {
 
     var body: some View {
         TincanCanvas {
-            Group {
-                if let selectedConversation {
-                    TincanTranscriptScreen(
-                        conversation: selectedConversation,
-                        messages: workspace.messages(for: selectedConversation.id),
-                        callState: callState,
-                        callActions: callActions,
-                        onBack: {
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                workspace.closeConversation()
-                            }
+            if let selectedConversation {
+                TincanTranscriptScreen(
+                    conversation: selectedConversation,
+                    messages: workspace.messages(for: selectedConversation.id),
+                    callState: callState,
+                    callActions: callActions,
+                    onBack: {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            workspace.closeConversation()
                         }
-                    )
-                    .task(id: selectedConversation.id) {
-                        await workspace.refreshConversation(conversationID: selectedConversation.id)
                     }
-                } else {
-                    TincanHomeScreen(
-                        conversations: workspace.conversations,
-                        highlightedLiveUpdate: workspace.highlightedLiveUpdate,
-                        callState: callState,
-                        liveConnectionStatus: workspace.liveConnectionStatus,
-                        healthStatus: serverSettings.healthStatus,
-                        connectionLabel: serverSettings.shareableConnectionLabel,
-                        onOpenSettings: {
-                            isSettingsPresented = true
-                        },
-                        onOpenTranscript: { conversation in
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                workspace.openConversation(conversation.id)
-                            }
-                        },
-                        onRefresh: {
-                            Task {
-                                await workspace.refreshAll()
-                            }
-                        },
-                        callActions: callActions
-                    )
+                )
+                .task(id: selectedConversation.id) {
+                    await workspace.refreshConversation(conversationID: selectedConversation.id)
                 }
+            } else {
+                TincanHomeScreen(
+                    conversations: workspace.conversations,
+                    highlightedLiveUpdate: workspace.highlightedLiveUpdate,
+                    callState: callState,
+                    liveConnectionStatus: workspace.liveConnectionStatus,
+                    healthStatus: serverSettings.healthStatus,
+                    connectionLabel: serverSettings.shareableConnectionLabel,
+                    onOpenSettings: {
+                        isSettingsPresented = true
+                    },
+                    onOpenTranscript: { conversation in
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            workspace.openConversation(conversation.id)
+                        }
+                    },
+                    onRefresh: {
+                        Task {
+                            await workspace.refreshAll()
+                        }
+                    },
+                    callActions: callActions
+                )
+                .frame(maxWidth: 980)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
             }
-            .frame(maxWidth: 980)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
         }
         .sheet(isPresented: $isSettingsPresented) {
             TincanSettingsScreen(
@@ -655,17 +653,7 @@ private struct TincanMacCallMeter: View {
             TincanWaveStrip(levels: callState.inputLevelHistory, accent: accent)
                 .padding(.vertical, 0)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
         .frame(maxWidth: .infinity)
-        .background(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(TincanPalette.panel.opacity(0.92))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .stroke(accent.opacity(0.18), lineWidth: 1)
-                )
-        )
     }
 }
 
@@ -1065,14 +1053,8 @@ private struct TincanTranscriptScreen: View {
                 }
             }
         }
-        .background(
-            RoundedRectangle(cornerRadius: 28, style: .continuous)
-                .fill(TincanPalette.shell.opacity(0.78))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 28, style: .continuous)
-                        .stroke(TincanPalette.shellBorder, lineWidth: 1)
-                )
-        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(TincanPalette.shell.opacity(0.78))
     }
 
     private func scrollToLatest(proxy: ScrollViewProxy) {
