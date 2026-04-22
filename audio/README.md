@@ -5,13 +5,15 @@ This directory contains two kinds of audio assets:
 1. Downloaded/source audio files that we keep directly in `audio/`
 2. Procedural sound programs written in ChucK (`.ck`) that generate rendered audio into `audio/output/`
 
-The goal is to keep hand-picked/downloaded assets separate from generated renders while still keeping all audio work in one place.
+Committed app-bundled WAV files live in `../tincan-swift-app/tincan/AudioAssets/`.
+The goal is to keep sound design sources and render scripts here while keeping runtime assets in the app target.
 
 ## Layout
 
 - `*.ck`: ChucK source programs for generated sounds
 - `output/`: rendered `.wav` files generated from the ChucK programs
 - standalone `.wav` files in `audio/`: downloaded/source assets that we keep intentionally
+- `../tincan-swift-app/tincan/AudioAssets/`: committed WAVs that are bundled directly by the app target
 
 ## Usage
 
@@ -29,9 +31,10 @@ Render every ChucK program to `audio/output/`:
 
 The generated sketches are generally designed to loop cleanly by leaving enough decay and silence near the file boundary so repeated playback does not cut off a tail abruptly.
 
-## Downloaded Assets
+## App-Bundled Assets
 
-- `phone-ring-out-call-end-tone.wav`
+- `../tincan-swift-app/tincan/AudioAssets/phone-ring-out-call-end-tone.wav`
+- `../tincan-swift-app/tincan/AudioAssets/call_disconnect.wav`
 
 ## Generated Programs
 

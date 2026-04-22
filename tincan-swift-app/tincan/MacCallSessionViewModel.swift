@@ -123,7 +123,7 @@ final class MacCallSessionViewModel: ObservableObject {
                 callStateDescription = "Connected"
                 isCallActive = true
                 callStartedAt = Date()
-                tonePlayer.stopOutgoingRing()
+                await tonePlayer.playConnectToneWhenOutgoingRingMinimumElapsed()
                 appendLog("Connected")
             } catch {
                 tonePlayer.stopOutgoingRing()

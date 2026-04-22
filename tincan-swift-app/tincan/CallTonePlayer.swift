@@ -4,9 +4,12 @@ import Foundation
 @MainActor
 final class CallTonePlayer: NSObject, AVAudioPlayerDelegate {
     static let shared = CallTonePlayer()
+    private static let minimumOutgoingRingDuration: TimeInterval = 1.5
 
     private var activePlayers: [AVAudioPlayer] = []
     private var outgoingRingPlayer: AVAudioPlayer?
+    private var outgoingRingStartedAt: Date?
+    private var outgoingRingToken = UUID()
 
     var isPlayingAudio: Bool {
         outgoingRingPlayer?.isPlaying == true || !activePlayers.isEmpty
@@ -54,15 +57,33 @@ final class CallTonePlayer: NSObject, AVAudioPlayerDelegate {
             player.numberOfLoops = -1
             player.prepareToPlay()
             outgoingRingPlayer = player
+            outgoingRingStartedAt = Date()
+            outgoingRingToken = UUID()
             player.play()
         } catch {
             assertionFailure("Failed to play outgoing ring audio asset: \(error.localizedDescription)")
         }
     }
 
+    func playConnectToneWhenOutgoingRingMinimumElapsed() async {
+        let ringToken = outgoingRingToken
+        if let outgoingRingStartedAt {
+            let elapsed = Date().timeIntervalSince(outgoingRingStartedAt)
+            let remaining = Self.minimumOutgoingRingDuration - elapsed
+            if remaining > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
+            }
+        }
+
+        guard outgoingRingToken == ringToken, outgoingRingPlayer?.isPlaying == true else { return }
+        playConnectTone()
+    }
+
     func stopOutgoingRing() {
         outgoingRingPlayer?.stop()
         outgoingRingPlayer = nil
+        outgoingRingStartedAt = nil
+        outgoingRingToken = UUID()
     }
 
     func playAudioData(_ audioData: Data) {

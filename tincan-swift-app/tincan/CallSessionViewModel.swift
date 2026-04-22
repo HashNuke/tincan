@@ -169,7 +169,7 @@ extension CallSessionViewModel: CallKitControllerDelegate {
                 callStateDescription = "Listening"
                 isCallActive = true
                 callStartedAt = Date()
-                tonePlayer.playConnectTone()
+                await tonePlayer.playConnectToneWhenOutgoingRingMinimumElapsed()
             } catch {
                 tonePlayer.stopOutgoingRing()
                 callStateDescription = "Audio start failed"
