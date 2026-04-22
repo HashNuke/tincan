@@ -125,14 +125,16 @@ struct TincanToolbarButton: View {
 struct TincanIconButton: View {
     let systemImage: String
     let tone: Color
+    var iconSize: CGFloat = 13
+    var diameter: CGFloat = 40
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .font(.system(size: 13, weight: .bold))
+                .font(.system(size: iconSize, weight: .bold))
                 .foregroundStyle(TincanPalette.textPrimary)
-                .frame(width: 40, height: 40)
+                .frame(width: diameter, height: diameter)
                 .background(
                     Circle()
                         .fill(tone)

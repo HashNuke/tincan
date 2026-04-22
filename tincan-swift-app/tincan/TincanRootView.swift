@@ -190,6 +190,24 @@ private struct TincanAppSurface: View {
                 .padding(.vertical, 12)
             }
         }
+#if os(macOS)
+        .overlay(alignment: .topTrailing) {
+            if selectedConversation == nil {
+                TincanIconButton(
+                    systemImage: "gearshape.fill",
+                    tone: TincanPalette.panelRaised,
+                    iconSize: 11,
+                    diameter: 32,
+                    action: {
+                        isSettingsPresented = true
+                    }
+                )
+                .padding(.top, 8)
+                .padding(.trailing, 18)
+                .ignoresSafeArea(.container, edges: .top)
+            }
+        }
+#endif
         .sheet(isPresented: $isSettingsPresented) {
             TincanSettingsScreen(
                 workspace: workspace,
@@ -242,13 +260,13 @@ private struct TincanHomeScreen: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
+#if os(iOS)
             TincanHomeHeader(
                 callState: callState,
                 callActions: callActions,
                 onOpenSettings: onOpenSettings
             )
 
-#if os(iOS)
             if callState.isCallActive {
                 TincanCallControlPanel(
                     callState: callState,
@@ -342,14 +360,8 @@ private struct TincanHomeHeader: View {
 
     var body: some View {
 #if os(macOS)
-        HStack(alignment: .center, spacing: 16) {
-            brandMark
-
-            Spacer()
-
-            TincanIconButton(systemImage: "gearshape.fill", tone: TincanPalette.panelRaised, action: onOpenSettings)
-        }
-        .frame(maxWidth: .infinity)
+        brandMark
+            .frame(maxWidth: .infinity, alignment: .leading)
 #else
         HStack(alignment: .center, spacing: 16) {
             brandMark
@@ -393,6 +405,7 @@ private struct TincanHomeHeader: View {
 private struct TincanMacCallTranscriptCard: View {
     let callState: TincanCallPresentationState
     let callActions: TincanCallActions
+    @State private var visibleTranscript = ""
 
     private var statusTone: Color {
         callState.isCallActive ? TincanTone.mint.accent : TincanTone.blue.accent
@@ -406,63 +419,80 @@ private struct TincanMacCallTranscriptCard: View {
         callState.isTransitioning && !callState.isCallActive
     }
 
-    private var transcriptText: String {
-        let trimmedTranscript = callState.lastLocalTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmedTranscript.isEmpty ? "Waiting for a local wake-word transcript." : trimmedTranscript
+    private var normalizedLocalTranscript: String {
+        callState.lastLocalTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private var hasTranscript: Bool {
-        !callState.lastLocalTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    private var transcriptText: String {
+        if visibleTranscript.isEmpty {
+            return #"Say "Atlas, get me top 3 headlines from Hacker News""#
+        }
+
+        return #""\#(visibleTranscript)""#
+    }
+
+    private var isShowingPlaceholder: Bool {
+        visibleTranscript.isEmpty
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 0) {
-            leftColumn
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.trailing, 18)
+        HStack(alignment: .center, spacing: 28) {
+            HStack(alignment: .center, spacing: 24) {
+                logoColumn
 
-            Rectangle()
-                .fill(TincanPalette.divider)
-                .frame(width: 1)
-                .padding(.vertical, 4)
-
-            VStack(alignment: .leading, spacing: 10) {
-                Text("recent transcript")
-                    .font(.system(size: 12, weight: .bold, design: .monospaced))
-                    .foregroundStyle(TincanPalette.textMuted)
-
-                Text(transcriptText)
-                    .font(.system(size: 14, weight: .medium, design: .rounded))
-                    .foregroundStyle(hasTranscript ? TincanPalette.textPrimary : TincanPalette.textSecondary)
+                leftColumn
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .lineLimit(4)
-                    .multilineTextAlignment(.leading)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.leading, 18)
+
+            Text(transcriptText)
+                .font(.system(size: 14, weight: .regular, design: .default))
+                .italic()
+                .foregroundStyle(isShowingPlaceholder ? TincanPalette.textMuted : TincanPalette.textPrimary)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .lineLimit(1)
+                .truncationMode(.head)
+                .multilineTextAlignment(.trailing)
         }
-        .padding(18)
-        .background(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .fill(TincanPalette.panelMuted.opacity(0.95))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 24, style: .continuous)
-                        .stroke(statusTone.opacity(0.22), lineWidth: 1)
-                )
-        )
         .frame(maxWidth: .infinity, alignment: .leading)
-        .fixedSize(horizontal: false, vertical: true)
+        .onAppear {
+            showTranscriptIfNeeded(normalizedLocalTranscript)
+        }
+        .onChange(of: normalizedLocalTranscript) { _, newValue in
+            showTranscriptIfNeeded(newValue)
+        }
+        .task(id: visibleTranscript) {
+            guard !visibleTranscript.isEmpty else { return }
+
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            guard !Task.isCancelled else { return }
+
+            visibleTranscript = ""
+        }
+    }
+
+    private func showTranscriptIfNeeded(_ transcript: String) {
+        guard !transcript.isEmpty else { return }
+        visibleTranscript = transcript
+    }
+
+    private var logoColumn: some View {
+        HStack(spacing: 0) {
+            Text("tin")
+                .foregroundStyle(TincanPalette.textPrimary)
+            Text("can")
+                .foregroundStyle(TincanTone.mint.accent)
+        }
+        .font(.system(size: 26, weight: .heavy, design: .rounded))
+        .lineLimit(1)
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     @ViewBuilder
     private var leftColumn: some View {
         if isIdle {
-            HStack {
-                Spacer(minLength: 0)
-                TincanMacStartCallButton(action: callActions.startCall)
-                Spacer(minLength: 0)
-            }
-            .frame(maxWidth: .infinity, minHeight: 72)
+            TincanMacStartCallButton(action: callActions.startCall)
+                .frame(maxWidth: .infinity, alignment: .leading)
         } else {
             HStack(spacing: 12) {
                 if isStartingOrCanceling {
@@ -489,7 +519,7 @@ private struct TincanMacCallTranscriptCard: View {
                     action: callActions.endCall
                 )
             }
-            .frame(maxWidth: .infinity, minHeight: 72)
+            .frame(maxWidth: .infinity)
         }
     }
 }
