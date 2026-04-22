@@ -183,9 +183,14 @@ private struct TincanAppSurface: View {
                     },
                     callActions: callActions
                 )
+#if os(iOS)
+                .frame(maxWidth: 980, maxHeight: .infinity, alignment: .top)
+                .padding(.horizontal, 16)
+#else
                 .frame(maxWidth: 980)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
+#endif
             }
         }
 #if os(macOS)
@@ -256,107 +261,153 @@ private struct TincanHomeScreen: View {
 #endif
     }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-#if os(iOS)
-            TincanHomeHeader(
-                onOpenSettings: onOpenSettings
+    @ViewBuilder
+    private var homeFeed: some View {
+        if let highlightedLiveUpdate {
+            TincanHighlightedUpdateCard(
+                update: highlightedLiveUpdate,
+                onOpenTranscript: {
+                    guard let conversationID = highlightedLiveUpdate.conversationID,
+                          let conversation = conversations.first(where: { $0.id == conversationID }) else {
+                        return
+                    }
+                    onOpenTranscript(conversation)
+                }
             )
+        }
 
-            TincanCallControlPanel(
-                callState: callState,
-                callActions: callActions
+        if let featuredConversation {
+            TincanFeaturedConversationCard(
+                conversation: featuredConversation,
+                onOpenTranscript: {
+                    onOpenTranscript(featuredConversation)
+                }
             )
+        }
+
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("conversations")
+                    .font(.system(size: 17, weight: .bold, design: .rounded))
+                    .foregroundStyle(TincanPalette.textPrimary)
+
+                Spacer()
+
+#if os(macOS)
+                Button {
+                    Task {
+                        await onRefresh()
+                    }
+                } label: {
+                    Text("refresh")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundStyle(TincanPalette.textSecondary)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(
+                            Capsule(style: .continuous)
+                                .fill(TincanPalette.panel)
+                        )
+                }
+                .buttonStyle(.plain)
+#endif
+            }
+
+            if conversations.isEmpty {
+                TincanEmptyConversationsCard(isCallActive: callState.isCallActive)
+            } else {
+                ForEach(remainingConversations) { conversation in
+                    TincanConversationRow(
+                        conversation: conversation,
+                        onOpenTranscript: {
+                            onOpenTranscript(conversation)
+                        }
+                    )
+                }
+            }
+        }
+
+        if shouldShowStandaloneTranscriptCard {
+            TincanLastTranscriptCard(text: callState.lastServerTranscript)
+        }
+    }
+
+    var body: some View {
+#if os(iOS)
+        ScrollView(showsIndicators: false) {
+            LazyVStack(alignment: .leading, spacing: 18, pinnedViews: [.sectionHeaders]) {
+                TincanHomeHeader(
+                    onOpenSettings: onOpenSettings
+                )
+                .padding(.top, 8)
+
+                Section {
+                    VStack(alignment: .leading, spacing: 18) {
+                        homeFeed
+                    }
+                } header: {
+                    TincanPinnedCallControlsHeader(
+                        callState: callState,
+                        callActions: callActions
+                    )
+                }
+            }
+            .padding(.bottom, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .refreshable {
+            await onRefresh()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
 #else
+        VStack(alignment: .leading, spacing: 18) {
             TincanMacCallTranscriptCard(
                 callState: callState,
                 callActions: callActions
             )
-#endif
 
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 18) {
-                    if let highlightedLiveUpdate {
-                        TincanHighlightedUpdateCard(
-                            update: highlightedLiveUpdate,
-                            onOpenTranscript: {
-                                guard let conversationID = highlightedLiveUpdate.conversationID,
-                                      let conversation = conversations.first(where: { $0.id == conversationID }) else {
-                                    return
-                                }
-                                onOpenTranscript(conversation)
-                            }
-                        )
-                    }
-
-                    if let featuredConversation {
-                        TincanFeaturedConversationCard(
-                            conversation: featuredConversation,
-                            onOpenTranscript: {
-                                onOpenTranscript(featuredConversation)
-                            }
-                        )
-                    }
-
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack {
-                            Text("conversations")
-                                .font(.system(size: 17, weight: .bold, design: .rounded))
-                                .foregroundStyle(TincanPalette.textPrimary)
-
-                            Spacer()
-
-#if os(macOS)
-                            Button {
-                                Task {
-                                    await onRefresh()
-                                }
-                            } label: {
-                                Text("refresh")
-                                    .font(.system(size: 10, weight: .bold, design: .monospaced))
-                                    .foregroundStyle(TincanPalette.textSecondary)
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 6)
-                                    .background(
-                                        Capsule(style: .continuous)
-                                            .fill(TincanPalette.panel)
-                                    )
-                            }
-                            .buttonStyle(.plain)
-#endif
-                        }
-
-                        if conversations.isEmpty {
-                            TincanEmptyConversationsCard(isCallActive: callState.isCallActive)
-                        } else {
-                            ForEach(remainingConversations) { conversation in
-                                TincanConversationRow(
-                                    conversation: conversation,
-                                    onOpenTranscript: {
-                                        onOpenTranscript(conversation)
-                                    }
-                                )
-                            }
-                        }
-                    }
-
-                    if shouldShowStandaloneTranscriptCard {
-                        TincanLastTranscriptCard(text: callState.lastServerTranscript)
-                    }
+                    homeFeed
                 }
                 .padding(.bottom, 24)
             }
-#if os(iOS)
-            .refreshable {
-                await onRefresh()
-            }
-#endif
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
         .padding(.top, 8)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+#endif
     }
 }
+
+#if os(iOS)
+private struct TincanPinnedCallControlsHeader: View {
+    let callState: TincanCallPresentationState
+    let callActions: TincanCallActions
+
+    var body: some View {
+        VStack(spacing: 0) {
+            TincanCallControlPanel(
+                callState: callState,
+                callActions: callActions
+            )
+            .padding(.top, 4)
+            .padding(.bottom, 12)
+        }
+        .background(
+            LinearGradient(
+                colors: [
+                    TincanPalette.canvasTop.opacity(0.98),
+                    TincanPalette.canvasTop.opacity(0.92),
+                    TincanPalette.canvasTop.opacity(0.0)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        )
+    }
+}
+#endif
 
 private struct TincanHomeHeader: View {
     let onOpenSettings: () -> Void
