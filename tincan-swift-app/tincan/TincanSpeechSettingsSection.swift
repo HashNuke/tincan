@@ -1,182 +1,251 @@
 #if os(macOS)
 import SwiftUI
 
-private struct SpeechModelPreset: Identifiable {
-    let id: String
-    let title: String
-    let value: String
-}
-
 struct TincanSpeechSettingsSection: View {
     @ObservedObject var speechSettings: TincanSpeechSettingsStore
-
-    private let sttPresets = [
-        SpeechModelPreset(
-            id: "macos-parakeet",
-            title: "Parakeet (macOS)",
-            value: TincanSpeechSettingsStore.defaultSTTModel
-        ),
-        SpeechModelPreset(
-            id: "grok-stt-v1",
-            title: "Grok STT v1",
-            value: TincanSpeechSettingsStore.grokSTTModel
-        ),
-    ]
-
-    private let ttsPresets = [
-        SpeechModelPreset(
-            id: "macos-kitten",
-            title: "Kitten (macOS)",
-            value: TincanSpeechSettingsStore.defaultTTSModel
-        ),
-        SpeechModelPreset(
-            id: "grok-tts-v1",
-            title: "Grok TTS v1",
-            value: TincanSpeechSettingsStore.grokTTSModel
-        ),
-    ]
+    @State private var isGrokExpanded = true
 
     var body: some View {
-        TincanSettingsSectionCard(
-            title: "Speech services",
-            subtitle: "macOS-only. Keep `stt_model` and `tts_model` explicit, and store `GROK_API_KEY` locally in Keychain."
-        ) {
-            VStack(alignment: .leading, spacing: 16) {
-                if speechSettings.isRemoteServerSelected {
-                    TincanSpeechSettingsNote(
-                        text: "You are connected to a remote server. The API key you save here stays on this Mac and only helps when the server runs locally on this Mac."
+        VStack(alignment: .leading, spacing: 18) {
+            if speechSettings.isRemoteServerSelected {
+                TincanSpeechSettingsNote(
+                    text: "These settings are saved on this Mac. Saving them will restart the bundled server only when you are using Run on this Mac."
+                )
+            }
+
+            TincanSettingsSectionCard(
+                title: "Speech services",
+                subtitle: "macOS-only. Pick the active STT and TTS providers for the bundled Mac server."
+            ) {
+                VStack(alignment: .leading, spacing: 16) {
+                    if speechSettings.isLoading {
+                        Text("Loading current speech config...")
+                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                            .foregroundStyle(TincanPalette.textSecondary)
+                    }
+
+                    TincanSpeechModelDropdown(
+                        label: TincanSpeechModelTarget.speechToText.label,
+                        selectedTitle: speechSettings.selectedModelTitle(for: .speechToText),
+                        options: speechSettings.modelOptions(for: .speechToText)
+                    ) { selectedValue in
+                        speechSettings.setModel(selectedValue, for: .speechToText)
+                    }
+
+                    TincanSpeechModelDropdown(
+                        label: TincanSpeechModelTarget.textToSpeech.label,
+                        selectedTitle: speechSettings.selectedModelTitle(for: .textToSpeech),
+                        options: speechSettings.modelOptions(for: .textToSpeech)
+                    ) { selectedValue in
+                        speechSettings.setModel(selectedValue, for: .textToSpeech)
+                    }
+
+                    Text("Dropdowns include the macOS default plus models from services that are currently enabled.")
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundStyle(TincanPalette.textMuted)
+                }
+            }
+
+            TincanSettingsSectionCard(
+                title: "Services",
+                subtitle: "Toggle providers, manage non-secret endpoints, and store credentials locally in Keychain."
+            ) {
+                VStack(alignment: .leading, spacing: 16) {
+                    TincanServiceDisclosureHeader(
+                        title: TincanSpeechServiceID.grok.title,
+                        isExpanded: isGrokExpanded,
+                        isEnabled: speechSettings.grokEnabled,
+                        onToggleExpansion: { isGrokExpanded.toggle() },
+                        onToggleEnabled: { isEnabled in
+                            speechSettings.setServiceEnabled(isEnabled, serviceID: .grok)
+                        }
                     )
-                }
 
-                if speechSettings.isLoading {
-                    Text("Loading current speech config...")
-                        .font(.system(size: 11, weight: .medium, design: .monospaced))
-                        .foregroundStyle(TincanPalette.textSecondary)
-                }
+                    if isGrokExpanded {
+                        VStack(alignment: .leading, spacing: 12) {
+                            TincanSpeechLabeledField(
+                                label: "Base URL",
+                                placeholder: speechSettings.grokBaseURLPlaceholder,
+                                text: $speechSettings.grokBaseURL
+                            )
 
-                TincanSpeechModelEditor(
-                    label: "stt_model",
-                    note: "Use `macos/<folder-name>` for local models, or `provider/model` for remote providers.",
-                    text: $speechSettings.sttModel,
-                    presets: sttPresets
-                )
+                            Text("Leave Base URL blank to use the default Grok endpoint.")
+                                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                                .foregroundStyle(TincanPalette.textMuted)
 
-                TincanSpeechModelEditor(
-                    label: "tts_model",
-                    note: "Use `macos/<folder-name>` for local models, or `provider/model` for remote providers.",
-                    text: $speechSettings.ttsModel,
-                    presets: ttsPresets
-                )
+                            HStack(spacing: 8) {
+                                TincanCapsuleTag(
+                                    text: speechSettings.hasStoredGrokAPIKey ? "key stored" : "no key",
+                                    tone: speechSettings.hasStoredGrokAPIKey ? TincanTone.mint.accent : TincanTone.coral.accent
+                                )
 
-                VStack(alignment: .leading, spacing: 10) {
-                    TincanSpeechLabeledField(label: "services.grok.base_url", text: $speechSettings.grokBaseURL)
+                                if speechSettings.usesGrok {
+                                    TincanCapsuleTag(text: "grok active", tone: TincanTone.blue.accent, filled: false)
+                                }
+                            }
 
-                    Text("Leave the Grok base URL at `\(TincanSpeechSettingsStore.defaultGrokBaseURL)` unless you need a proxy or alternate gateway.")
-                        .font(.system(size: 10, weight: .medium, design: .monospaced))
-                        .foregroundStyle(TincanPalette.textMuted)
+                            TincanLabeledSecureField(
+                                label: "API key",
+                                placeholder: speechSettings.grokAPIKeyPlaceholder,
+                                text: $speechSettings.grokAPIKey
+                            )
 
-                    HStack(spacing: 8) {
-                        TincanCapsuleTag(
-                            text: speechSettings.hasStoredGrokAPIKey ? "key stored" : "no key",
-                            tone: speechSettings.hasStoredGrokAPIKey ? TincanTone.mint.accent : TincanTone.coral.accent
+                            HStack(spacing: 10) {
+                                TincanToolbarButton(
+                                    label: speechSettings.isSavingAPIKey ? "saving..." : "save key",
+                                    systemImage: "key.fill",
+                                    tone: TincanTone.mint.accent,
+                                    foreground: TincanPalette.textOnAccent
+                                ) {
+                                    speechSettings.clearStatus()
+                                    speechSettings.saveGrokAPIKey()
+                                }
+                                .disabled(speechSettings.isSavingAPIKey || !speechSettings.canSaveGrokAPIKey)
+
+                                if speechSettings.canClearStoredGrokAPIKey {
+                                    TincanToolbarButton(
+                                        label: speechSettings.isSavingAPIKey ? "clearing..." : "clear key",
+                                        systemImage: "trash",
+                                        tone: TincanTone.coral.accent,
+                                        foreground: TincanPalette.textOnAccent
+                                    ) {
+                                        speechSettings.clearStatus()
+                                        speechSettings.clearGrokAPIKey()
+                                    }
+                                    .disabled(speechSettings.isSavingAPIKey)
+                                }
+                            }
+                        }
+                        .padding(14)
+                        .background(
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .fill(TincanPalette.panelRaised.opacity(0.72))
                         )
+                    }
 
-                        if speechSettings.usesGrok {
-                            TincanCapsuleTag(text: "grok active", tone: TincanTone.blue.accent, filled: false)
+                    HStack(spacing: 10) {
+                        TincanToolbarButton(
+                            label: speechSettings.isSavingConfig ? "saving..." : "save config",
+                            systemImage: "square.and.arrow.down",
+                            tone: TincanTone.blue.accent,
+                            foreground: TincanPalette.textOnAccent
+                        ) {
+                            speechSettings.clearStatus()
+                            Task {
+                                await speechSettings.saveConfig()
+                            }
                         }
-                    }
+                        .disabled(speechSettings.isSavingConfig)
 
-                    TincanLabeledSecureField(label: "GROK_API_KEY", text: $speechSettings.grokAPIKey)
-                }
-
-                HStack(spacing: 10) {
-                    TincanToolbarButton(
-                        label: speechSettings.isSavingConfig ? "saving..." : "save config",
-                        systemImage: "square.and.arrow.down",
-                        tone: TincanTone.blue.accent,
-                        foreground: TincanPalette.textOnAccent
-                    ) {
-                        speechSettings.clearStatus()
-                        Task {
-                            await speechSettings.saveConfig()
+                        TincanToolbarButton(
+                            label: "reload",
+                            systemImage: "arrow.clockwise",
+                            tone: TincanPalette.panelRaised
+                        ) {
+                            speechSettings.clearStatus()
+                            Task {
+                                await speechSettings.load()
+                            }
                         }
+                        .disabled(speechSettings.isLoading)
                     }
-                    .disabled(speechSettings.isSavingConfig)
 
-                    TincanToolbarButton(
-                        label: speechSettings.isSavingAPIKey ? "saving..." : "save key",
-                        systemImage: "key.fill",
-                        tone: TincanTone.mint.accent,
-                        foreground: TincanPalette.textOnAccent
-                    ) {
-                        speechSettings.clearStatus()
-                        speechSettings.saveGrokAPIKey()
+                    if let statusMessage = speechSettings.statusMessage, !statusMessage.isEmpty {
+                        TincanSpeechSettingsBanner(text: statusMessage, tone: TincanTone.mint)
                     }
-                    .disabled(speechSettings.isSavingAPIKey)
 
-                    TincanToolbarButton(
-                        label: "reload",
-                        systemImage: "arrow.clockwise",
-                        tone: TincanPalette.panelRaised
-                    ) {
-                        speechSettings.clearStatus()
-                        Task {
-                            await speechSettings.load()
-                        }
+                    if let errorMessage = speechSettings.errorMessage, !errorMessage.isEmpty {
+                        TincanSpeechSettingsBanner(text: errorMessage, tone: TincanTone.coral)
                     }
-                    .disabled(speechSettings.isLoading)
-                }
 
-                if let statusMessage = speechSettings.statusMessage, !statusMessage.isEmpty {
-                    TincanSpeechSettingsBanner(text: statusMessage, tone: TincanTone.mint)
-                }
-
-                if let errorMessage = speechSettings.errorMessage, !errorMessage.isEmpty {
-                    TincanSpeechSettingsBanner(text: errorMessage, tone: TincanTone.coral)
-                }
-
-                if let lastLoadedAt = speechSettings.lastLoadedAt {
-                    Text("Last loaded: \(lastLoadedAt.formatted(date: .omitted, time: .shortened))")
-                        .font(.system(size: 10, weight: .medium, design: .monospaced))
-                        .foregroundStyle(TincanPalette.textMuted)
+                    if let lastLoadedAt = speechSettings.lastLoadedAt {
+                        Text("Last loaded: \(lastLoadedAt.formatted(date: .omitted, time: .shortened))")
+                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .foregroundStyle(TincanPalette.textMuted)
+                    }
                 }
             }
         }
     }
 }
 
-private struct TincanSpeechModelEditor: View {
+private struct TincanSpeechModelDropdown: View {
     let label: String
-    let note: String
-    @Binding var text: String
-    let presets: [SpeechModelPreset]
+    let selectedTitle: String
+    let options: [TincanSpeechModelOption]
+    let onSelect: (String) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            TincanSpeechLabeledField(label: label, text: $text)
+        VStack(alignment: .leading, spacing: 6) {
+            Text(label)
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .foregroundStyle(TincanPalette.textMuted)
 
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(presets) { preset in
-                        TincanServerModeChip(
-                            label: preset.title,
-                            isSelected: text.trimmingCharacters(in: .whitespacesAndNewlines) == preset.value
-                        ) {
-                            text = preset.value
-                        }
+            Menu {
+                ForEach(options) { option in
+                    Button(option.title) {
+                        onSelect(option.value)
                     }
                 }
-            }
+            } label: {
+                HStack(spacing: 10) {
+                    Text(selectedTitle)
+                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .foregroundStyle(TincanPalette.textPrimary)
+                        .lineLimit(1)
 
-            Text(note)
-                .font(.system(size: 10, weight: .medium, design: .monospaced))
-                .foregroundStyle(TincanPalette.textMuted)
+                    Spacer()
+
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(TincanPalette.textMuted)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(TincanPalette.panelRaised.opacity(0.82))
+                )
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+private struct TincanServiceDisclosureHeader: View {
+    let title: String
+    let isExpanded: Bool
+    let isEnabled: Bool
+    let onToggleExpansion: () -> Void
+    let onToggleEnabled: (Bool) -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Button(action: onToggleExpansion) {
+                HStack(spacing: 8) {
+                    Text(title)
+                        .font(.system(size: 15, weight: .bold, design: .rounded))
+                        .foregroundStyle(TincanPalette.textPrimary)
+
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(TincanPalette.textMuted)
+                }
+            }
+            .buttonStyle(.plain)
+
+            Spacer()
+
+            Toggle("", isOn: Binding(get: { isEnabled }, set: { onToggleEnabled($0) }))
+                .labelsHidden()
         }
     }
 }
 
 private struct TincanSpeechLabeledField: View {
     let label: String
+    let placeholder: String
     @Binding var text: String
 
     var body: some View {
@@ -185,7 +254,7 @@ private struct TincanSpeechLabeledField: View {
                 .font(.system(size: 10, weight: .bold, design: .monospaced))
                 .foregroundStyle(TincanPalette.textMuted)
 
-            TextField("", text: $text)
+            TextField(placeholder, text: $text)
                 .textFieldStyle(.plain)
                 .foregroundStyle(TincanPalette.textPrimary)
                 .padding(.horizontal, 12)
@@ -200,6 +269,7 @@ private struct TincanSpeechLabeledField: View {
 
 private struct TincanLabeledSecureField: View {
     let label: String
+    let placeholder: String
     @Binding var text: String
 
     var body: some View {
@@ -208,7 +278,7 @@ private struct TincanLabeledSecureField: View {
                 .font(.system(size: 10, weight: .bold, design: .monospaced))
                 .foregroundStyle(TincanPalette.textMuted)
 
-            SecureField("", text: $text)
+            SecureField(placeholder, text: $text)
                 .textFieldStyle(.plain)
                 .foregroundStyle(TincanPalette.textPrimary)
                 .padding(.horizontal, 12)

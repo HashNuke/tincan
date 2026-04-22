@@ -35,6 +35,7 @@ type AppServicesConfig struct {
 }
 
 type GrokServiceConfig struct {
+	Enabled *bool                `json:"enabled,omitempty"`
 	BaseURL string               `json:"base_url,omitempty"`
 	TTS     GrokTTSServiceConfig `json:"tts,omitempty"`
 	STT     GrokSTTServiceConfig `json:"stt,omitempty"`

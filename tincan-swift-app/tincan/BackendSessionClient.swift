@@ -60,6 +60,11 @@ final class BackendSessionClient: NSObject {
         }
     }
 
+    struct NotificationPlaybackChoice {
+        let text: String
+        let audioURLPath: String?
+    }
+
     enum ServerEvent {
         case playAudio(text: String, urlPath: String)
         case notify(text: String, audioURLPath: String?, summaryText: String?, summaryAudioURLPath: String?)
@@ -179,6 +184,28 @@ final class BackendSessionClient: NSObject {
         }
 
         return trimmedText
+    }
+
+    nonisolated static func notificationPlaybackChoice(
+        text: String,
+        audioURLPath: String?,
+        summaryText: String?,
+        summaryAudioURLPath: String?,
+        isAudioPlaying: Bool
+    ) -> NotificationPlaybackChoice {
+        let trimmedSummaryText = summaryText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+        if !isAudioPlaying, !trimmedSummaryText.isEmpty {
+            return NotificationPlaybackChoice(
+                text: trimmedSummaryText,
+                audioURLPath: summaryAudioURLPath ?? audioURLPath
+            )
+        }
+
+        return NotificationPlaybackChoice(
+            text: text.trimmingCharacters(in: .whitespacesAndNewlines),
+            audioURLPath: audioURLPath
+        )
     }
 
     nonisolated static func responseBodySummary(from data: Data) -> String? {

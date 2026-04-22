@@ -227,6 +227,7 @@ func TestAppConfigStoreLoadsAndUpdatesRouterProfile(t *testing.T) {
   "tts_model": "grok/grok-tts-v1",
   "services": {
     "grok": {
+      "enabled": true,
       "base_url": "https://api.x.ai/v1"
     }
   },
@@ -253,6 +254,9 @@ func TestAppConfigStoreLoadsAndUpdatesRouterProfile(t *testing.T) {
 	}
 	if services := store.Services(); services.Grok.BaseURL != "https://api.x.ai/v1" {
 		t.Fatalf("expected grok base_url to load, got %#v", services)
+	}
+	if services := store.Services(); services.Grok.Enabled == nil || !*services.Grok.Enabled {
+		t.Fatalf("expected grok enabled flag to load, got %#v", services)
 	}
 
 	updated, err := store.UpdateRouterProfileReference("Atlas", "Atlas Updated")
@@ -357,6 +361,7 @@ func TestAppConfigStoreApplyPatchUpdatesSpeechSettings(t *testing.T) {
 		"tts_model": json.RawMessage(`"grok/grok-tts-v1"`),
 		"services": json.RawMessage(`{
 		  "grok": {
+		    "enabled": false,
 		    "base_url": "https://api.x.ai/v1",
 		    "tts": {
 		      "voice_id": "eve",
@@ -383,6 +388,49 @@ func TestAppConfigStoreApplyPatchUpdatesSpeechSettings(t *testing.T) {
 	snapshot := store.Snapshot()
 	if snapshot.Services.Grok.BaseURL != "https://api.x.ai/v1" {
 		t.Fatalf("expected grok base_url in snapshot, got %#v", snapshot.Services)
+	}
+	if snapshot.Services.Grok.Enabled == nil || *snapshot.Services.Grok.Enabled {
+		t.Fatalf("expected disabled grok flag in snapshot, got %#v", snapshot.Services)
+	}
+
+	configData, err := os.ReadFile(filepath.Join(tempDir, "config", "config.json"))
+	if err != nil {
+		t.Fatalf("read config.json: %v", err)
+	}
+	if !bytes.Contains(configData, []byte(`"enabled": false`)) {
+		t.Fatalf("expected grok enabled flag to persist, got %s", string(configData))
+	}
+}
+
+func TestAppConfigStoreApplyPatchPreservesExplicitEnabledFlagWithoutBaseURL(t *testing.T) {
+	tempDir := t.TempDir()
+
+	store, err := NewAppConfigStore(tempDir)
+	if err != nil {
+		t.Fatalf("NewAppConfigStore returned error: %v", err)
+	}
+
+	err = store.ApplyPatch(map[string]json.RawMessage{
+		"services": json.RawMessage(`{
+		  "grok": {
+		    "enabled": true
+		  }
+		}`),
+	})
+	if err != nil {
+		t.Fatalf("ApplyPatch returned error: %v", err)
+	}
+
+	if services := store.Services(); services.Grok.Enabled == nil || !*services.Grok.Enabled {
+		t.Fatalf("expected enabled grok flag to persist, got %#v", services)
+	}
+
+	configData, err := os.ReadFile(filepath.Join(tempDir, "config", "config.json"))
+	if err != nil {
+		t.Fatalf("read config.json: %v", err)
+	}
+	if !bytes.Contains(configData, []byte(`"enabled": true`)) {
+		t.Fatalf("expected grok enabled true in config, got %s", string(configData))
 	}
 }
 

@@ -328,6 +328,14 @@ final class MacBundledTincanServerController {
         }
     }
 
+    func restart() async throws {
+        prepareStartupLoggingIfNeeded()
+        stop()
+        await reclaimTrackedBundledServerIfNeeded()
+        await startIfNeeded()
+        try await waitUntilReachable(timeout: 10)
+    }
+
     private func reuseExistingHealthyBundledServerIfNeeded(executableURL: URL) async -> Bool {
         guard await isServerReachable(),
               let trackedPID = readTrackedProcessID(),

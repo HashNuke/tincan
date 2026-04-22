@@ -2,12 +2,22 @@
 import Combine
 import Foundation
 
+protocol TincanSpeechSettingsKeychainServicing {
+    func containsValue(account: String) throws -> Bool
+    func upsert(value: String, account: String) throws
+    func deleteValue(account: String) throws
+}
+
+extension MacKeychainService: TincanSpeechSettingsKeychainServicing {}
+
 @MainActor
 final class TincanSpeechSettingsStore: ObservableObject {
     struct LocalAppConfig {
         struct Services {
             struct Grok {
-                let baseURL: String
+                let enabled: Bool
+                let baseURLOverride: String
+                let rawPayload: [String: Any]
             }
 
             let grok: Grok
@@ -20,16 +30,23 @@ final class TincanSpeechSettingsStore: ObservableObject {
         let rawPayload: [String: Any]
     }
 
-    static let defaultSTTModel = "macos/parakeet-tdt-0.6b-v3-coreml"
-    static let defaultTTSModel = "macos/kitten-tts-mini-0.8"
+    static var defaultSTTModel: String {
+        TincanSpeechServiceCatalog.defaultModel(for: .speechToText)
+    }
+
+    static var defaultTTSModel: String {
+        TincanSpeechServiceCatalog.defaultModel(for: .textToSpeech)
+    }
+
     static let grokSTTModel = "grok/grok-stt-v1"
     static let grokTTSModel = "grok/grok-tts-v1"
-    static let defaultGrokBaseURL = "https://api.x.ai/v1"
+    static var defaultGrokBaseURL: String { TincanSpeechServiceCatalog.defaultGrokBaseURL }
     static let grokAPIKeyAccount = "GROK_API_KEY"
 
     @Published var sttModel = defaultSTTModel
     @Published var ttsModel = defaultTTSModel
-    @Published var grokBaseURL = defaultGrokBaseURL
+    @Published var grokEnabled = false
+    @Published var grokBaseURL = ""
     @Published var grokAPIKey = ""
     @Published private(set) var hasStoredGrokAPIKey = false
     @Published private(set) var isLoading = false
@@ -40,20 +57,84 @@ final class TincanSpeechSettingsStore: ObservableObject {
     @Published private(set) var lastLoadedAt: Date?
 
     private let serverSettings: ServerConnectionStore
-    private let keychain = MacKeychainService()
+    private let configURL: URL
+    private let keychain: any TincanSpeechSettingsKeychainServicing
+    private let fileManager: FileManager
+    private let restartLocalServer: @Sendable () async throws -> Void
     private var persistedConfigPayload: [String: Any] = [:]
     private var persistedServicesPayload: [String: Any] = [:]
+    private var persistedGrokPayload: [String: Any] = [:]
 
-    init(serverSettings: ServerConnectionStore) {
+    init(
+        serverSettings: ServerConnectionStore,
+        configURL: URL = AppPaths.generatedAppConfigURL,
+        keychain: (any TincanSpeechSettingsKeychainServicing)? = nil,
+        fileManager: FileManager = .default,
+        restartLocalServer: @escaping @Sendable () async throws -> Void = {}
+    ) {
         self.serverSettings = serverSettings
+        self.configURL = configURL
+        self.keychain = keychain ?? MacKeychainService()
+        self.fileManager = fileManager
+        self.restartLocalServer = restartLocalServer
     }
 
     var isRemoteServerSelected: Bool {
         serverSettings.connectionMode == .remote
     }
 
+    var enabledServices: Set<TincanSpeechServiceID> {
+        grokEnabled ? [.grok] : []
+    }
+
+    var grokBaseURLPlaceholder: String {
+        Self.defaultGrokBaseURL
+    }
+
+    var grokAPIKeyPlaceholder: String {
+        hasStoredGrokAPIKey ? String(repeating: "*", count: 12) : "GROK_API_KEY"
+    }
+
+    var canSaveGrokAPIKey: Bool {
+        !grokAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var canClearStoredGrokAPIKey: Bool {
+        hasStoredGrokAPIKey
+    }
+
     var usesGrok: Bool {
-        sttModel.hasPrefix("grok/") || ttsModel.hasPrefix("grok/")
+        TincanSpeechServiceCatalog.provider(for: sttModel) == .grok ||
+            TincanSpeechServiceCatalog.provider(for: ttsModel) == .grok
+    }
+
+    func modelOptions(for target: TincanSpeechModelTarget) -> [TincanSpeechModelOption] {
+        TincanSpeechServiceCatalog.options(for: target, enabledServices: enabledServices)
+    }
+
+    func selectedModelTitle(for target: TincanSpeechModelTarget) -> String {
+        let selectedModel = model(for: target)
+        return modelOptions(for: target).first(where: { $0.value == selectedModel })?.title ?? selectedModel
+    }
+
+    func setModel(_ value: String, for target: TincanSpeechModelTarget) {
+        switch target {
+        case .speechToText:
+            sttModel = value
+        case .textToSpeech:
+            ttsModel = value
+        }
+    }
+
+    func setServiceEnabled(_ isEnabled: Bool, serviceID: TincanSpeechServiceID) {
+        switch serviceID {
+        case .grok:
+            guard grokEnabled != isEnabled else { return }
+            grokEnabled = isEnabled
+            if !isEnabled {
+                normalizeModels(disabling: .grok)
+            }
+        }
     }
 
     func load() async {
@@ -74,6 +155,8 @@ final class TincanSpeechSettingsStore: ObservableObject {
     }
 
     func saveConfig() async {
+        normalizeDisabledServiceSelections()
+
         let trimmedSTTModel = sttModel.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedTTSModel = ttsModel.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmedSTTModel.isEmpty || trimmedTTSModel.isEmpty {
@@ -89,7 +172,9 @@ final class TincanSpeechSettingsStore: ObservableObject {
         payload["tts_model"] = trimmedTTSModel
 
         var servicesPayload = persistedServicesPayload
-        var grokPayload = servicesPayload["grok"] as? [String: Any] ?? [:]
+        var grokPayload = persistedGrokPayload
+        grokPayload["enabled"] = grokEnabled
+
         let trimmedGrokBaseURL = grokBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmedGrokBaseURL.isEmpty || trimmedGrokBaseURL == Self.defaultGrokBaseURL {
             grokPayload.removeValue(forKey: "base_url")
@@ -102,6 +187,7 @@ final class TincanSpeechSettingsStore: ObservableObject {
         } else {
             servicesPayload["grok"] = grokPayload
         }
+
         if servicesPayload.isEmpty {
             payload.removeValue(forKey: "services")
         } else {
@@ -112,7 +198,19 @@ final class TincanSpeechSettingsStore: ObservableObject {
             let config = try writeConfigToDisk(payload)
             apply(config)
             errorMessage = nil
-            statusMessage = "Speech config saved."
+
+            if isRemoteServerSelected {
+                statusMessage = "Speech config saved. Changes apply when the local Mac server is used."
+            } else {
+                statusMessage = "Speech config saved. Restarting bundled server..."
+                do {
+                    try await restartLocalServer()
+                    statusMessage = "Speech config saved. Bundled server restarted."
+                } catch {
+                    errorMessage = "Speech config saved, but restarting bundled server failed: \(error.localizedDescription)"
+                }
+            }
+
             lastLoadedAt = Date()
         } catch {
             errorMessage = "Saving speech config failed: \(error.localizedDescription)"
@@ -120,25 +218,43 @@ final class TincanSpeechSettingsStore: ObservableObject {
     }
 
     func saveGrokAPIKey() {
+        let trimmedAPIKey = grokAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedAPIKey.isEmpty else {
+            errorMessage = "Enter a Grok API key before saving."
+            return
+        }
+
         isSavingAPIKey = true
         defer { isSavingAPIKey = false }
 
         do {
-            let trimmedAPIKey = grokAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmedAPIKey.isEmpty {
-                try keychain.deleteValue(account: Self.grokAPIKeyAccount)
-                hasStoredGrokAPIKey = false
-                statusMessage = "Grok API key removed from Keychain."
-            } else {
-                try keychain.upsert(value: trimmedAPIKey, account: Self.grokAPIKeyAccount)
-                hasStoredGrokAPIKey = true
-                statusMessage = "Grok API key saved to Keychain."
-            }
-
+            try keychain.upsert(value: trimmedAPIKey, account: Self.grokAPIKeyAccount)
+            hasStoredGrokAPIKey = true
             grokAPIKey = ""
             errorMessage = nil
+            statusMessage = "Grok API key saved to Keychain."
         } catch {
             errorMessage = "Updating GROK_API_KEY failed: \(error.localizedDescription)"
+        }
+    }
+
+    func clearGrokAPIKey() {
+        guard hasStoredGrokAPIKey else {
+            grokAPIKey = ""
+            return
+        }
+
+        isSavingAPIKey = true
+        defer { isSavingAPIKey = false }
+
+        do {
+            try keychain.deleteValue(account: Self.grokAPIKeyAccount)
+            hasStoredGrokAPIKey = false
+            grokAPIKey = ""
+            errorMessage = nil
+            statusMessage = "Grok API key removed from Keychain."
+        } catch {
+            errorMessage = "Clearing GROK_API_KEY failed: \(error.localizedDescription)"
         }
     }
 
@@ -147,17 +263,52 @@ final class TincanSpeechSettingsStore: ObservableObject {
         errorMessage = nil
     }
 
+    private func model(for target: TincanSpeechModelTarget) -> String {
+        switch target {
+        case .speechToText:
+            return sttModel
+        case .textToSpeech:
+            return ttsModel
+        }
+    }
+
     private func apply(_ config: LocalAppConfig) {
         sttModel = config.sttModel
         ttsModel = config.ttsModel
-        grokBaseURL = config.services.grok.baseURL.isEmpty ? Self.defaultGrokBaseURL : config.services.grok.baseURL
+        grokEnabled = config.services.grok.enabled
+        grokBaseURL = config.services.grok.baseURLOverride
+
+        if !grokEnabled {
+            normalizeModels(disabling: .grok)
+        }
+
         persistedConfigPayload = config.rawPayload
         persistedServicesPayload = config.services.rawPayload
+        persistedGrokPayload = config.services.grok.rawPayload
+    }
+
+    private func normalizeDisabledServiceSelections() {
+        if !grokEnabled {
+            normalizeModels(disabling: .grok)
+        }
+    }
+
+    private func normalizeModels(disabling serviceID: TincanSpeechServiceID) {
+        sttModel = TincanSpeechServiceCatalog.normalizedModel(
+            sttModel,
+            for: .speechToText,
+            disabling: serviceID
+        )
+        ttsModel = TincanSpeechServiceCatalog.normalizedModel(
+            ttsModel,
+            for: .textToSpeech,
+            disabling: serviceID
+        )
     }
 
     private func loadConfigFromDisk() throws -> LocalAppConfig {
         try ensureConfigFileExists()
-        let data = try Data(contentsOf: AppPaths.generatedAppConfigURL)
+        let data = try Data(contentsOf: configURL)
         let payload = try parseJSONObject(from: data)
         return decodeConfig(payload)
     }
@@ -180,12 +331,20 @@ final class TincanSpeechSettingsStore: ObservableObject {
         )
         var fileData = data
         fileData.append(0x0A)
-        try fileData.write(to: AppPaths.generatedAppConfigURL, options: .atomic)
+        try fileManager.createDirectory(
+            at: configURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true,
+            attributes: nil
+        )
+        try fileData.write(to: configURL, options: .atomic)
         return decodeConfig(normalizedPayload)
     }
 
     private func ensureConfigFileExists() throws {
-        if FileManager.default.fileExists(atPath: AppPaths.generatedAppConfigURL.path) {
+        let directoryURL = configURL.deletingLastPathComponent()
+        try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true, attributes: nil)
+
+        if fileManager.fileExists(atPath: configURL.path) {
             return
         }
 
@@ -210,6 +369,7 @@ final class TincanSpeechSettingsStore: ObservableObject {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let servicesPayload = payload["services"] as? [String: Any] ?? [:]
         let grokPayload = servicesPayload["grok"] as? [String: Any] ?? [:]
+        let grokEnabled = grokPayload["enabled"] as? Bool ?? false
         let grokBaseURL = (grokPayload["base_url"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
@@ -217,7 +377,11 @@ final class TincanSpeechSettingsStore: ObservableObject {
             sttModel: (sttModel?.isEmpty == false ? sttModel! : Self.defaultSTTModel),
             ttsModel: (ttsModel?.isEmpty == false ? ttsModel! : Self.defaultTTSModel),
             services: .init(
-                grok: .init(baseURL: grokBaseURL),
+                grok: .init(
+                    enabled: grokEnabled,
+                    baseURLOverride: grokBaseURL,
+                    rawPayload: grokPayload
+                ),
                 rawPayload: servicesPayload
             ),
             rawPayload: payload

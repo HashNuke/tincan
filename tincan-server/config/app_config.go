@@ -393,7 +393,14 @@ func decodeRawServicesConfig(rawValue json.RawMessage) (AppServicesConfig, error
 }
 
 func isServicesConfigEmpty(config AppServicesConfig) bool {
-	return config == (AppServicesConfig{})
+	return isGrokServiceConfigEmpty(config.Grok)
+}
+
+func isGrokServiceConfigEmpty(config GrokServiceConfig) bool {
+	return config.Enabled == nil &&
+		strings.TrimSpace(config.BaseURL) == "" &&
+		config.TTS == (GrokTTSServiceConfig{}) &&
+		config.STT == (GrokSTTServiceConfig{})
 }
 
 func cloneRawJSONMap(source map[string]json.RawMessage) map[string]json.RawMessage {

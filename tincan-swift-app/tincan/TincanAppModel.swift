@@ -27,8 +27,14 @@ final class TincanAppModel: ObservableObject {
 
 #if os(macOS)
         macCallSession = MacCallSessionViewModel(serverSettings: serverSettings)
-        macSpeechSettings = TincanSpeechSettingsStore(serverSettings: serverSettings)
-        bundledServerController = MacBundledTincanServerController(port: BackendConnectionConfig.port)
+        let bundledServerController = MacBundledTincanServerController(port: BackendConnectionConfig.port)
+        self.bundledServerController = bundledServerController
+        macSpeechSettings = TincanSpeechSettingsStore(
+            serverSettings: serverSettings,
+            restartLocalServer: {
+                try await bundledServerController.restart()
+            }
+        )
 #endif
     }
 
