@@ -170,9 +170,6 @@ private struct TincanAppSurface: View {
                     conversations: workspace.conversations,
                     highlightedLiveUpdate: workspace.highlightedLiveUpdate,
                     callState: callState,
-                    liveConnectionStatus: workspace.liveConnectionStatus,
-                    healthStatus: serverSettings.healthStatus,
-                    connectionLabel: serverSettings.shareableConnectionLabel,
                     onOpenSettings: {
                         isSettingsPresented = true
                     },
@@ -215,9 +212,6 @@ private struct TincanHomeScreen: View {
     let conversations: [TincanConversationSummary]
     let highlightedLiveUpdate: TincanHighlightedLiveUpdate?
     let callState: TincanCallPresentationState
-    let liveConnectionStatus: TincanWorkspaceStore.LiveConnectionStatus
-    let healthStatus: ServerConnectionStore.HealthStatus
-    let connectionLabel: String
     let onOpenSettings: () -> Void
     let onOpenTranscript: (TincanConversationSummary) -> Void
     let onRefresh: () -> Void
@@ -237,10 +231,6 @@ private struct TincanHomeScreen: View {
         conversations.filter { $0.id != featuredConversation?.id }
     }
 
-    private var statusSummaryText: String {
-        "\(connectionLabel) · \(healthSummary(healthStatus)) · \(liveSummary(liveConnectionStatus))"
-    }
-
     private var shouldShowStandaloneTranscriptCard: Bool {
 #if os(macOS)
         return false
@@ -258,11 +248,6 @@ private struct TincanHomeScreen: View {
                     callActions: callActions,
                     onOpenSettings: onOpenSettings
                 )
-
-                Text(statusSummaryText)
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundStyle(TincanPalette.textMuted)
-                    .padding(.horizontal, 4)
 
 #if os(iOS)
                 if callState.isCallActive {
