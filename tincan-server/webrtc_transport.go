@@ -26,6 +26,8 @@ type webrtcSession struct {
 	peerConnection *webrtc.PeerConnection
 	dataChannel    *webrtc.DataChannel
 	eventSink      *webrtcDataChannelSink
+	audioTrack     *webrtc.TrackLocalStaticSample
+	audioWriter    *sessionAudioWriter
 }
 
 type webrtcOfferRequest struct {
@@ -96,8 +98,33 @@ func (t *webrtcTransport) handleRegisterSession(w http.ResponseWriter, r *http.R
 		return
 	}
 
+	audioTrack, err := webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{
+		MimeType:  webrtc.MimeTypePCMU,
+		ClockRate: webrtcAudioSampleRate,
+		Channels:  webrtcAudioChannels,
+	}, "server-audio", sessionID)
+	if err != nil {
+		log.Printf("webrtc: create audio track failed for session %s: %v", sessionID, err)
+		_ = peerConnection.Close()
+		http.Error(w, fmt.Sprintf("create audio track: %v", err), http.StatusInternalServerError)
+		return
+	}
+	audioSender, err := peerConnection.AddTrack(audioTrack)
+	if err != nil {
+		log.Printf("webrtc: add audio track failed for session %s: %v", sessionID, err)
+		_ = peerConnection.Close()
+		http.Error(w, fmt.Sprintf("add audio track: %v", err), http.StatusInternalServerError)
+		return
+	}
+	go drainRTCP(sessionID, audioSender)
+
 	t.server.callManager.RegisterSession(sessionID)
-	session := &webrtcSession{id: sessionID, peerConnection: peerConnection}
+	session := &webrtcSession{
+		id:             sessionID,
+		peerConnection: peerConnection,
+		audioTrack:     audioTrack,
+		audioWriter:    newSessionAudioWriter(sessionID, audioTrack),
+	}
 	t.storeSession(session)
 
 	peerConnection.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
@@ -267,6 +294,9 @@ func (t *webrtcTransport) closeSession(sessionID string) {
 
 	t.server.callManager.SetEventSink(sessionID, nil)
 	t.server.callManager.RemoveSession(sessionID)
+	if session.audioWriter != nil {
+		session.audioWriter.Close()
+	}
 	if session.dataChannel != nil {
 		_ = session.dataChannel.Close()
 	}
@@ -299,4 +329,31 @@ func (s *webrtcDataChannelSink) setOpen(open bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.open = open
+}
+
+func (t *webrtcTransport) QueueSessionAudio(sessionID string, audioData []byte) error {
+	t.mu.Lock()
+	session, ok := t.sessions[sessionID]
+	t.mu.Unlock()
+	if !ok {
+		return errors.New("webrtc session not found")
+	}
+	if session.audioWriter == nil {
+		return errors.New("webrtc session audio writer not configured")
+	}
+	return session.audioWriter.Enqueue(audioData)
+}
+
+func drainRTCP(sessionID string, sender *webrtc.RTPSender) {
+	if sender == nil {
+		return
+	}
+
+	buffer := make([]byte, 1500)
+	for {
+		if _, _, err := sender.Read(buffer); err != nil {
+			log.Printf("webrtc: audio sender RTCP loop ended for session %s: %v", sessionID, err)
+			return
+		}
+	}
 }

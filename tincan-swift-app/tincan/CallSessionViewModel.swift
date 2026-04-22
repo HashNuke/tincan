@@ -104,56 +104,13 @@ final class CallSessionViewModel: ObservableObject {
         eventTask = Task {
             for await event in client.eventStream(sessionID: sessionID) {
                 switch event {
-                case .playAudio(let text, let urlPath):
+                case .playAudio(let text, _):
                     appendLog("Server: \(text)")
-                    await playServerAudioIfPresent(urlPath, client: client, fallbackLogPrefix: "Server audio")
-                case .notify(let text, let audioURLPath, let summaryText, let summaryAudioURLPath):
-                    let playbackChoice = BackendSessionClient.notificationPlaybackChoice(
-                        text: text,
-                        audioURLPath: audioURLPath,
-                        summaryText: summaryText,
-                        summaryAudioURLPath: summaryAudioURLPath,
-                        isAudioPlaying: tonePlayer.isPlayingAudio
-                    )
-                    appendLog("Notify: \(playbackChoice.text)")
-                    await playServerAudioIfPresent(
-                        playbackChoice.audioURLPath,
-                        client: client,
-                        fallbackLogPrefix: "Notify audio"
-                    )
+                case .notify(let text, _, let summaryText, _):
+                    appendLog("Notify: \(BackendSessionClient.notificationDisplayText(text: text, summaryText: summaryText))")
                 }
             }
         }
-    }
-
-    private func playServerAudioIfPresent(_ path: String?, client: BackendSessionClient, fallbackLogPrefix: String) async {
-        guard isSpeakerEnabled else {
-            appendLog("Skipped playback while audio output is muted")
-            return
-        }
-        guard let path, !path.isEmpty else { return }
-        guard let audioURL = makeServerAudioURL(path: path, client: client) else {
-            appendLog("\(fallbackLogPrefix) URL was invalid: \(path)")
-            return
-        }
-
-        do {
-            let (audioData, response) = try await URLSession.shared.data(from: audioURL)
-            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-                appendLog("\(fallbackLogPrefix) fetch failed")
-                return
-            }
-            tonePlayer.playAudioData(audioData)
-        } catch {
-            appendLog("\(fallbackLogPrefix) fetch failed: \(error.localizedDescription)")
-        }
-    }
-
-    private func makeServerAudioURL(path: String, client: BackendSessionClient) -> URL? {
-        if let url = URL(string: path), url.scheme != nil {
-            return url
-        }
-        return URL(string: path, relativeTo: client.serverBaseURL)?.absoluteURL
     }
 
     func toggleMute() {
@@ -169,6 +126,7 @@ final class CallSessionViewModel: ObservableObject {
     func toggleSpeakerEnabled() {
         isSpeakerEnabled.toggle()
         appendLog(isSpeakerEnabled ? "Enabled tincan audio playback" : "Disabled tincan audio playback")
+        sessionClient?.setRemoteAudioEnabled(isSpeakerEnabled)
     }
 }
 
@@ -195,6 +153,7 @@ extension CallSessionViewModel: CallKitControllerDelegate {
                 let sid = try await client.registerSession()
                 sessionID = sid
                 sessionClient = client
+                client.setRemoteAudioEnabled(isSpeakerEnabled)
                 appendLog("Session registered: \(sid)")
 
                 startupPhase = "microphone capture"

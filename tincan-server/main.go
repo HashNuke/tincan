@@ -470,12 +470,7 @@ func (s *server) processUtterance(sessionID string, audioData []byte, contentTyp
 	return handleResult.ResponseBody, nil
 }
 
-func (s *server) generateFeedbackAudio(text string) (string, error) {
-	audioData, err := s.inference.synthesize(text)
-	if err != nil {
-		return "", err
-	}
-
+func (s *server) writeGeneratedAudio(audioData []byte) (string, error) {
 	generatedDir, err := serverAudioDir("generated-audio")
 	if err != nil {
 		return "", err
@@ -490,10 +485,32 @@ func (s *server) generateFeedbackAudio(text string) (string, error) {
 	return "/debug/audio/generated/" + fileName, nil
 }
 
+func (s *server) generateFeedbackAudio(text string) (string, error) {
+	audioData, err := s.inference.synthesize(text)
+	if err != nil {
+		return "", err
+	}
+
+	return s.writeGeneratedAudio(audioData)
+}
+
 func (s *server) sendSessionEvent(sessionID string, payload any) {
 	if ok := s.callManager.SendEvent(sessionID, payload); !ok {
 		log.Printf("peer %s failed to send session event", sessionID)
 	}
+}
+
+func (s *server) queueSessionAudio(sessionID string, audioData []byte) error {
+	if s == nil {
+		return errors.New("server is not configured")
+	}
+	if s.webrtcTransport == nil {
+		return errors.New("webrtc transport is not configured")
+	}
+	if len(audioData) == 0 {
+		return errors.New("audio payload is empty")
+	}
+	return s.webrtcTransport.QueueSessionAudio(sessionID, audioData)
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {

@@ -53,10 +53,19 @@ func (r callAudioRenderer) PlaySpeech(sessionID string, text string) error {
 	if r.server == nil || strings.TrimSpace(text) == "" {
 		return nil
 	}
-	audioURL, err := r.server.generateFeedbackAudio(text)
+	audioData, err := r.server.inference.synthesize(text)
 	if err != nil {
 		return err
 	}
+
+	audioURL := ""
+	if err := r.server.queueSessionAudio(sessionID, audioData); err != nil {
+		audioURL, err = r.server.writeGeneratedAudio(audioData)
+		if err != nil {
+			return err
+		}
+	}
+
 	r.server.sendSessionEvent(sessionID, calls.NewPlayAudioEvent(text, audioURL))
 	return nil
 }
@@ -74,19 +83,28 @@ func (r callAudioRenderer) NotifySpeech(sessionID string, text string, summaryTe
 		return nil
 	}
 
-	audioURL, err := r.server.generateFeedbackAudio(notificationText)
+	spokenText := spokenSummary
+	if spokenText == "" {
+		spokenText = notificationText
+	}
+
+	audioData, err := r.server.inference.synthesize(spokenText)
 	if err != nil {
 		return err
 	}
 
-	summaryAudioURL := audioURL
 	if spokenSummary == "" {
 		spokenSummary = notificationText
-	} else if spokenSummary != notificationText {
-		summaryAudioURL, err = r.server.generateFeedbackAudio(spokenSummary)
+	}
+
+	audioURL := ""
+	summaryAudioURL := ""
+	if err := r.server.queueSessionAudio(sessionID, audioData); err != nil {
+		summaryAudioURL, err = r.server.writeGeneratedAudio(audioData)
 		if err != nil {
 			return err
 		}
+		audioURL = summaryAudioURL
 	}
 
 	r.server.sendSessionEvent(sessionID, calls.NewNotifyEvent(notificationText, audioURL, spokenSummary, summaryAudioURL))

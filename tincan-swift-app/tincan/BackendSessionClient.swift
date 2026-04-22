@@ -40,11 +40,6 @@ final class BackendSessionClient: NSObject {
         }
     }
 
-    struct NotificationPlaybackChoice: Equatable {
-        let text: String
-        let audioURLPath: String?
-    }
-
     struct RegisterResponse: Decodable {
         let sessionId: String
         let answerSDP: String
@@ -104,6 +99,8 @@ final class BackendSessionClient: NSObject {
 
     private var peerConnection: RTCPeerConnection?
     private var dataChannel: RTCDataChannel?
+    private var remoteAudioTrack: RTCAudioTrack?
+    private var remoteAudioEnabled = true
     private var sessionID: String?
     private var eventContinuation: AsyncStream<ServerEvent>.Continuation?
     private var pendingUtteranceContinuations: [String: CheckedContinuation<UtteranceResponse, Error>] = [:]
@@ -113,29 +110,15 @@ final class BackendSessionClient: NSObject {
         self.serverBaseURL = serverBaseURL
     }
 
-    nonisolated static func notificationPlaybackChoice(
-        text: String,
-        audioURLPath: String?,
-        summaryText: String?,
-        summaryAudioURLPath: String?,
-        isAudioPlaying: Bool
-    ) -> NotificationPlaybackChoice {
+    nonisolated static func notificationDisplayText(text: String, summaryText: String?) -> String {
         let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedSummaryText = summaryText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let normalizedAudioURLPath = audioURLPath?.isEmpty == true ? nil : audioURLPath
-        let normalizedSummaryAudioURLPath = summaryAudioURLPath?.isEmpty == true ? nil : summaryAudioURLPath
 
-        if !isAudioPlaying, !trimmedSummaryText.isEmpty {
-            return NotificationPlaybackChoice(
-                text: trimmedSummaryText,
-                audioURLPath: normalizedSummaryAudioURLPath ?? normalizedAudioURLPath
-            )
+        if !trimmedSummaryText.isEmpty {
+            return trimmedSummaryText
         }
 
-        return NotificationPlaybackChoice(
-            text: trimmedText.isEmpty ? trimmedSummaryText : trimmedText,
-            audioURLPath: normalizedAudioURLPath
-        )
+        return trimmedText
     }
 
     nonisolated static func responseBodySummary(from data: Data) -> String? {
@@ -172,8 +155,14 @@ final class BackendSessionClient: NSObject {
 
         do {
             let configuration = RTCConfiguration()
+            configuration.sdpSemantics = .unifiedPlan
             let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
             guard let peerConnection = peerConnectionFactory.peerConnection(with: configuration, constraints: constraints, delegate: self) else {
+                throw URLError(.cannotCreateFile)
+            }
+            let audioTransceiverInit = RTCRtpTransceiverInit()
+            audioTransceiverInit.direction = .recvOnly
+            guard peerConnection.addTransceiver(of: .audio, init: audioTransceiverInit) != nil else {
                 throw URLError(.cannotCreateFile)
             }
             let dataChannelConfig = RTCDataChannelConfiguration()
@@ -388,6 +377,7 @@ final class BackendSessionClient: NSObject {
         let peerConnection = self.peerConnection
         self.dataChannel = nil
         self.peerConnection = nil
+        remoteAudioTrack = nil
         sessionID = nil
 
         for continuation in pendingUtteranceContinuations.values {
@@ -455,6 +445,11 @@ final class BackendSessionClient: NSObject {
             return nil
         }
     }
+
+    func setRemoteAudioEnabled(_ enabled: Bool) {
+        remoteAudioEnabled = enabled
+        remoteAudioTrack?.isEnabled = enabled
+    }
 }
 
 extension BackendSessionClient: RTCPeerConnectionDelegate {
@@ -491,8 +486,24 @@ extension BackendSessionClient: RTCPeerConnectionDelegate {
     nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didChangeLocalCandidate local: RTCIceCandidate, remoteCandidate remote: RTCIceCandidate, lastReceivedMs: Int32, changeReason: String) {}
     nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didFailToGatherIceCandidate event: RTCIceCandidateErrorEvent) {}
     nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didStartReceivingOn transceiver: RTCRtpTransceiver) {}
-    nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didAdd rtpReceiver: RTCRtpReceiver, streams mediaStreams: [RTCMediaStream]) {}
-    nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didRemove rtpReceiver: RTCRtpReceiver) {}
+
+    nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didAdd rtpReceiver: RTCRtpReceiver, streams mediaStreams: [RTCMediaStream]) {
+        Task { @MainActor [weak self] in
+            guard let self, self.peerConnection === peerConnection else { return }
+            guard let track = rtpReceiver.track as? RTCAudioTrack else { return }
+            self.remoteAudioTrack = track
+            track.isEnabled = self.remoteAudioEnabled
+        }
+    }
+
+    nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didRemove rtpReceiver: RTCRtpReceiver) {
+        Task { @MainActor [weak self] in
+            guard let self, self.peerConnection === peerConnection else { return }
+            guard let track = rtpReceiver.track as? RTCAudioTrack else { return }
+            guard self.remoteAudioTrack?.trackId == track.trackId else { return }
+            self.remoteAudioTrack = nil
+        }
+    }
 }
 
 extension BackendSessionClient: RTCDataChannelDelegate {

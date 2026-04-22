@@ -8,6 +8,7 @@ import base64
 import contextlib
 import io
 import json
+import queue as thread_queue
 import sys
 import tempfile
 import uuid
@@ -22,6 +23,7 @@ from urllib import request as urlrequest
 import av
 import sounddevice as sd
 from aiortc import RTCPeerConnection, RTCSessionDescription
+from aiortc.mediastreams import MediaStreamError
 
 
 DEFAULT_SERVER_URL = "http://127.0.0.1:55055"
@@ -100,6 +102,27 @@ def parse_args() -> argparse.Namespace:
         "--verbose",
         action="store_true",
         help="Print connection state changes and non-result data channel traffic",
+    )
+    send_parser.add_argument(
+        "--device",
+        help="Output device index or a case-insensitive substring of the output device name",
+    )
+    send_parser.add_argument(
+        "--sample-rate",
+        type=int,
+        default=PLAY_SAMPLE_RATE,
+        help=f"Playback output sample rate (default: {PLAY_SAMPLE_RATE})",
+    )
+    send_parser.add_argument(
+        "--stereo",
+        action="store_true",
+        help="Preserve stereo instead of downmixing to mono for received audio playback",
+    )
+    send_parser.add_argument(
+        "--volume",
+        type=float,
+        default=1.0,
+        help="Linear gain multiplier for received audio playback (default: 1.0)",
     )
 
     interactive_parser = subparsers.add_parser(
@@ -356,6 +379,110 @@ def text_value(value: Any) -> str:
     return str(value)
 
 
+def playback_layout(channels: int) -> str:
+    if channels == 1:
+        return "mono"
+    if channels == 2:
+        return "stereo"
+    raise HarnessError(f"unsupported playback channel count: {channels}")
+
+
+def collect_resampled_pcm_bytes(
+    resampler: av.AudioResampler,
+    frame: av.AudioFrame | None,
+) -> list[bytes]:
+    chunks: list[bytes] = []
+    collect_resampled_pcm(resampler.resample(frame), chunks)
+    return chunks
+
+
+class RemoteAudioPlayer:
+    def __init__(
+        self,
+        *,
+        output_device: int | None,
+        sample_rate: int,
+        channels: int,
+        volume: float,
+    ) -> None:
+        self.output_device = output_device
+        self.sample_rate = sample_rate
+        self.channels = channels
+        self.volume = volume
+        self.layout = playback_layout(channels)
+        self._queue: thread_queue.Queue[bytes] = thread_queue.Queue(maxsize=128)
+        self._pending = bytearray()
+        self._stream: sd.RawOutputStream | None = None
+
+    def start(self) -> None:
+        if self._stream is not None:
+            return
+        self._stream = sd.RawOutputStream(
+            samplerate=self.sample_rate,
+            channels=self.channels,
+            dtype="int16",
+            device=self.output_device,
+            callback=self._callback,
+        )
+        self._stream.start()
+
+    def stop(self) -> None:
+        stream = self._stream
+        self._stream = None
+        self._pending.clear()
+        self._drain_queue()
+        if stream is None:
+            return
+        with contextlib.suppress(Exception):
+            stream.stop()
+        with contextlib.suppress(Exception):
+            stream.close()
+
+    def enqueue_pcm(self, pcm_s16: bytes) -> None:
+        if not pcm_s16:
+            return
+        self.start()
+        scaled_pcm = scale_pcm_volume(pcm_s16, self.volume)
+        try:
+            self._queue.put_nowait(scaled_pcm)
+        except thread_queue.Full:
+            with contextlib.suppress(thread_queue.Empty):
+                self._queue.get_nowait()
+            with contextlib.suppress(thread_queue.Full):
+                self._queue.put_nowait(scaled_pcm)
+
+    def _drain_queue(self) -> None:
+        while True:
+            with contextlib.suppress(thread_queue.Empty):
+                self._queue.get_nowait()
+                continue
+            return
+
+    def _callback(self, outdata: Any, frames: int, time_info: Any, status: Any) -> None:
+        del time_info
+        if status:
+            print(f"[playback] output status: {status}", file=sys.stderr)
+
+        bytes_needed = frames * self.channels * 2
+        output_view = memoryview(outdata).cast("B")
+        written = 0
+
+        while written < bytes_needed:
+            if not self._pending:
+                try:
+                    self._pending.extend(self._queue.get_nowait())
+                except thread_queue.Empty:
+                    break
+
+            chunk_size = min(bytes_needed - written, len(self._pending))
+            output_view[written : written + chunk_size] = self._pending[:chunk_size]
+            del self._pending[:chunk_size]
+            written += chunk_size
+
+        if written < bytes_needed:
+            output_view[written:bytes_needed] = b"\x00" * (bytes_needed - written)
+
+
 def http_bytes(url: str, timeout: float = 15.0) -> bytes:
     request = urlrequest.Request(url, method="GET")
     try:
@@ -418,20 +545,29 @@ async def wait_for_ice_complete(peer_connection: RTCPeerConnection, timeout: flo
 
 
 class TincanWebRTCClient:
-    def __init__(self, server_url: str, verbose: bool = False) -> None:
+    def __init__(
+        self,
+        server_url: str,
+        *,
+        verbose: bool = False,
+        remote_audio_player: RemoteAudioPlayer | None = None,
+    ) -> None:
         self.server_url = server_url.rstrip("/")
         self.verbose = verbose
+        self.remote_audio_player = remote_audio_player
         self.peer_connection = RTCPeerConnection()
         self.data_channel = self.peer_connection.createDataChannel(TINCAN_CHANNEL_LABEL)
         self.data_channel_open = asyncio.Event()
         self.event_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self.pending_results: dict[str, asyncio.Future[dict[str, Any]]] = {}
+        self.remote_audio_tasks: set[asyncio.Task[None]] = set()
         self.session_id: str | None = None
         self._attach_peer_events()
         self._attach_data_channel(self.data_channel)
 
     async def connect(self) -> None:
         try:
+            self.peer_connection.addTransceiver("audio", direction="recvonly")
             offer = await self.peer_connection.createOffer()
             await self.peer_connection.setLocalDescription(offer)
             await wait_for_ice_complete(self.peer_connection, timeout=5.0)
@@ -493,6 +629,13 @@ class TincanWebRTCClient:
             with contextlib.suppress(HarnessError):
                 http_delete(session_url)
 
+        for task in list(self.remote_audio_tasks):
+            task.cancel()
+        for task in list(self.remote_audio_tasks):
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        self.remote_audio_tasks.clear()
+
         await self.peer_connection.close()
 
     def _attach_peer_events(self) -> None:
@@ -503,6 +646,23 @@ class TincanWebRTCClient:
                 print(f"[webrtc] connection state -> {state}", file=sys.stderr)
             if state in {"closed", "failed"}:
                 self._fail_pending(HarnessError(f"peer connection closed in state {state}"))
+
+        @self.peer_connection.on("track")
+        def on_track(track: Any) -> None:
+            kind = getattr(track, "kind", "unknown")
+            if self.verbose:
+                print(f"[webrtc] remote track received: {kind}", file=sys.stderr)
+
+            if kind != "audio" or self.remote_audio_player is None:
+                return
+
+            task = asyncio.create_task(self._consume_remote_audio_track(track))
+            self.remote_audio_tasks.add(task)
+
+            def on_done(done_task: asyncio.Task[None]) -> None:
+                self.remote_audio_tasks.discard(done_task)
+
+            task.add_done_callback(on_done)
 
     def _attach_data_channel(self, channel: Any) -> None:
         @channel.on("open")
@@ -558,13 +718,51 @@ class TincanWebRTCClient:
             if not future.done():
                 future.set_exception(exc)
 
+    async def _consume_remote_audio_track(self, track: Any) -> None:
+        if self.remote_audio_player is None:
+            return
+
+        resampler = av.AudioResampler(
+            format="s16",
+            layout=self.remote_audio_player.layout,
+            rate=self.remote_audio_player.sample_rate,
+        )
+
+        try:
+            while True:
+                frame = await track.recv()
+                for chunk in collect_resampled_pcm_bytes(resampler, frame):
+                    self.remote_audio_player.enqueue_pcm(chunk)
+        except MediaStreamError:
+            if self.verbose:
+                print("[webrtc] remote audio track ended", file=sys.stderr)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            print(f"[webrtc] remote audio track failed: {exc}", file=sys.stderr)
+        finally:
+            for chunk in collect_resampled_pcm_bytes(resampler, None):
+                self.remote_audio_player.enqueue_pcm(chunk)
+
 
 async def run_send(args: argparse.Namespace) -> int:
     audio_paths = build_audio_sequence(args.audio, args.repeat)
-    client = TincanWebRTCClient(args.server, verbose=args.verbose)
+    output_device = resolve_output_device(args.device)
+    remote_audio_player = RemoteAudioPlayer(
+        output_device=output_device,
+        sample_rate=args.sample_rate,
+        channels=2 if args.stereo else 1,
+        volume=args.volume,
+    )
+    client = TincanWebRTCClient(
+        args.server,
+        verbose=args.verbose,
+        remote_audio_player=remote_audio_player,
+    )
     await client.connect()
 
     print(f"Connected to {args.server} with session {client.session_id}")
+    print(f"Playback output: {device_label(output_device)}")
 
     try:
         for index, audio_path in enumerate(audio_paths, start=1):
@@ -595,6 +793,7 @@ async def run_send(args: argparse.Namespace) -> int:
                 await asyncio.sleep(3600)
     finally:
         await client.close()
+        remote_audio_player.stop()
 
     return 0
 
@@ -850,8 +1049,18 @@ async def send_audio_path(
 
 
 async def run_interactive(args: argparse.Namespace) -> int:
-    client = TincanWebRTCClient(args.server, verbose=args.verbose)
     output_device = resolve_output_device(args.device)
+    remote_audio_player = RemoteAudioPlayer(
+        output_device=output_device,
+        sample_rate=args.sample_rate,
+        channels=2 if args.stereo else 1,
+        volume=args.volume,
+    )
+    client = TincanWebRTCClient(
+        args.server,
+        verbose=args.verbose,
+        remote_audio_player=remote_audio_player,
+    )
     playback = AudioPlaybackCoordinator(
         server_url=args.server,
         output_device=output_device,
@@ -920,6 +1129,7 @@ async def run_interactive(args: argparse.Namespace) -> int:
             with contextlib.suppress(asyncio.CancelledError):
                 await playback_task
         await client.close()
+        remote_audio_player.stop()
 
     return 0
 

@@ -77,5 +77,6 @@ uv run python scripts/tincan_call_shell.py play sample.wav --device "BlackHole 2
 Notes:
 
 * `send` matches the current app transport: it sends `audio/wav` utterances over the `tincan` WebRTC data channel.
-* `interactive` keeps one WebRTC session open, treats bare text as `SAY`, uses macOS `say` for `SAY <text>`, and auto-plays `feedback_audio_url`, `play_audio`, and `notify` audio received from the server.
+* `send` and `interactive` now negotiate the server's WebRTC audio downlink and play the remote audio track directly; URL-based `feedback_audio_url`, `play_audio`, and `notify` audio fields are treated as fallback-only.
+* `interactive` keeps one WebRTC session open, treats bare text as `SAY`, and uses macOS `say` for `SAY <text>`.
 * `play` is for end-to-end app testing. Point the Swift app's input device at the same loopback device so the app treats the playback as microphone input.
