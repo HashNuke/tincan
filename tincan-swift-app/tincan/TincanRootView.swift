@@ -179,9 +179,7 @@ private struct TincanAppSurface: View {
                         }
                     },
                     onRefresh: {
-                        Task {
-                            await workspace.refreshAll()
-                        }
+                        await workspace.refreshAll()
                     },
                     callActions: callActions
                 )
@@ -232,7 +230,7 @@ private struct TincanHomeScreen: View {
     let callState: TincanCallPresentationState
     let onOpenSettings: () -> Void
     let onOpenTranscript: (TincanConversationSummary) -> Void
-    let onRefresh: () -> Void
+    let onRefresh: () async -> Void
     let callActions: TincanCallActions
 
     private var featuredConversation: TincanConversationSummary? {
@@ -262,17 +260,13 @@ private struct TincanHomeScreen: View {
         VStack(alignment: .leading, spacing: 18) {
 #if os(iOS)
             TincanHomeHeader(
-                callState: callState,
-                callActions: callActions,
                 onOpenSettings: onOpenSettings
             )
 
-            if callState.isCallActive {
-                TincanCallControlPanel(
-                    callState: callState,
-                    callActions: callActions
-                )
-            }
+            TincanCallControlPanel(
+                callState: callState,
+                callActions: callActions
+            )
 #else
             TincanMacCallTranscriptCard(
                 callState: callState,
@@ -312,7 +306,12 @@ private struct TincanHomeScreen: View {
 
                             Spacer()
 
-                            Button(action: onRefresh) {
+#if os(macOS)
+                            Button {
+                                Task {
+                                    await onRefresh()
+                                }
+                            } label: {
                                 Text("refresh")
                                     .font(.system(size: 10, weight: .bold, design: .monospaced))
                                     .foregroundStyle(TincanPalette.textSecondary)
@@ -324,6 +323,7 @@ private struct TincanHomeScreen: View {
                                     )
                             }
                             .buttonStyle(.plain)
+#endif
                         }
 
                         if conversations.isEmpty {
@@ -346,6 +346,11 @@ private struct TincanHomeScreen: View {
                 }
                 .padding(.bottom, 24)
             }
+#if os(iOS)
+            .refreshable {
+                await onRefresh()
+            }
+#endif
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
         .padding(.top, 8)
@@ -354,8 +359,6 @@ private struct TincanHomeScreen: View {
 }
 
 private struct TincanHomeHeader: View {
-    let callState: TincanCallPresentationState
-    let callActions: TincanCallActions
     let onOpenSettings: () -> Void
 
     var body: some View {
@@ -368,24 +371,7 @@ private struct TincanHomeHeader: View {
 
             Spacer()
 
-            HStack(spacing: 10) {
-                TincanIconButton(systemImage: "gearshape.fill", tone: TincanPalette.panelRaised, action: onOpenSettings)
-
-                TincanToolbarButton(
-                    label: callState.isCallActive ? (callState.isTransitioning ? "ending" : "hang up") : (callState.isTransitioning ? "starting" : "call"),
-                    systemImage: callState.isCallActive ? "phone.down.fill" : "phone.fill",
-                    tone: callState.isCallActive ? TincanPalette.callRed : TincanTone.mint.accent,
-                    foreground: callState.isCallActive ? TincanPalette.textPrimary : TincanPalette.textOnAccent,
-                    action: {
-                        if callState.isCallActive {
-                            callActions.endCall()
-                        } else {
-                            callActions.startCall()
-                        }
-                    }
-                )
-                .disabled(callState.isTransitioning)
-            }
+            TincanIconButton(systemImage: "gearshape.fill", tone: TincanPalette.panelRaised, action: onOpenSettings)
         }
 #endif
     }
@@ -729,53 +715,107 @@ private struct TincanCallControlPanel: View {
     let callState: TincanCallPresentationState
     let callActions: TincanCallActions
 
+    private var isIdle: Bool {
+        !callState.isCallActive && !callState.isTransitioning
+    }
+
+    private var isStartingOrCanceling: Bool {
+        callState.isTransitioning && !callState.isCallActive
+    }
+
+    private var accent: Color {
+        if callState.isTransitioning {
+            return TincanTone.blue.accent
+        }
+        return callState.isCallActive ? TincanTone.mint.accent : TincanPalette.shellBorder
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .firstTextBaseline) {
-                HStack(spacing: 8) {
-                    Circle()
-                        .fill(TincanTone.mint.accent)
-                        .frame(width: 8, height: 8)
-                    Text(callState.callStateDescription.lowercased())
-                        .font(.system(size: 11, weight: .bold, design: .monospaced))
-                        .foregroundStyle(TincanTone.mint.accent)
+        VStack(alignment: .leading, spacing: isIdle ? 0 : 14) {
+            if isIdle {
+                HStack {
+                    Spacer()
+
+                    Button(action: callActions.startCall) {
+                        HStack(spacing: 10) {
+                            Image(systemName: "phone.fill")
+                                .font(.system(size: 14, weight: .bold))
+                            Text("call")
+                                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                                .lineLimit(1)
+                        }
+                        .foregroundStyle(TincanPalette.textOnAccent)
+                        .padding(.horizontal, 18)
+                        .frame(height: 48)
+                        .background(
+                            Capsule(style: .continuous)
+                                .fill(TincanTone.mint.accent)
+                        )
+                    }
+                    .buttonStyle(.plain)
+
+                    Spacer()
                 }
+                .frame(maxWidth: .infinity, minHeight: 56)
+            } else {
+                HStack(alignment: .firstTextBaseline) {
+                    HStack(spacing: 8) {
+                        Circle()
+                            .fill(accent)
+                            .frame(width: 8, height: 8)
+                        Text(callState.callStateDescription.lowercased())
+                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                            .foregroundStyle(accent)
+                    }
 
-                Spacer()
+                    Spacer()
 
-                if let callStartedAt = callState.callStartedAt {
-                    TimelineView(.periodic(from: .now, by: 1)) { _ in
-                        Text(elapsedLabel(since: callStartedAt))
-                            .font(.system(size: 11, weight: .medium, design: .monospaced))
-                            .foregroundStyle(TincanPalette.textSecondary)
+                    if let callStartedAt = callState.callStartedAt, callState.isCallActive {
+                        TimelineView(.periodic(from: .now, by: 1)) { _ in
+                            Text(elapsedLabel(since: callStartedAt))
+                                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                .foregroundStyle(TincanPalette.textSecondary)
+                        }
                     }
                 }
+
+                HStack(spacing: 12) {
+                    TincanMiniControlButton(
+                        systemImage: callState.isSpeakerEnabled ? "speaker.wave.2.fill" : "speaker.slash.fill",
+                        label: "speaker",
+                        tone: TincanTone.blue.accent,
+                        isEnabled: callState.isCallActive,
+                        action: callActions.toggleSpeaker
+                    )
+
+                    TincanMiniControlButton(
+                        systemImage: isStartingOrCanceling ? "xmark" : "phone.down.fill",
+                        label: isStartingOrCanceling ? "cancel" : "end",
+                        tone: isStartingOrCanceling ? TincanTone.blue.accent : TincanPalette.callRed,
+                        action: callActions.endCall
+                    )
+
+                    TincanMiniControlButton(
+                        systemImage: callState.isMuted ? "mic.slash.fill" : "mic.fill",
+                        label: "mute",
+                        tone: TincanTone.amber.accent,
+                        isEnabled: callState.isCallActive,
+                        action: callActions.toggleMute
+                    )
+                }
+
+                Group {
+                    if isStartingOrCanceling {
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(accent)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                    } else {
+                        TincanWaveStrip(levels: callState.inputLevelHistory, accent: accent)
+                    }
+                }
+                .frame(maxWidth: .infinity)
             }
-
-            HStack(spacing: 12) {
-                TincanMiniControlButton(
-                    systemImage: callState.isSpeakerEnabled ? "speaker.wave.2.fill" : "speaker.slash.fill",
-                    label: "audio",
-                    tone: TincanTone.blue.accent,
-                    action: callActions.toggleSpeaker
-                )
-
-                TincanMiniControlButton(
-                    systemImage: callState.isMuted ? "mic.slash.fill" : "mic.fill",
-                    label: "mute",
-                    tone: TincanTone.amber.accent,
-                    action: callActions.toggleMute
-                )
-
-                TincanMiniControlButton(
-                    systemImage: "phone.down.fill",
-                    label: "end",
-                    tone: TincanPalette.callRed,
-                    action: callActions.endCall
-                )
-            }
-
-            TincanWaveStrip(levels: callState.inputLevelHistory, accent: TincanTone.mint.accent)
         }
         .padding(16)
         .background(
@@ -783,11 +823,14 @@ private struct TincanCallControlPanel: View {
                 .fill(TincanPalette.panelMuted.opacity(0.95))
                 .overlay(
                     RoundedRectangle(cornerRadius: 24, style: .continuous)
-                        .stroke(TincanTone.mint.accent.opacity(0.25), lineWidth: 1)
+                        .stroke(accent.opacity(isIdle ? 0.18 : 0.28), lineWidth: 1)
                 )
         )
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .center)
         .fixedSize(horizontal: false, vertical: true)
+        .animation(.spring(response: 0.34, dampingFraction: 0.82), value: isIdle)
+        .animation(.easeOut(duration: 0.18), value: callState.isMuted)
+        .animation(.easeOut(duration: 0.18), value: callState.isSpeakerEnabled)
     }
 }
 
@@ -1149,16 +1192,27 @@ private struct TincanTranscriptHeader: View {
 #if os(macOS)
                 TincanMacCallStage(callState: callState, callActions: callActions)
 #else
-                HStack(spacing: 10) {
-                    TincanMiniHeaderButton(
-                        systemImage: callState.isSpeakerEnabled ? "speaker.wave.2.fill" : "speaker.slash.fill",
-                        action: callActions.toggleSpeaker
+                if callState.isCallActive {
+                    HStack(spacing: 10) {
+                        TincanMiniHeaderButton(
+                            systemImage: callState.isSpeakerEnabled ? "speaker.wave.2.fill" : "speaker.slash.fill",
+                            action: callActions.toggleSpeaker
+                        )
+                        TincanMiniHeaderButton(
+                            systemImage: callState.isMuted ? "mic.slash.fill" : "mic.fill",
+                            action: callActions.toggleMute
+                        )
+                        TincanMiniHeaderButton(systemImage: "phone.down.fill", destructive: true, action: callActions.endCall)
+                    }
+                } else {
+                    TincanToolbarButton(
+                        label: callState.isTransitioning ? "starting" : "call",
+                        systemImage: "phone.fill",
+                        tone: callState.isTransitioning ? TincanTone.blue.accent : TincanTone.mint.accent,
+                        foreground: TincanPalette.textOnAccent,
+                        action: callActions.startCall
                     )
-                    TincanMiniHeaderButton(
-                        systemImage: callState.isMuted ? "mic.slash.fill" : "mic.fill",
-                        action: callActions.toggleMute
-                    )
-                    TincanMiniHeaderButton(systemImage: "phone.down.fill", destructive: true, action: callActions.endCall)
+                    .disabled(callState.isTransitioning)
                 }
 #endif
             }
@@ -1263,6 +1317,27 @@ private struct TincanSettingsScreen: View {
         TincanCanvas {
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 18) {
+                    #if os(iOS)
+                    HStack(alignment: .center, spacing: 12) {
+                        Button(action: onDismiss) {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 15, weight: .bold))
+                                .foregroundStyle(TincanPalette.textPrimary)
+                                .frame(width: 36, height: 36)
+                                .background(
+                                    Circle()
+                                        .fill(TincanPalette.panel)
+                                )
+                        }
+                        .buttonStyle(.plain)
+
+                        Text(title.lowercased())
+                            .font(.system(size: 30, weight: .heavy, design: .rounded))
+                            .foregroundStyle(TincanPalette.textPrimary)
+
+                        Spacer()
+                    }
+                    #else
                     HStack(alignment: .top) {
                         Text(title.lowercased())
                             .font(.system(size: 30, weight: .heavy, design: .rounded))
@@ -1277,6 +1352,7 @@ private struct TincanSettingsScreen: View {
                             action: onDismiss
                         )
                     }
+                    #endif
 
                     TincanServerSettingsSection(
                         serverSettings: serverSettings,

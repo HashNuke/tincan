@@ -148,6 +148,7 @@ struct TincanMiniControlButton: View {
     let systemImage: String
     let label: String
     let tone: Color
+    var isEnabled = true
     let action: () -> Void
 
     var body: some View {
@@ -155,24 +156,23 @@ struct TincanMiniControlButton: View {
             VStack(spacing: 6) {
                 Image(systemName: systemImage)
                     .font(.system(size: 15, weight: .bold))
-                    .foregroundStyle(tone)
+                    .foregroundStyle(isEnabled ? TincanPalette.textOnAccent : TincanPalette.textMuted)
                     .frame(width: 44, height: 44)
                     .background(
                         Circle()
-                            .fill(TincanPalette.panel)
-                            .overlay(
-                                Circle()
-                                    .stroke(tone.opacity(0.28), lineWidth: 1)
-                            )
+                            .fill(isEnabled ? tone : TincanPalette.panelRaised)
                     )
+                    .shadow(color: isEnabled ? tone.opacity(0.26) : .clear, radius: 12, x: 0, y: 6)
 
                 Text(label)
                     .font(.system(size: 9, weight: .bold, design: .monospaced))
-                    .foregroundStyle(TincanPalette.textMuted)
+                    .foregroundStyle(isEnabled ? tone : TincanPalette.textMuted)
             }
             .frame(maxWidth: .infinity)
         }
         .buttonStyle(.plain)
+        .disabled(!isEnabled)
+        .opacity(isEnabled ? 1 : 0.68)
     }
 }
 

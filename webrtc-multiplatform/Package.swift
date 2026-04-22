@@ -5,7 +5,7 @@ let package = Package(
     name: "webrtc-multiplatform",
     platforms: [
         .iOS(.v12),
-        .macOS(.v10_11),
+        .macOS(.v10_13),
     ],
     products: [
         .library(name: "WebRTC", targets: ["WebRTC"]),
