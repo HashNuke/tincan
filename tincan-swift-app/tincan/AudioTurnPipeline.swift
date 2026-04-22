@@ -512,11 +512,11 @@ enum AudioTapSamples {
         return mono
     }
 
-    private static func mixInterleaved<T>(
-        samples: UnsafePointer<T>,
+    private static func mixInterleaved(
+        samples: UnsafePointer<Float>,
         frameCount: Int,
         channelCount: Int
-    ) -> [Float] where T == Float {
+    ) -> [Float] {
         mixInterleaved(samples: samples, frameCount: frameCount, channelCount: channelCount, convert: { $0 })
     }
 }
