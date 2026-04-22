@@ -241,28 +241,29 @@ private struct TincanHomeScreen: View {
     }
 
     var body: some View {
-        ScrollView(showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 18) {
-                TincanHomeHeader(
-                    callState: callState,
-                    callActions: callActions,
-                    onOpenSettings: onOpenSettings
-                )
+        VStack(alignment: .leading, spacing: 18) {
+            TincanHomeHeader(
+                callState: callState,
+                callActions: callActions,
+                onOpenSettings: onOpenSettings
+            )
 
 #if os(iOS)
-                if callState.isCallActive {
-                    TincanCallControlPanel(
-                        callState: callState,
-                        callActions: callActions
-                    )
-                }
-#else
-                TincanMacCallTranscriptCard(
+            if callState.isCallActive {
+                TincanCallControlPanel(
                     callState: callState,
                     callActions: callActions
                 )
+            }
+#else
+            TincanMacCallTranscriptCard(
+                callState: callState,
+                callActions: callActions
+            )
 #endif
 
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 18) {
                 if let highlightedLiveUpdate {
                     TincanHighlightedUpdateCard(
                         update: highlightedLiveUpdate,
@@ -324,10 +325,13 @@ private struct TincanHomeScreen: View {
                 if shouldShowStandaloneTranscriptCard {
                     TincanLastTranscriptCard(text: callState.lastServerTranscript)
                 }
+                }
+                .padding(.bottom, 24)
             }
-            .padding(.top, 8)
-            .padding(.bottom, 24)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
+        .padding(.top, 8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 }
 
