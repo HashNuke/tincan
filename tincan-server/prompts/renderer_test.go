@@ -8,7 +8,7 @@ import (
 func TestRenderRouterUserPrompt(t *testing.T) {
 	data := RouterUserPromptData{
 		RouterProfileName:            "Atlas",
-		DefinedAgentProfiles:         []string{"Atlas", "Emma"},
+		DefinedAgentProfiles:         []string{"Atlas", "Emma", "Hercules"},
 		KnownConversationHandles:     []string{"emma#10"},
 		CurrentConversationHandle:    "atlas#1",
 		CurrentConversationNotes:     "Current notes",
@@ -29,8 +29,11 @@ func TestRenderRouterUserPrompt(t *testing.T) {
 	requiredSystemSnippets := []string{
 		"You are Atlas. You are a router for Tincan agents.",
 		"Allowed actions:",
+		"Per-action fields:",
 		`"action": string`,
 		`"Emma, do the iOS signing fix" => action=new_conversation, agent_profile="Emma", message="do the iOS signing fix"`,
+		`"Atlas, ask Hercules to run the date command" => action=new_conversation, agent_profile="Hercules", message="run the date command"`,
+		`"Atlas, what do you have from hercules#4" => action=read_conversation_update, conversation_handle="hercules#4"`,
 	}
 	for _, snippet := range requiredSystemSnippets {
 		if !strings.Contains(systemPrompt, snippet) {
@@ -39,16 +42,17 @@ func TestRenderRouterUserPrompt(t *testing.T) {
 	}
 
 	requiredUserSnippets := []string{
-		"Routing context:",
-		"Defined agent profiles:",
+		"Routing context below.",
+		"### Defined agent profiles",
 		"- Atlas",
 		"- Emma",
-		"Known conversation handles:",
+		"- Hercules",
+		"### Known conversation handles",
 		"- emma#10",
-		"Current conversation handle:\natlas#1",
-		"Unresolved clarification history:",
+		"Current conversation handle: atlas#1",
+		"## Unresolved clarification history for current conversation",
 		"- assistant: Which Emma?",
-		"User transcript:\nAtlas, do the signing fix",
+		"Latest user transcript\nAtlas, do the signing fix",
 	}
 	for _, snippet := range requiredUserSnippets {
 		if !strings.Contains(prompt, snippet) {
@@ -73,7 +77,7 @@ func TestRenderConversationUpdatePrompt(t *testing.T) {
 	}
 
 	requiredSystemSnippets := []string{
-		"You are the Tincan conversation update processor.",
+		"Your job is to turn a full agent message into two short audio-friendly strings.",
 		`"notification_text": string`,
 		"Return valid JSON only.",
 	}
@@ -84,8 +88,9 @@ func TestRenderConversationUpdatePrompt(t *testing.T) {
 	}
 
 	requiredUserSnippets := []string{
-		"Conversation handle:\nemma#10",
-		"Full update:\nI fixed the build and need approval to merge.",
+		"**Conversation handle:** emma#10",
+		"## Full update from the conversation",
+		"I fixed the build and need approval to merge.",
 	}
 
 	for _, snippet := range requiredUserSnippets {

@@ -132,7 +132,7 @@ func TestRouterUsesConfiguredRouterProfile(t *testing.T) {
 	if !strings.HasPrefix(adapter.lastRoutePrompt.System, "You are Atlas. You are a router for Tincan agents.") {
 		t.Fatalf("expected router system prompt to start with %q, got %q", "You are Atlas. You are a router for Tincan agents.", adapter.lastRoutePrompt.System)
 	}
-	if !strings.Contains(adapter.lastRoutePrompt.User, "User transcript:\nhello") {
+	if !strings.Contains(adapter.lastRoutePrompt.User, "## Latest user transcript\nhello") {
 		t.Fatalf("expected router user prompt to include transcript, got %q", adapter.lastRoutePrompt.User)
 	}
 
@@ -159,10 +159,10 @@ func TestRouterUsesConfiguredRouterProfile(t *testing.T) {
 	if adapter.lastUpdateProfile.WorkingDirectory != "/tmp/atlas-updated" {
 		t.Fatalf("expected renamed profile working directory to be used, got %q", adapter.lastUpdateProfile.WorkingDirectory)
 	}
-	if !strings.HasPrefix(adapter.lastUpdatePrompt.System, "You are the Tincan conversation update processor.") {
-		t.Fatalf("expected update system prompt to start with %q, got %q", "You are the Tincan conversation update processor.", adapter.lastUpdatePrompt.System)
+	if !strings.HasPrefix(adapter.lastUpdatePrompt.System, "Your job is to turn a full agent message into two short audio-friendly strings.") {
+		t.Fatalf("expected update system prompt to start with %q, got %q", "Your job is to turn a full agent message into two short audio-friendly strings.", adapter.lastUpdatePrompt.System)
 	}
-	if !strings.Contains(adapter.lastUpdatePrompt.User, "Conversation handle:\natlas#1") {
+	if !strings.Contains(adapter.lastUpdatePrompt.User, "**Conversation handle:** atlas#1") {
 		t.Fatalf("expected update user prompt to include conversation handle, got %q", adapter.lastUpdatePrompt.User)
 	}
 }
