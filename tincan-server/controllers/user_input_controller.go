@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"fmt"
+	"log"
 	"strings"
 
 	"tincan-server/calls"
@@ -197,11 +198,25 @@ func (c *UserInputController) dispatchUserInput(sessionID string, routeRequest t
 }
 
 func (c *UserInputController) dispatchNewConversation(sessionID string, routeResult tincanrouter.RouteUserInputResult) (dispatchResult, error) {
+	log.Printf(
+		"peer %s scheduling new conversation: agent_profile=%q title=%q message=%q",
+		sessionID,
+		routeResult.AgentProfile,
+		routeResult.ConversationTitle,
+		routeResult.Message,
+	)
 	conversation, err := c.ConversationCreate.CreateConversation(routeResult.AgentProfile, routeResult.ConversationTitle, routeResult.Message)
 	if err != nil {
 		return dispatchResult{}, err
 	}
 	c.Calls.LinkConversation(sessionID, conversation.BackendConversationID, conversation.DisplayHandle)
+	log.Printf(
+		"peer %s linked conversation: handle=%q backend_conversation_id=%q status=%q",
+		sessionID,
+		conversation.DisplayHandle,
+		conversation.BackendConversationID,
+		conversation.Status,
+	)
 
 	return dispatchResult{
 		ResponseBody: map[string]any{
@@ -276,10 +291,23 @@ func (c *UserInputController) dispatchMessage(sessionID string, routeRequest tin
 	if c.ConversationSend == nil {
 		return dispatchResult{}, fmt.Errorf("conversation messaging is not configured")
 	}
+	log.Printf(
+		"peer %s scheduling message: handle=%q backend_conversation_id=%q message=%q",
+		sessionID,
+		conversation.DisplayHandle,
+		conversation.BackendConversationID,
+		routeResult.Message,
+	)
 	if err := c.ConversationSend.ContinueConversation(conversation, routeResult.Message); err != nil {
 		return dispatchResult{}, err
 	}
 	c.Calls.LinkConversation(sessionID, conversation.BackendConversationID, conversation.DisplayHandle)
+	log.Printf(
+		"peer %s refreshed conversation context: handle=%q backend_conversation_id=%q",
+		sessionID,
+		conversation.DisplayHandle,
+		conversation.BackendConversationID,
+	)
 	return dispatchResult{
 		ResponseBody: map[string]any{
 			"resolved_conversation_handle": conversation.DisplayHandle,

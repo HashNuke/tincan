@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 
 	"tincan-server/agent_adapters"
 	tincanconfig "tincan-server/config"
@@ -72,6 +73,15 @@ func (s *ConversationService) CreateConversation(input ConversationCreateInput) 
 		title = "Untitled conversation"
 	}
 
+	log.Printf(
+		"starting backend conversation: profile=%q backend=%q backend_type=%q working_directory=%q title=%q",
+		profile.Name,
+		profile.AgentBackend,
+		backend.Type,
+		profile.WorkingDirectory,
+		title,
+	)
+
 	adapterResult, err := adapter.StartConversation(profile, backend, title, input.Message)
 	if err != nil {
 		return ConversationCreateResult{}, fmt.Errorf("start backend conversation: %w", err)
@@ -89,6 +99,13 @@ func (s *ConversationService) CreateConversation(input ConversationCreateInput) 
 	if err != nil {
 		return ConversationCreateResult{}, fmt.Errorf("persist conversation: %w", err)
 	}
+
+	log.Printf(
+		"created conversation: handle=%q backend_conversation_id=%q status=%q",
+		conversation.DisplayHandle,
+		conversation.BackendConversationID,
+		conversation.Status,
+	)
 
 	return ConversationCreateResult{
 		ID:                    conversation.ID,
@@ -117,9 +134,23 @@ func (s *ConversationService) ContinueConversation(input ConversationMessageInpu
 		return fmt.Errorf("no agent adapter for backend type %q", backend.Type)
 	}
 
+	log.Printf(
+		"continuing backend conversation: handle=%q backend_conversation_id=%q backend=%q backend_type=%q",
+		input.Conversation.DisplayHandle,
+		input.Conversation.BackendConversationID,
+		input.Conversation.AgentBackend,
+		backend.Type,
+	)
+
 	if err := adapter.ContinueConversation(input.Conversation, backend, input.Message); err != nil {
 		return fmt.Errorf("continue backend conversation: %w", err)
 	}
+
+	log.Printf(
+		"scheduled backend continuation: handle=%q backend_conversation_id=%q",
+		input.Conversation.DisplayHandle,
+		input.Conversation.BackendConversationID,
+	)
 
 	return nil
 }

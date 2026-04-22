@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"tincan-server/agent_adapters"
@@ -15,6 +16,7 @@ type routerTestAdapter struct {
 	lastRouteProfile  tincanconfig.AgentProfile
 	lastRouteBackend  tincanconfig.AgentBackendDefinition
 	lastUpdateProfile tincanconfig.AgentProfile
+	lastRoutePrompt   string
 }
 
 func (a *routerTestAdapter) Backend() string {
@@ -44,6 +46,7 @@ func (a *routerTestAdapter) ContinueConversation(conversation conversations.Conv
 func (a *routerTestAdapter) RunRouterPrompt(profile tincanconfig.AgentProfile, backend tincanconfig.AgentBackendDefinition, prompt string, rawTranscript string) (tincanrouter.RouteUserInputResult, error) {
 	a.lastRouteProfile = profile
 	a.lastRouteBackend = backend
+	a.lastRoutePrompt = prompt
 	return tincanrouter.RouteUserInputResult{Action: "ignore"}, nil
 }
 
@@ -123,6 +126,9 @@ func TestRouterUsesConfiguredRouterProfile(t *testing.T) {
 	}
 	if adapter.lastRouteBackend.Type != "test" {
 		t.Fatalf("expected router backend type test, got %q", adapter.lastRouteBackend.Type)
+	}
+	if !strings.HasPrefix(adapter.lastRoutePrompt, "You are Atlas. You are a router for Tincan agents.") {
+		t.Fatalf("expected router prompt to start with %q, got %q", "You are Atlas. You are a router for Tincan agents.", adapter.lastRoutePrompt)
 	}
 
 	if _, err := profiles.Update("Atlas", tincanconfig.AgentProfile{

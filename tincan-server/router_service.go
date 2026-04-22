@@ -31,7 +31,7 @@ func (r *Router) RouteUserInput(input tincanrouter.RouteUserInputRequest) (tinca
 		return tincanrouter.RouteUserInputResult{}, err
 	}
 
-	prompt := r.buildUserRouterPrompt(input)
+	prompt := r.buildUserRouterPrompt(profile.Name, input)
 	result, err := adapter.RunRouterPrompt(profile, backend, prompt, input.Transcript)
 	if err != nil {
 		return tincanrouter.RouteUserInputResult{}, fmt.Errorf("route user input: %w", err)
@@ -89,7 +89,7 @@ func (r *Router) resolveRuntime() (tincanconfig.AgentProfile, tincanconfig.Agent
 	return profile, backend, adapter, nil
 }
 
-func (r *Router) buildUserRouterPrompt(input tincanrouter.RouteUserInputRequest) string {
+func (r *Router) buildUserRouterPrompt(routerProfileName string, input tincanrouter.RouteUserInputRequest) string {
 	var profileNames []string
 	for _, profile := range r.profiles.List() {
 		profileNames = append(profileNames, profile.Name)
@@ -102,7 +102,7 @@ func (r *Router) buildUserRouterPrompt(input tincanrouter.RouteUserInputRequest)
 		clarificationHistory = append(clarificationHistory, fmt.Sprintf("- %s: %s", message.Role, message.Text))
 	}
 
-	return strings.TrimSpace(`You are the Tincan router.
+	return strings.TrimSpace(`You are ` + routerProfileName + `. You are a router for Tincan agents.
 
 Your job is to decide what to do with a user's transcript.
 Return JSON only. Do not wrap the response in markdown.

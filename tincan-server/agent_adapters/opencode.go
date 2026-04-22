@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"os/exec"
@@ -113,6 +114,12 @@ func (a *OpencodeAdapter) StartConversation(profile tincanconfig.AgentProfile, b
 	if err != nil {
 		return ConversationStartResult{}, err
 	}
+	log.Printf(
+		"opencode session created: session_id=%q directory=%q title=%q",
+		session.ID,
+		profile.WorkingDirectory,
+		title,
+	)
 
 	promptURL := *baseURL
 	promptURL.Path = strings.TrimRight(baseURL.Path, "/") + "/session/" + session.ID + "/prompt_async"
@@ -149,6 +156,13 @@ func (a *OpencodeAdapter) StartConversation(profile tincanconfig.AgentProfile, b
 	if promptResp.StatusCode != http.StatusNoContent {
 		return ConversationStartResult{}, fmt.Errorf("opencode prompt_async failed with status %d", promptResp.StatusCode)
 	}
+	log.Printf(
+		"opencode prompt scheduled: session_id=%q directory=%q agent=%q model=%q",
+		session.ID,
+		profile.WorkingDirectory,
+		backend.Options.Agent,
+		backend.Options.Model,
+	)
 
 	return ConversationStartResult{
 		BackendConversationID: session.ID,
@@ -209,6 +223,13 @@ func (a *OpencodeAdapter) ContinueConversation(conversation conversations.Conver
 	if promptResp.StatusCode != http.StatusNoContent {
 		return fmt.Errorf("opencode continue prompt_async failed with status %d", promptResp.StatusCode)
 	}
+	log.Printf(
+		"opencode continuation scheduled: session_id=%q directory=%q agent=%q model=%q",
+		conversation.BackendConversationID,
+		conversation.WorkingDirectory,
+		backend.Options.Agent,
+		backend.Options.Model,
+	)
 	return nil
 }
 

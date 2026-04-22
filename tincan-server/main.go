@@ -337,6 +337,14 @@ func (s *server) handleOpenCodeHook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing session id", http.StatusBadRequest)
 		return
 	}
+	log.Printf(
+		"opencode hook received: event_type=%q session_id=%q status_type=%q error_name=%q error_message=%q",
+		event.EventType,
+		event.SessionID,
+		event.StatusType,
+		event.ErrorName,
+		event.ErrorMessage,
+	)
 
 	result, handled, err := s.hookController.HandleOpenCodeHook(event)
 	if err != nil {
@@ -344,6 +352,7 @@ func (s *server) handleOpenCodeHook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !handled {
+		log.Printf("opencode hook ignored: session_id=%q", event.SessionID)
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -355,6 +364,13 @@ func (s *server) handleOpenCodeHook(w http.ResponseWriter, r *http.Request) {
 		s.broadcastConversationMessageByID(result.ConversationID, result.MessageID)
 		s.broadcastConversationSummaryByID(result.ConversationID)
 	}
+	log.Printf(
+		"opencode hook handled: session_id=%q conversation_id=%q message_id=%q output_events=%d",
+		event.SessionID,
+		result.ConversationID,
+		result.MessageID,
+		len(result.OutputEvents),
+	)
 
 	w.WriteHeader(http.StatusNoContent)
 }
