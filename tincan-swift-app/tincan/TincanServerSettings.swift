@@ -86,7 +86,7 @@ final class ServerConnectionStore: ObservableObject {
         var components = URLComponents()
         components.scheme = "http"
         components.host = host
-        components.port = configuredPort
+        components.port = activePort
         return components.url
     }
 
@@ -112,11 +112,11 @@ final class ServerConnectionStore: ObservableObject {
     }
 
     var shareableConnectionLabel: String {
-        "\(shareableHost):\(configuredPort)"
+        "\(shareableHost):\(activePort)"
     }
 
     var qrPayload: String {
-        "tincan://connect?host=\(shareableHost)&port=\(configuredPort)"
+        "tincan://connect?host=\(shareableHost)&port=\(activePort)"
     }
 
     func setConnectionMode(_ mode: ConnectionMode) {
@@ -167,6 +167,15 @@ final class ServerConnectionStore: ObservableObject {
     private func persistEndpoint() {
         defaults.set(configuredRemoteHost, forKey: Self.configuredHostKey)
         defaults.set(configuredPort, forKey: Self.configuredPortKey)
+    }
+
+    private var activePort: Int {
+        switch connectionMode {
+        case .localMac:
+            return BackendConnectionConfig.port
+        case .remote:
+            return configuredPort
+        }
     }
 
     private static func loadPersistedEndpoint(defaults: UserDefaults) -> (host: String, port: Int) {

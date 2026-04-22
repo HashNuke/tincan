@@ -1,3 +1,5 @@
 {
-  "router_profile": "emma"
+  "router_profile": "emma",
+  "stt_model": "parakeet-tdt-0.6b-v3-coreml",
+  "tts_model": "kitten-tts-mini-0.8"
 }

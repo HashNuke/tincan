@@ -197,13 +197,19 @@ func TestNewAppConfigStoreCreatesEmptyFileWhenMissing(t *testing.T) {
 	if _, ok := store.RouterProfile(); ok {
 		t.Fatalf("expected router_profile to be unset")
 	}
+	if sttModel, ok := store.STTModel(); !ok || sttModel != DefaultSTTModel {
+		t.Fatalf("expected default stt_model %q, got %q ok=%v", DefaultSTTModel, sttModel, ok)
+	}
+	if ttsModel, ok := store.TTSModel(); !ok || ttsModel != DefaultTTSModel {
+		t.Fatalf("expected default tts_model %q, got %q ok=%v", DefaultTTSModel, ttsModel, ok)
+	}
 
 	configPath := filepath.Join(tempDir, "config", "config.json")
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		t.Fatalf("expected config.json to be created: %v", err)
 	}
-	if string(data) != "{}\n" {
+	if string(data) != defaultAppConfigJSON {
 		t.Fatalf("unexpected default config.json contents: %q", string(data))
 	}
 }
@@ -218,6 +224,8 @@ func TestAppConfigStoreLoadsAndUpdatesRouterProfile(t *testing.T) {
 	configPath := filepath.Join(configDir, "config.json")
 	if err := os.WriteFile(configPath, []byte(`{
   "router_profile": "Atlas",
+  "stt_model": "parakeet-tdt-0.6b-v3-coreml",
+  "tts_model": "kitten-tts-mini-0.8",
   "transcription_backend": "parakeet"
 }
 `), 0o644); err != nil {
@@ -232,6 +240,12 @@ func TestAppConfigStoreLoadsAndUpdatesRouterProfile(t *testing.T) {
 	routerProfile, ok := store.RouterProfile()
 	if !ok || routerProfile != "Atlas" {
 		t.Fatalf("expected router_profile Atlas, got %q ok=%v", routerProfile, ok)
+	}
+	if sttModel, ok := store.STTModel(); !ok || sttModel != "parakeet-tdt-0.6b-v3-coreml" {
+		t.Fatalf("expected stt_model parakeet-tdt-0.6b-v3-coreml, got %q ok=%v", sttModel, ok)
+	}
+	if ttsModel, ok := store.TTSModel(); !ok || ttsModel != "kitten-tts-mini-0.8" {
+		t.Fatalf("expected tts_model kitten-tts-mini-0.8, got %q ok=%v", ttsModel, ok)
 	}
 
 	updated, err := store.UpdateRouterProfileReference("Atlas", "Atlas Updated")
@@ -258,6 +272,12 @@ func TestAppConfigStoreLoadsAndUpdatesRouterProfile(t *testing.T) {
 	if !bytes.Contains(data, []byte(`"transcription_backend": "parakeet"`)) {
 		t.Fatalf("expected unknown config keys to be preserved, got %s", string(data))
 	}
+	if !bytes.Contains(data, []byte(`"stt_model": "parakeet-tdt-0.6b-v3-coreml"`)) {
+		t.Fatalf("expected stt_model to be preserved, got %s", string(data))
+	}
+	if !bytes.Contains(data, []byte(`"tts_model": "kitten-tts-mini-0.8"`)) {
+		t.Fatalf("expected tts_model to be preserved, got %s", string(data))
+	}
 
 	updated, err = store.UpdateRouterProfileReference("Atlas Updated", "")
 	if err != nil {
@@ -276,6 +296,12 @@ func TestAppConfigStoreLoadsAndUpdatesRouterProfile(t *testing.T) {
 	}
 	if _, ok := store.RouterProfile(); ok {
 		t.Fatalf("expected router_profile to be unset after clear")
+	}
+	if sttModel, ok := store.STTModel(); !ok || sttModel != "parakeet-tdt-0.6b-v3-coreml" {
+		t.Fatalf("expected stt_model to remain set, got %q ok=%v", sttModel, ok)
+	}
+	if ttsModel, ok := store.TTSModel(); !ok || ttsModel != "kitten-tts-mini-0.8" {
+		t.Fatalf("expected tts_model to remain set, got %q ok=%v", ttsModel, ok)
 	}
 }
 
@@ -327,6 +353,12 @@ func TestSampleDataDirLoadsRuntimeConfig(t *testing.T) {
 	routerProfile, ok := appConfig.RouterProfile()
 	if !ok || routerProfile != "emma" {
 		t.Fatalf("expected router_profile emma, got %q ok=%v", routerProfile, ok)
+	}
+	if sttModel, ok := appConfig.STTModel(); !ok || sttModel != "parakeet-tdt-0.6b-v3-coreml" {
+		t.Fatalf("expected stt_model parakeet-tdt-0.6b-v3-coreml, got %q ok=%v", sttModel, ok)
+	}
+	if ttsModel, ok := appConfig.TTSModel(); !ok || ttsModel != "kitten-tts-mini-0.8" {
+		t.Fatalf("expected tts_model kitten-tts-mini-0.8, got %q ok=%v", ttsModel, ok)
 	}
 
 	if _, ok := profiles.Get("emma"); !ok {

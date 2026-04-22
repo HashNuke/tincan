@@ -54,6 +54,7 @@ enum AppPaths {
     nonisolated static let speakerProfilesURL = appSupportDirectory.appendingPathComponent("speaker_profiles.json")
     nonisolated static let legacyOwnerProfileURL = appSupportDirectory.appendingPathComponent("owner-voice-profile.json")
     nonisolated static let tincanServerLogURL = logsDirectory.appendingPathComponent("tincan-server.log")
+    nonisolated static let tincanServerPIDURL = appSupportDirectory.appendingPathComponent("tincan-server.pid")
     nonisolated static let backendDirectory = projectRoot.appendingPathComponent("backend", isDirectory: true)
     nonisolated static let backendServerModule = "backend.server"
 

@@ -40,7 +40,9 @@ final class CallSessionViewModel: ObservableObject {
         }
 
         isTransitioningCallState = true
+        callStateDescription = "Checking mic"
         Task {
+            appendLog("Requesting microphone access")
             let hasPermission = await requestMicrophonePermission()
             guard hasPermission else {
                 appendLog("Microphone permission was denied")
@@ -49,6 +51,8 @@ final class CallSessionViewModel: ObservableObject {
                 return
             }
 
+            callStateDescription = "Starting"
+            appendLog("Requesting system call start")
             callKitController.startCall()
         }
     }
@@ -56,6 +60,8 @@ final class CallSessionViewModel: ObservableObject {
     func endCall() {
         guard isCallActive || isTransitioningCallState else { return }
         isTransitioningCallState = true
+        callStateDescription = isCallActive ? "Ending" : "Canceling"
+        appendLog(isCallActive ? "Ending call" : "Canceling call startup")
         callKitController.endCall()
     }
 
@@ -175,12 +181,18 @@ extension CallSessionViewModel: CallKitControllerDelegate {
                 return
             }
 
+            var startupPhase = "session registration"
             do {
+                callStateDescription = "Connecting"
+                appendLog("Registering call session with \(client.serverBaseURL.absoluteString)")
                 let sid = try await client.registerSession()
                 sessionID = sid
                 sessionClient = client
                 appendLog("Session registered: \(sid)")
 
+                startupPhase = "microphone capture"
+                callStateDescription = "Starting mic"
+                appendLog("Starting microphone capture")
                 try await audioPipeline.start()
                 subscribeToServerEvents(client: client, sessionID: sid)
                 callStateDescription = "Listening"
@@ -189,7 +201,7 @@ extension CallSessionViewModel: CallKitControllerDelegate {
                 tonePlayer.playConnectTone()
             } catch {
                 callStateDescription = "Audio start failed"
-                appendLog("Failed to start: \(error.localizedDescription)")
+                appendLog("Failed during \(startupPhase): \(error.localizedDescription)")
                 if let sid = sessionID {
                     await client.deregisterSession(sid)
                 }

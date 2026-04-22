@@ -1,7 +1,7 @@
 export const TincanConversationHooks = async ({ client }) => {
   const callbackUrl =
     process.env.TINCAN_OPENCODE_HOOK_URL ||
-    "http://127.0.0.1:8004/hooks/opencode"
+    "http://127.0.0.1:55055/hooks/opencode"
 
   async function publish(payload) {
     try {

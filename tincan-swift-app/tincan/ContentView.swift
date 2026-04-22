@@ -13,6 +13,9 @@ struct ContentView: View {
 #elseif os(macOS)
         if appModel.macOnboarding.isCompleted {
             TincanMacRootView(
+                ensureServerStarted: {
+                    await appModel.ensureMacServerStarted()
+                },
                 callSession: appModel.macCallSession,
                 workspace: appModel.workspace,
                 serverSettings: appModel.serverSettings

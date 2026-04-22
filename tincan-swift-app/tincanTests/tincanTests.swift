@@ -5,6 +5,7 @@
 //  Created by Akash Manohar John on 19/04/26.
 //
 
+import Foundation
 import Testing
 @testable import tincan
 
@@ -34,6 +35,29 @@ struct tincanTests {
 
         #expect(choice.text == "I have an update.")
         #expect(choice.audioURLPath == "/debug/audio/generated/short.wav")
+    }
+
+    @Test func responseBodySummaryTrimsWhitespaceAndCollapsesLines() {
+        let summary = BackendSessionClient.responseBodySummary(
+            from: Data(" \nset remote description: missing ICE credentials\n ".utf8)
+        )
+
+        #expect(summary == "set remote description: missing ICE credentials")
+    }
+
+    @Test func validatedSessionDescriptionPreservesTerminalCRLF() {
+        let rawSDP = "v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\n"
+
+        let validated = BackendSessionClient.validatedSessionDescriptionSDP(rawSDP)
+
+        #expect(validated == rawSDP)
+        #expect(validated?.hasSuffix("\r\n") == true)
+    }
+
+    @Test func validatedSessionDescriptionRejectsWhitespaceOnlyPayload() {
+        let validated = BackendSessionClient.validatedSessionDescriptionSDP(" \n\r\t ")
+
+        #expect(validated == nil)
     }
 
 }

@@ -249,6 +249,7 @@ playground.xcworkspace
 # .swiftpm
 
 .build/
+tincan-swift-app/tincan/BundledRuntime/
 
 # CocoaPods
 #

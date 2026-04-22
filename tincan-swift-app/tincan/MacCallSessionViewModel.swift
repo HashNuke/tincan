@@ -52,7 +52,10 @@ final class MacCallSessionViewModel: ObservableObject {
         }
 
         isTransitioningCallState = true
+        callStateDescription = "Starting"
         Task {
+            callStateDescription = "Checking mic"
+            appendLog("Requesting microphone access")
             let hasPermission = await requestMicrophonePermission()
             guard hasPermission else {
                 callStateDescription = "Microphone permission required"
@@ -61,9 +64,13 @@ final class MacCallSessionViewModel: ObservableObject {
                 return
             }
 
+            callStateDescription = "Checking speech"
+            appendLog("Checking speech recognition access")
             let hasSpeechPermission = await requestSpeechPermission()
             await identityManager.setSpeechRecognitionAuthorized(hasSpeechPermission)
 
+            callStateDescription = "Checking profile"
+            appendLog("Checking current-user voice profile")
             let hasOwnerProfile = await identityManager.hasOwnerProfile()
             if !hasSpeechPermission && !hasOwnerProfile {
                 callStateDescription = "Speech recognition permission required"
@@ -81,15 +88,24 @@ final class MacCallSessionViewModel: ObservableObject {
             }
 
             let client = BackendSessionClient(serverBaseURL: serverURL)
+            var startupPhase = "session registration"
 
             do {
+                callStateDescription = "Connecting"
+                appendLog("Registering call session with \(serverURL.absoluteString)")
                 let sid = try await client.registerSession()
                 sessionID = sid
                 sessionClient = client
                 appendLog("Session registered: \(sid)")
 
+                startupPhase = "speaker identification setup"
+                callStateDescription = "Preparing identity"
+                appendLog("Preparing speaker identification")
                 let identityStatus = try await identityManager.prepare()
                 applyIdentityStatus(identityStatus)
+                startupPhase = "microphone capture"
+                callStateDescription = "Starting mic"
+                appendLog("Starting microphone capture")
                 try await audioPipeline.start()
 
                 subscribeToServerEvents(client: client, sessionID: sid)
@@ -106,7 +122,7 @@ final class MacCallSessionViewModel: ObservableObject {
                 }
             } catch {
                 callStateDescription = "Call start failed"
-                appendLog("Failed to start: \(error.localizedDescription)")
+                appendLog("Failed during \(startupPhase): \(error.localizedDescription)")
                 if let sid = sessionID {
                     await client.deregisterSession(sid)
                 }
@@ -146,6 +162,8 @@ final class MacCallSessionViewModel: ObservableObject {
     func endCall() {
         guard isCallActive || isTransitioningCallState else { return }
         isTransitioningCallState = true
+        callStateDescription = isCallActive ? "Ending" : "Canceling"
+        appendLog(isCallActive ? "Ending call" : "Canceling call startup")
         Task {
             eventTask?.cancel()
             eventTask = nil
@@ -332,6 +350,9 @@ extension MacCallSessionViewModel: AudioTurnPipelineOutput {
 
     func audioTurnPipelineDidCaptureSegment(_ segment: CapturedSpeechSegment) {
         guard let client = sessionClient, let sid = sessionID else { return }
+        appendLog(
+            "Captured \(segment.duration.formatted(.number.precision(.fractionLength(2))))s speech segment"
+        )
         guard !isMuted else {
             appendLog("Ignored speech segment while muted")
             return
@@ -351,6 +372,9 @@ extension MacCallSessionViewModel: AudioTurnPipelineOutput {
             }
 
             do {
+                self.appendLog(
+                    "Uploading \(approvedSegment.duration.formatted(.number.precision(.fractionLength(2))))s approved speech segment"
+                )
                 let response = try await self.uploadApprovedSegment(approvedSegment, with: client, sessionID: sid)
                 self.lastServerTranscript = response.text
                 self.appendLog("Transcript: \(response.text)")

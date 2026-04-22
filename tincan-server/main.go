@@ -78,30 +78,44 @@ type inferenceClient struct {
 type inferenceSupervisor struct {
 	socketPath string
 	cmd        *exec.Cmd
+	launch     inferenceLaunchConfiguration
+	launchErr  error
 }
+
+type inferenceLaunchConfiguration struct {
+	command          string
+	args             []string
+	workingDirectory string
+}
+
+type bundledRuntimeLayout struct {
+	rootDir             string
+	modelsDir           string
+	inferenceExecutable string
+}
+
+const (
+	defaultBundledSTTModel = tincanconfig.DefaultSTTModel
+	defaultBundledTTSModel = tincanconfig.DefaultTTSModel
+	defaultServerPort      = 55055
+)
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	dataDirFlag := flag.String("data-dir", "", "directory for tincan-server runtime data")
+	portFlag := flag.Int("port", defaultServerPort, "HTTP port for tincan-server")
 	flag.Parse()
 
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8004"
+	if *portFlag <= 0 || *portFlag > 65535 {
+		log.Fatalf("invalid --port: %d", *portFlag)
 	}
 
 	dataDir, err := resolveDataDir(*dataDirFlag)
 	if err != nil {
 		log.Fatalf("failed to resolve data dir: %v", err)
 	}
-
-	inference := newInferenceSupervisor(inferenceSocketPath())
-	if err := inference.EnsureRunning(ctx); err != nil {
-		log.Fatalf("failed to start inference service: %v", err)
-	}
-	defer inference.Shutdown()
 
 	srv, err := newServer(dataDir)
 	if err != nil {
@@ -112,6 +126,12 @@ func main() {
 			log.Printf("failed to close conversation store: %v", err)
 		}
 	}()
+
+	inference := newInferenceSupervisor(inferenceSocketPath(), srv.appConfig)
+	if err := inference.EnsureRunning(ctx); err != nil {
+		log.Fatalf("failed to start inference service: %v", err)
+	}
+	defer inference.Shutdown()
 	mux := http.NewServeMux()
 	apiAdapters := make(map[string]tincanapi.ModelDiscoveringAdapter, len(srv.agentAdapters))
 	for name, adapter := range srv.agentAdapters {
@@ -132,7 +152,7 @@ func main() {
 	mux.HandleFunc("/session/", srv.handleSessionControl)
 	srv.webrtcTransport.RegisterRoutes(mux)
 
-	addr := "0.0.0.0:" + port
+	addr := fmt.Sprintf("0.0.0.0:%d", *portFlag)
 	log.Printf("tincan-server listening on %s", addr)
 	httpServer := &http.Server{Addr: addr, Handler: mux}
 
@@ -668,8 +688,13 @@ func saveUtteranceForDebug(sessionID string, audioData []byte) (string, error) {
 	return filePath, nil
 }
 
-func newInferenceSupervisor(socketPath string) *inferenceSupervisor {
-	return &inferenceSupervisor{socketPath: socketPath}
+func newInferenceSupervisor(socketPath string, appConfig *tincanconfig.AppConfigStore) *inferenceSupervisor {
+	launch, err := resolveInferenceLaunchConfiguration(socketPath, appConfig)
+	return &inferenceSupervisor{
+		socketPath: socketPath,
+		launch:     launch,
+		launchErr:  err,
+	}
 }
 
 func (s *inferenceSupervisor) EnsureRunning(ctx context.Context) error {
@@ -678,8 +703,14 @@ func (s *inferenceSupervisor) EnsureRunning(ctx context.Context) error {
 		return nil
 	}
 
-	command := exec.CommandContext(ctx, "swift", "run")
-	command.Dir = filepath.Join("..", "tincan-inference-macos")
+	if s.launchErr != nil {
+		return s.launchErr
+	}
+
+	command := exec.CommandContext(ctx, s.launch.command, s.launch.args...)
+	if s.launch.workingDirectory != "" {
+		command.Dir = s.launch.workingDirectory
+	}
 	command.Stdout = os.Stdout
 	command.Stderr = os.Stderr
 
@@ -724,4 +755,197 @@ func isSocketReady(socketPath string) bool {
 	}
 	_ = conn.Close()
 	return true
+}
+
+func resolveInferenceLaunchConfiguration(socketPath string, appConfig *tincanconfig.AppConfigStore) (inferenceLaunchConfiguration, error) {
+	if launch, handled, err := resolveInferenceLaunchFromEnvironment(socketPath, appConfig); handled {
+		return launch, err
+	}
+
+	if launch, ok := resolveBundledInferenceLaunch(socketPath, appConfig); ok {
+		return launch, nil
+	}
+
+	if launch, handled, err := resolveSourceTreeInferenceLaunch(socketPath, appConfig); handled {
+		return launch, err
+	}
+
+	return inferenceLaunchConfiguration{}, fmt.Errorf(
+		"unable to locate tincan-inference-macos launcher; bundle BundledRuntime with tincan-server, tincan-inference-macos, and BundledRuntime/models or set TINCAN_INFERENCE_EXECUTABLE and TINCAN_MODELS_DIR",
+	)
+}
+
+func resolveInferenceLaunchFromEnvironment(socketPath string, appConfig *tincanconfig.AppConfigStore) (inferenceLaunchConfiguration, bool, error) {
+	executablePath := strings.TrimSpace(os.Getenv("TINCAN_INFERENCE_EXECUTABLE"))
+	if executablePath == "" {
+		return inferenceLaunchConfiguration{}, false, nil
+	}
+
+	modelsDir := firstNonEmpty(
+		strings.TrimSpace(os.Getenv("TINCAN_MODELS_DIR")),
+		strings.TrimSpace(os.Getenv("TINCAN_INFERENCE_MODELS_DIR")),
+	)
+	if modelsDir == "" {
+		return inferenceLaunchConfiguration{}, true, fmt.Errorf(
+			"TINCAN_INFERENCE_EXECUTABLE requires TINCAN_MODELS_DIR (or TINCAN_INFERENCE_MODELS_DIR)",
+		)
+	}
+
+	sttModel, ttsModel := configuredInferenceModels(appConfig)
+	return compiledInferenceLaunch(
+		executablePath,
+		modelsDir,
+		sttModel,
+		ttsModel,
+		socketPath,
+	), true, nil
+}
+
+func resolveBundledInferenceLaunch(socketPath string, appConfig *tincanconfig.AppConfigStore) (inferenceLaunchConfiguration, bool) {
+	layoutCandidates := []bundledRuntimeLayout{}
+
+	if layout, ok := bundledRuntimeLayoutFromExecutable(); ok {
+		layoutCandidates = append(layoutCandidates, layout)
+	}
+
+	if layout, ok := bundledRuntimeLayoutFromRoot(
+		filepath.Clean(filepath.Join("..", "tincan-swift-app", "BundledRuntime")),
+	); ok {
+		layoutCandidates = append(layoutCandidates, layout)
+	}
+
+	sttModel, ttsModel := configuredInferenceModels(appConfig)
+	for _, layout := range layoutCandidates {
+		return compiledInferenceLaunch(
+			layout.inferenceExecutable,
+			layout.modelsDir,
+			sttModel,
+			ttsModel,
+			socketPath,
+		), true
+	}
+
+	return inferenceLaunchConfiguration{}, false
+}
+
+func resolveSourceTreeInferenceLaunch(socketPath string, appConfig *tincanconfig.AppConfigStore) (inferenceLaunchConfiguration, bool, error) {
+	modelsDir := firstNonEmpty(
+		strings.TrimSpace(os.Getenv("TINCAN_MODELS_DIR")),
+		strings.TrimSpace(os.Getenv("TINCAN_INFERENCE_MODELS_DIR")),
+	)
+	if modelsDir == "" {
+		return inferenceLaunchConfiguration{}, false, nil
+	}
+
+	packageDir := filepath.Clean(filepath.Join("..", "tincan-inference-macos"))
+	if !fileExists(filepath.Join(packageDir, "Package.swift")) {
+		return inferenceLaunchConfiguration{}, false, nil
+	}
+
+	sttModel, ttsModel := configuredInferenceModels(appConfig)
+	args := []string{
+		"run",
+		"--package-path", packageDir,
+		"tincan-inference-macos",
+		"--models-dir", modelsDir,
+		"--stt-model", sttModel,
+		"--tts-model", ttsModel,
+		"--socket-path", socketPath,
+	}
+
+	return inferenceLaunchConfiguration{
+		command: "swift",
+		args:    args,
+	}, true, nil
+}
+
+func configuredInferenceModels(appConfig *tincanconfig.AppConfigStore) (string, string) {
+	sttModel := ""
+	if appConfig != nil {
+		if configuredSTTModel, ok := appConfig.STTModel(); ok {
+			sttModel = configuredSTTModel
+		}
+	}
+	if sttModel == "" {
+		sttModel = defaultBundledSTTModel
+	}
+
+	ttsModel := ""
+	if appConfig != nil {
+		if configuredTTSModel, ok := appConfig.TTSModel(); ok {
+			ttsModel = configuredTTSModel
+		}
+	}
+	if ttsModel == "" {
+		ttsModel = defaultBundledTTSModel
+	}
+
+	return sttModel, ttsModel
+}
+
+func compiledInferenceLaunch(
+	executablePath string,
+	modelsDir string,
+	sttModel string,
+	ttsModel string,
+	socketPath string,
+) inferenceLaunchConfiguration {
+	return inferenceLaunchConfiguration{
+		command: executablePath,
+		args: []string{
+			"--models-dir", modelsDir,
+			"--stt-model", sttModel,
+			"--tts-model", ttsModel,
+			"--socket-path", socketPath,
+		},
+	}
+}
+
+func bundledRuntimeLayoutFromExecutable() (bundledRuntimeLayout, bool) {
+	executablePath, err := os.Executable()
+	if err != nil {
+		return bundledRuntimeLayout{}, false
+	}
+
+	rootDir := filepath.Dir(executablePath)
+	return bundledRuntimeLayoutFromRoot(rootDir)
+}
+
+func bundledRuntimeLayoutFromRoot(rootDir string) (bundledRuntimeLayout, bool) {
+	layout := bundledRuntimeLayout{
+		rootDir:             rootDir,
+		modelsDir:           filepath.Join(rootDir, "models"),
+		inferenceExecutable: filepath.Join(rootDir, "tincan-inference-macos"),
+	}
+
+	if !fileExists(layout.inferenceExecutable) || !directoryExists(layout.modelsDir) {
+		return bundledRuntimeLayout{}, false
+	}
+
+	return layout, true
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return !info.IsDir()
+}
+
+func directoryExists(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return info.IsDir()
 }

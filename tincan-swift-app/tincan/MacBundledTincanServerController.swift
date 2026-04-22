@@ -1,5 +1,6 @@
 #if os(macOS)
 import AppKit
+import Darwin
 import Foundation
 
 @MainActor
@@ -48,6 +49,8 @@ final class MacBundledTincanServerController {
             return
         }
 
+        await reclaimTrackedBundledServerIfNeeded()
+
         if await isServerReachable() {
             writeStartupLog("skipping bundled tincan-server launch because a server is already reachable at 127.0.0.1:\(port)")
             return
@@ -75,6 +78,8 @@ final class MacBundledTincanServerController {
             }
             try process.run()
             self.process = process
+            writeTrackedProcessID(process.processIdentifier)
+            writeStartupLog("bundled tincan-server started with pid \(process.processIdentifier)")
             try await waitUntilReachable(timeout: 10)
             writeStartupLog("bundled tincan-server became healthy on port \(port)")
         } catch {
@@ -97,6 +102,40 @@ final class MacBundledTincanServerController {
         finishProcessRun()
     }
 
+    private func reclaimTrackedBundledServerIfNeeded() async {
+        guard let trackedPID = readTrackedProcessID() else { return }
+
+        guard isProcessRunning(trackedPID) else {
+            clearTrackedProcessID()
+            writeStartupLog("removed stale tincan-server pid file for pid \(trackedPID)")
+            return
+        }
+
+        guard let executablePath = processExecutablePath(trackedPID),
+              executablePath.hasSuffix("/BundledRuntime/tincan-server") else {
+            writeStartupLog("tracked tincan-server pid \(trackedPID) no longer points to the bundled runtime; leaving it untouched")
+            clearTrackedProcessID()
+            return
+        }
+
+        writeStartupLog("terminating stale bundled tincan-server pid \(trackedPID) from previous app run")
+
+        guard kill(trackedPID, SIGTERM) == 0 else {
+            writeStartupLog("failed to terminate stale bundled tincan-server pid \(trackedPID): \(String(cString: strerror(errno)))")
+            return
+        }
+
+        await waitForProcessToExit(trackedPID, timeout: 5)
+
+        if isProcessRunning(trackedPID) {
+            writeStartupLog("stale bundled tincan-server pid \(trackedPID) did not exit after SIGTERM; reusing existing listener if healthy")
+            return
+        }
+
+        clearTrackedProcessID()
+        writeStartupLog("stale bundled tincan-server pid \(trackedPID) exited")
+    }
+
     private func waitUntilReachable(timeout: TimeInterval) async throws {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
@@ -106,6 +145,16 @@ final class MacBundledTincanServerController {
             try await Task.sleep(nanoseconds: 250_000_000)
         }
         throw LaunchError.serverDidNotBecomeHealthy(port)
+    }
+
+    private func waitForProcessToExit(_ pid: pid_t, timeout: TimeInterval) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if !isProcessRunning(pid) {
+                return
+            }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
     }
 
     private func isServerReachable() async -> Bool {
@@ -185,9 +234,48 @@ final class MacBundledTincanServerController {
         }
     }
 
+    private func readTrackedProcessID() -> pid_t? {
+        guard let data = try? Data(contentsOf: AppPaths.tincanServerPIDURL),
+              let text = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              let pid = Int32(text) else {
+            return nil
+        }
+        return pid
+    }
+
+    private func writeTrackedProcessID(_ pid: pid_t) {
+        do {
+            try Data("\(pid)\n".utf8).write(to: AppPaths.tincanServerPIDURL, options: .atomic)
+        } catch {
+            writeStartupLog("failed to write tincan-server pid file: \(error.localizedDescription)")
+        }
+    }
+
+    private func clearTrackedProcessID() {
+        try? FileManager.default.removeItem(at: AppPaths.tincanServerPIDURL)
+    }
+
+    private func clearTrackedProcessIDIfMatches(_ pid: pid_t) {
+        guard readTrackedProcessID() == pid else { return }
+        clearTrackedProcessID()
+    }
+
+    private func isProcessRunning(_ pid: pid_t) -> Bool {
+        kill(pid, 0) == 0 || errno != ESRCH
+    }
+
+    private func processExecutablePath(_ pid: pid_t) -> String? {
+        var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+        let length = proc_pidpath(pid, &buffer, UInt32(buffer.count))
+        guard length > 0 else { return nil }
+        return String(cString: buffer)
+    }
+
     private func finishProcessRun() {
         if let process {
             writeStartupLog("bundled tincan-server exited with status \(process.terminationStatus)")
+            clearTrackedProcessIDIfMatches(process.processIdentifier)
         }
         process = nil
         try? logHandle?.close()

@@ -8,18 +8,25 @@ import (
 	"sync"
 )
 
-const appConfigFileName = "config.json"
+const (
+	appConfigFileName    = "config.json"
+	DefaultSTTModel      = "parakeet-tdt-0.6b-v3-coreml"
+	DefaultTTSModel      = "kitten-tts-mini-0.8"
+	defaultAppConfigJSON = "{\n  \"stt_model\": \"" + DefaultSTTModel + "\",\n  \"tts_model\": \"" + DefaultTTSModel + "\"\n}\n"
+)
 
 type AppConfigStore struct {
 	mu            sync.RWMutex
 	filePath      string
 	raw           map[string]json.RawMessage
 	routerProfile string
+	sttModel      string
+	ttsModel      string
 }
 
 func NewAppConfigStore(dataDir string) (*AppConfigStore, error) {
 	configPath := configFilePath(dataDir, appConfigFileName)
-	if err := ensureConfigFile(dataDir, appConfigFileName, []byte("{}\n")); err != nil {
+	if err := ensureConfigFile(dataDir, appConfigFileName, []byte(defaultAppConfigJSON)); err != nil {
 		return nil, err
 	}
 
@@ -28,7 +35,7 @@ func NewAppConfigStore(dataDir string) (*AppConfigStore, error) {
 		return nil, fmt.Errorf("read app config: %w", err)
 	}
 
-	raw, routerProfile, err := decodeAppConfig(data)
+	raw, routerProfile, sttModel, ttsModel, err := decodeAppConfig(data)
 	if err != nil {
 		return nil, fmt.Errorf("decode app config: %w", err)
 	}
@@ -37,6 +44,8 @@ func NewAppConfigStore(dataDir string) (*AppConfigStore, error) {
 		filePath:      configPath,
 		raw:           raw,
 		routerProfile: routerProfile,
+		sttModel:      sttModel,
+		ttsModel:      ttsModel,
 	}, nil
 }
 
@@ -52,6 +61,34 @@ func (s *AppConfigStore) RouterProfile() (string, bool) {
 		return "", false
 	}
 	return s.routerProfile, true
+}
+
+func (s *AppConfigStore) STTModel() (string, bool) {
+	if s == nil {
+		return "", false
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if strings.TrimSpace(s.sttModel) == "" {
+		return "", false
+	}
+	return s.sttModel, true
+}
+
+func (s *AppConfigStore) TTSModel() (string, bool) {
+	if s == nil {
+		return "", false
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if strings.TrimSpace(s.ttsModel) == "" {
+		return "", false
+	}
+	return s.ttsModel, true
 }
 
 func (s *AppConfigStore) SetRouterProfile(name string) error {
@@ -109,28 +146,42 @@ func (s *AppConfigStore) setRouterProfileLocked(name string) error {
 	return nil
 }
 
-func decodeAppConfig(data []byte) (map[string]json.RawMessage, string, error) {
+func decodeAppConfig(data []byte) (map[string]json.RawMessage, string, string, string, error) {
 	var decoded map[string]json.RawMessage
 	if err := json.Unmarshal(data, &decoded); err != nil {
-		return nil, "", err
+		return nil, "", "", "", err
 	}
 	if decoded == nil {
 		decoded = map[string]json.RawMessage{}
 	}
 
-	routerProfile := ""
-	if rawRouterProfile, ok := decoded["router_profile"]; ok {
-		if string(rawRouterProfile) == "null" {
-			return decoded, "", nil
-		}
-
-		if err := json.Unmarshal(rawRouterProfile, &routerProfile); err != nil {
-			return nil, "", fmt.Errorf("router_profile must be a string")
-		}
-		routerProfile = strings.TrimSpace(routerProfile)
+	routerProfile, err := decodeOptionalString(decoded, "router_profile")
+	if err != nil {
+		return nil, "", "", "", err
+	}
+	sttModel, err := decodeOptionalString(decoded, "stt_model")
+	if err != nil {
+		return nil, "", "", "", err
+	}
+	ttsModel, err := decodeOptionalString(decoded, "tts_model")
+	if err != nil {
+		return nil, "", "", "", err
 	}
 
-	return decoded, routerProfile, nil
+	return decoded, routerProfile, sttModel, ttsModel, nil
+}
+
+func decodeOptionalString(decoded map[string]json.RawMessage, key string) (string, error) {
+	rawValue, ok := decoded[key]
+	if !ok || string(rawValue) == "null" {
+		return "", nil
+	}
+
+	var value string
+	if err := json.Unmarshal(rawValue, &value); err != nil {
+		return "", fmt.Errorf("%s must be a string", key)
+	}
+	return strings.TrimSpace(value), nil
 }
 
 func cloneRawJSONMap(source map[string]json.RawMessage) map[string]json.RawMessage {

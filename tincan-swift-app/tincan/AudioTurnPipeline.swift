@@ -20,6 +20,11 @@ final class AudioTurnPipeline {
     private var audioStreamContinuation: AsyncStream<[Float]>.Continuation?
     private var processingTask: Task<Void, Never>?
     private var isRunning = false
+    private var tapInputDeviceName = "Unknown input device"
+    private var tapCallbackCount = 0
+    private var didLogInputSignal = false
+    private var didWarnAboutSilentInput = false
+    private var didLogFallbackResampler = false
 
     init() {
         turnDetector = VadTurnDetector(sink: sink)
@@ -36,6 +41,11 @@ final class AudioTurnPipeline {
 
         try await turnDetector.prepare()
         audioEngine = AVAudioEngine()
+        tapInputDeviceName = AVCaptureDevice.default(for: .audio)?.localizedName ?? "Unknown input device"
+        tapCallbackCount = 0
+        didLogInputSignal = false
+        didWarnAboutSilentInput = false
+        didLogFallbackResampler = false
 
         let stream = AsyncStream<[Float]> { continuation in
             audioStreamContinuation = continuation
@@ -59,30 +69,15 @@ final class AudioTurnPipeline {
         inputNode.removeTap(onBus: 0)
         inputNode.installTap(onBus: 0, bufferSize: 2_048, format: inputFormat) { [weak self] buffer, _ in
             guard let self else { return }
-            guard AudioTapBufferValidator.shouldProcess(buffer) else {
-                return
-            }
-            do {
-                let resampled = try self.tapAudioConverter.resampleBuffer(buffer)
-                guard !resampled.isEmpty else {
-                    return
-                }
-                self.audioStreamContinuation?.yield(resampled)
-                let inputLevel = Self.normalizedInputLevel(from: resampled)
-                Task {
-                    await self.sink.emitInputLevel(inputLevel)
-                }
-            } catch {
-                Task {
-                    await self.sink.emitLog("Failed to resample input buffer: \(error.localizedDescription)")
-                }
-            }
+            self.handleTapBuffer(buffer)
         }
 
         audioEngine.prepare()
         try audioEngine.start()
         isRunning = true
         await sink.resetInputLevel()
+        await sink.emitLog("Using microphone: \(tapInputDeviceName)")
+        await sink.emitLog("Microphone tap format: \(AudioTapSamples.describe(bufferFormat: inputFormat))")
         await sink.emitLog("Microphone capture started")
     }
 
@@ -118,6 +113,84 @@ final class AudioTurnPipeline {
         // Ease the meter slightly so conversational speech is visible.
         return Float(pow(Double(normalized), 0.65))
     }
+
+    private func handleTapBuffer(_ buffer: AVAudioPCMBuffer) {
+        guard AudioTapBufferValidator.shouldProcess(buffer) else {
+            return
+        }
+
+        tapCallbackCount += 1
+
+        let rawSamples = AudioTapSamples.extractMonoFloatSamples(from: buffer)
+        let inputLevel = Self.normalizedInputLevel(from: rawSamples)
+
+        Task {
+            await self.sink.emitInputLevel(inputLevel)
+        }
+
+        if inputLevel >= 0.03, !didLogInputSignal {
+            didLogInputSignal = true
+            Task {
+                await self.sink.emitLog("Microphone input signal detected")
+            }
+        } else if tapCallbackCount >= 45, !didLogInputSignal, !didWarnAboutSilentInput {
+            didWarnAboutSilentInput = true
+            Task {
+                await self.sink.emitLog(
+                    "Microphone tap is active but the signal is near silent. Current input device: \(self.tapInputDeviceName)"
+                )
+            }
+        }
+
+        do {
+            let resampled = try resampledTapSamples(from: buffer, rawSamples: rawSamples)
+            guard !resampled.isEmpty else {
+                return
+            }
+            audioStreamContinuation?.yield(resampled)
+        } catch {
+            Task {
+                await self.sink.emitLog("Failed to prepare input buffer for VAD: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func resampledTapSamples(from buffer: AVAudioPCMBuffer, rawSamples: [Float]) throws -> [Float] {
+        do {
+            let converted = try tapAudioConverter.resampleBuffer(buffer)
+            if !converted.isEmpty {
+                return converted
+            }
+        } catch {
+            if !didLogFallbackResampler {
+                didLogFallbackResampler = true
+                Task {
+                    await self.sink.emitLog(
+                        "Primary microphone converter failed for format \(AudioTapSamples.describe(bufferFormat: buffer.format)): \(error.localizedDescription)"
+                    )
+                }
+            }
+        }
+
+        return try fallbackResampledTapSamples(from: buffer, rawSamples: rawSamples)
+    }
+
+    private func fallbackResampledTapSamples(from buffer: AVAudioPCMBuffer, rawSamples: [Float]) throws -> [Float] {
+        if !didLogFallbackResampler {
+            didLogFallbackResampler = true
+            Task {
+                await self.sink.emitLog(
+                    "Falling back to manual microphone conversion for format \(AudioTapSamples.describe(bufferFormat: buffer.format))"
+                )
+            }
+        }
+
+        return AudioTapSamples.resample(
+            rawSamples,
+            from: buffer.format.sampleRate,
+            to: Double(VadManager.sampleRate)
+        )
+    }
 }
 
 enum AudioTapBufferValidator {
@@ -134,6 +207,243 @@ enum AudioTapBufferValidator {
         return audioBuffers.allSatisfy { audioBuffer in
             audioBuffer.mData != nil && audioBuffer.mDataByteSize > 0
         }
+    }
+}
+
+enum AudioTapSamples {
+    static func extractMonoFloatSamples(from buffer: AVAudioPCMBuffer) -> [Float] {
+        let format = buffer.format
+        let frameCount = Int(buffer.frameLength)
+        let channelCount = Int(format.channelCount)
+
+        guard frameCount > 0, channelCount > 0 else {
+            return []
+        }
+
+        switch format.commonFormat {
+        case .pcmFormatFloat32:
+            return extractFloat32Samples(from: buffer, frameCount: frameCount, channelCount: channelCount)
+        case .pcmFormatInt16:
+            return extractInt16Samples(from: buffer, frameCount: frameCount, channelCount: channelCount)
+        case .pcmFormatInt32:
+            return extractInt32Samples(from: buffer, frameCount: frameCount, channelCount: channelCount)
+        case .pcmFormatFloat64:
+            return extractFloat64Samples(from: buffer, frameCount: frameCount, channelCount: channelCount)
+        default:
+            return []
+        }
+    }
+
+    static func resample(_ samples: [Float], from inputSampleRate: Double, to outputSampleRate: Double) -> [Float] {
+        guard !samples.isEmpty, inputSampleRate > 0, outputSampleRate > 0 else {
+            return []
+        }
+
+        if abs(inputSampleRate - outputSampleRate) < 0.5 {
+            return samples
+        }
+
+        let ratio = inputSampleRate / outputSampleRate
+        let outputCount = max(1, Int((Double(samples.count) / ratio).rounded(.toNearestOrEven)))
+        var output = [Float](repeating: 0, count: outputCount)
+
+        for index in 0..<outputCount {
+            let sourceIndex = Double(index) * ratio
+            let lowerIndex = min(samples.count - 1, Int(sourceIndex.rounded(.down)))
+            let upperIndex = min(samples.count - 1, lowerIndex + 1)
+            let fraction = Float(sourceIndex - Double(lowerIndex))
+            output[index] = samples[lowerIndex] * (1 - fraction) + samples[upperIndex] * fraction
+        }
+
+        return output
+    }
+
+    static func describe(bufferFormat format: AVAudioFormat) -> String {
+        let formatName: String
+        switch format.commonFormat {
+        case .pcmFormatFloat32:
+            formatName = "Float32"
+        case .pcmFormatFloat64:
+            formatName = "Float64"
+        case .pcmFormatInt16:
+            formatName = "Int16"
+        case .pcmFormatInt32:
+            formatName = "Int32"
+        case .otherFormat:
+            formatName = "Other"
+        @unknown default:
+            formatName = "Unknown"
+        }
+
+        let layout = format.isInterleaved ? "interleaved" : "non-interleaved"
+        return "\(Int(format.channelCount)) ch @ \(Int(format.sampleRate)) Hz \(formatName) \(layout)"
+    }
+
+    private static func extractFloat32Samples(
+        from buffer: AVAudioPCMBuffer,
+        frameCount: Int,
+        channelCount: Int
+    ) -> [Float] {
+        if buffer.format.isInterleaved {
+            guard let audioBuffer = UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList).first,
+                  let data = audioBuffer.mData else {
+                return []
+            }
+
+            let samples = data.assumingMemoryBound(to: Float.self)
+            return mixInterleaved(samples: samples, frameCount: frameCount, channelCount: channelCount)
+        }
+
+        guard let channelData = buffer.floatChannelData else {
+            return []
+        }
+
+        return mixNonInterleaved(
+            frameCount: frameCount,
+            channelCount: channelCount
+        ) { channel, frame in
+            channelData[channel][frame]
+        }
+    }
+
+    private static func extractInt16Samples(
+        from buffer: AVAudioPCMBuffer,
+        frameCount: Int,
+        channelCount: Int
+    ) -> [Float] {
+        if buffer.format.isInterleaved {
+            guard let audioBuffer = UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList).first,
+                  let data = audioBuffer.mData else {
+                return []
+            }
+
+            let samples = data.assumingMemoryBound(to: Int16.self)
+            return mixInterleaved(samples: samples, frameCount: frameCount, channelCount: channelCount) {
+                Float($0) / Float(Int16.max)
+            }
+        }
+
+        guard let channelData = buffer.int16ChannelData else {
+            return []
+        }
+
+        return mixNonInterleaved(
+            frameCount: frameCount,
+            channelCount: channelCount
+        ) { channel, frame in
+            Float(channelData[channel][frame]) / Float(Int16.max)
+        }
+    }
+
+    private static func extractInt32Samples(
+        from buffer: AVAudioPCMBuffer,
+        frameCount: Int,
+        channelCount: Int
+    ) -> [Float] {
+        if buffer.format.isInterleaved {
+            guard let audioBuffer = UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList).first,
+                  let data = audioBuffer.mData else {
+                return []
+            }
+
+            let samples = data.assumingMemoryBound(to: Int32.self)
+            return mixInterleaved(samples: samples, frameCount: frameCount, channelCount: channelCount) {
+                Float($0) / Float(Int32.max)
+            }
+        }
+
+        guard let channelData = buffer.int32ChannelData else {
+            return []
+        }
+
+        return mixNonInterleaved(
+            frameCount: frameCount,
+            channelCount: channelCount
+        ) { channel, frame in
+            Float(channelData[channel][frame]) / Float(Int32.max)
+        }
+    }
+
+    private static func extractFloat64Samples(
+        from buffer: AVAudioPCMBuffer,
+        frameCount: Int,
+        channelCount: Int
+    ) -> [Float] {
+        if buffer.format.isInterleaved {
+            guard let audioBuffer = UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList).first,
+                  let data = audioBuffer.mData else {
+                return []
+            }
+
+            let samples = data.assumingMemoryBound(to: Double.self)
+            return mixInterleaved(samples: samples, frameCount: frameCount, channelCount: channelCount) {
+                Float($0)
+            }
+        }
+
+        let audioBuffers = UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList)
+        guard audioBuffers.count >= channelCount else {
+            return []
+        }
+
+        return mixNonInterleaved(
+            frameCount: frameCount,
+            channelCount: channelCount
+        ) { channel, frame in
+            guard let data = audioBuffers[channel].mData else {
+                return 0
+            }
+            let samples = data.assumingMemoryBound(to: Double.self)
+            return Float(samples[frame])
+        }
+    }
+
+    private static func mixNonInterleaved(
+        frameCount: Int,
+        channelCount: Int,
+        sampleAt: (_ channel: Int, _ frame: Int) -> Float
+    ) -> [Float] {
+        var mono = [Float](repeating: 0, count: frameCount)
+        let channelScale = 1 / Float(channelCount)
+
+        for frame in 0..<frameCount {
+            var sum: Float = 0
+            for channel in 0..<channelCount {
+                sum += sampleAt(channel, frame)
+            }
+            mono[frame] = sum * channelScale
+        }
+
+        return mono
+    }
+
+    private static func mixInterleaved<T>(
+        samples: UnsafePointer<T>,
+        frameCount: Int,
+        channelCount: Int,
+        convert: (T) -> Float
+    ) -> [Float] {
+        var mono = [Float](repeating: 0, count: frameCount)
+        let channelScale = 1 / Float(channelCount)
+
+        for frame in 0..<frameCount {
+            var sum: Float = 0
+            let frameBaseIndex = frame * channelCount
+            for channel in 0..<channelCount {
+                sum += convert(samples[frameBaseIndex + channel])
+            }
+            mono[frame] = sum * channelScale
+        }
+
+        return mono
+    }
+
+    private static func mixInterleaved<T>(
+        samples: UnsafePointer<T>,
+        frameCount: Int,
+        channelCount: Int
+    ) -> [Float] where T == Float {
+        mixInterleaved(samples: samples, frameCount: frameCount, channelCount: channelCount, convert: { $0 })
     }
 }
 

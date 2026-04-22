@@ -5,6 +5,41 @@ import WebRTC
 final class BackendSessionClient: NSObject {
     let serverBaseURL: URL
 
+    enum SessionError: LocalizedError {
+        case invalidSessionEndpoint
+        case missingLocalOfferDescription
+        case offerCreationReturnedNoDescription
+        case iceGatheringTimedOut(TimeInterval)
+        case dataChannelOpenTimedOut(TimeInterval)
+        case unexpectedHTTPResponse(context: String)
+        case httpFailure(context: String, statusCode: Int, body: String?)
+        case utteranceRejected(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .invalidSessionEndpoint:
+                return "The WebRTC session endpoint URL is invalid."
+            case .missingLocalOfferDescription:
+                return "The WebRTC offer was created, but the finalized local description was unavailable."
+            case .offerCreationReturnedNoDescription:
+                return "WebRTC did not return an SDP offer."
+            case .iceGatheringTimedOut(let timeout):
+                return "Timed out waiting \(Int(timeout))s for ICE gathering to finish."
+            case .dataChannelOpenTimedOut(let timeout):
+                return "Timed out waiting \(Int(timeout))s for the WebRTC data channel to open."
+            case .unexpectedHTTPResponse(let context):
+                return "\(context) returned a non-HTTP response."
+            case .httpFailure(let context, let statusCode, let body):
+                if let body, !body.isEmpty {
+                    return "\(context) failed with HTTP \(statusCode): \(body)"
+                }
+                return "\(context) failed with HTTP \(statusCode)."
+            case .utteranceRejected(let message):
+                return message
+            }
+        }
+    }
+
     struct NotificationPlaybackChoice: Equatable {
         let text: String
         let audioURLPath: String?
@@ -71,7 +106,6 @@ final class BackendSessionClient: NSObject {
     private var dataChannel: RTCDataChannel?
     private var sessionID: String?
     private var eventContinuation: AsyncStream<ServerEvent>.Continuation?
-    private var openContinuation: CheckedContinuation<Void, Error>?
     private var pendingUtteranceContinuations: [String: CheckedContinuation<UtteranceResponse, Error>] = [:]
     private var isFinishingSession = false
 
@@ -104,39 +138,71 @@ final class BackendSessionClient: NSObject {
         )
     }
 
+    nonisolated static func responseBodySummary(from data: Data) -> String? {
+        guard !data.isEmpty,
+              let text = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              !text.isEmpty else {
+            return nil
+        }
+
+        let collapsedWhitespace = text.replacingOccurrences(
+            of: #"\s+"#,
+            with: " ",
+            options: .regularExpression
+        )
+        if collapsedWhitespace.count <= 240 {
+            return collapsedWhitespace
+        }
+
+        return "\(collapsedWhitespace.prefix(237))..."
+    }
+
     func registerSession() async throws -> String {
         if let sessionID {
             return sessionID
         }
 
-        let configuration = RTCConfiguration()
-        let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
-        guard let peerConnection = peerConnectionFactory.peerConnection(with: configuration, constraints: constraints, delegate: self) else {
-            throw URLError(.cannotCreateFile)
+        do {
+            let configuration = RTCConfiguration()
+            let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
+            guard let peerConnection = peerConnectionFactory.peerConnection(with: configuration, constraints: constraints, delegate: self) else {
+                throw URLError(.cannotCreateFile)
+            }
+            let dataChannelConfig = RTCDataChannelConfiguration()
+            guard let dataChannel = peerConnection.dataChannel(forLabel: "tincan", configuration: dataChannelConfig) else {
+                throw URLError(.cannotCreateFile)
+            }
+            dataChannel.delegate = self
+
+            self.peerConnection = peerConnection
+            self.dataChannel = dataChannel
+
+            let offer = try await createOffer(on: peerConnection, constraints: constraints)
+            try await setLocalDescription(offer, on: peerConnection)
+            try await waitForIceGatheringComplete(on: peerConnection, timeout: 5)
+
+            guard let finalizedOffer = peerConnection.localDescription?.sdp
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+                  !finalizedOffer.isEmpty else {
+                throw SessionError.missingLocalOfferDescription
+            }
+
+            let response = try await exchangeOffer(offerSDP: finalizedOffer)
+            let answer = RTCSessionDescription(type: .answer, sdp: response.answerSDP)
+            try await setRemoteDescription(answer, on: peerConnection)
+
+            sessionID = response.sessionId
+
+            if dataChannel.readyState != .open {
+                try await waitForOpenDataChannel(timeout: 10)
+            }
+
+            return response.sessionId
+        } catch {
+            finishSession(error: error)
+            throw error
         }
-        let dataChannelConfig = RTCDataChannelConfiguration()
-        guard let dataChannel = peerConnection.dataChannel(forLabel: "tincan", configuration: dataChannelConfig) else {
-            throw URLError(.cannotCreateFile)
-        }
-        dataChannel.delegate = self
-
-        self.peerConnection = peerConnection
-        self.dataChannel = dataChannel
-
-        let offer = try await createOffer(on: peerConnection, constraints: constraints)
-        try await setLocalDescription(offer, on: peerConnection)
-
-        let response = try await exchangeOffer(offerSDP: offer.sdp)
-        let answer = RTCSessionDescription(type: .answer, sdp: response.answerSDP)
-        try await setRemoteDescription(answer, on: peerConnection)
-
-        sessionID = response.sessionId
-
-        if dataChannel.readyState != .open {
-            try await waitForOpenDataChannel()
-        }
-
-        return response.sessionId
     }
 
     func deregisterSession(_ sessionID: String) async {
@@ -188,8 +254,8 @@ final class BackendSessionClient: NSObject {
     }
 
     private func exchangeOffer(offerSDP: String) async throws -> RegisterResponse {
-        guard let url = URL(string: serverBaseURL.absoluteString + "/webrtc/session") else {
-            throw URLError(.badURL)
+        guard let url = URL(string: "webrtc/session", relativeTo: serverBaseURL) else {
+            throw SessionError.invalidSessionEndpoint
         }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -198,22 +264,68 @@ final class BackendSessionClient: NSObject {
         request.httpBody = try JSONSerialization.data(withJSONObject: ["offer_sdp": offerSDP])
 
         let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            throw URLError(.badServerResponse)
+        guard let http = response as? HTTPURLResponse else {
+            throw SessionError.unexpectedHTTPResponse(context: "Session registration")
         }
-        return try JSONDecoder().decode(RegisterResponse.self, from: data)
+        guard (200..<300).contains(http.statusCode) else {
+            throw SessionError.httpFailure(
+                context: "Session registration",
+                statusCode: http.statusCode,
+                body: Self.responseBodySummary(from: data)
+            )
+        }
+
+        do {
+            return try JSONDecoder().decode(RegisterResponse.self, from: data)
+        } catch {
+            throw SessionError.httpFailure(
+                context: "Session registration returned invalid JSON",
+                statusCode: http.statusCode,
+                body: Self.responseBodySummary(from: data)
+            )
+        }
     }
 
-    private func waitForOpenDataChannel() async throws {
+    private func waitForIceGatheringComplete(on peerConnection: RTCPeerConnection, timeout: TimeInterval) async throws {
+        if peerConnection.iceGatheringState == .complete {
+            return
+        }
+
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if peerConnection.iceGatheringState == .complete {
+                return
+            }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+
+        throw SessionError.iceGatheringTimedOut(timeout)
+    }
+
+    private func waitForOpenDataChannel(timeout: TimeInterval) async throws {
         guard dataChannel?.readyState != .open else { return }
 
-        try await withCheckedThrowingContinuation { continuation in
-            if dataChannel?.readyState == .open {
-                continuation.resume(returning: ())
-            } else {
-                openContinuation = continuation
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            guard let dataChannel else {
+                throw URLError(.networkConnectionLost)
             }
+
+            switch dataChannel.readyState {
+            case .open:
+                return
+            case .closing, .closed:
+                throw URLError(.networkConnectionLost)
+            case .connecting:
+                break
+            @unknown default:
+                break
+            }
+
+            try await Task.sleep(nanoseconds: 100_000_000)
         }
+
+        throw SessionError.dataChannelOpenTimedOut(timeout)
     }
 
     private func createOffer(on peerConnection: RTCPeerConnection, constraints: RTCMediaConstraints) async throws -> RTCSessionDescription {
@@ -224,7 +336,7 @@ final class BackendSessionClient: NSObject {
                     return
                 }
                 guard let sdp else {
-                    continuation.resume(throwing: URLError(.badServerResponse))
+                    continuation.resume(throwing: SessionError.offerCreationReturnedNoDescription)
                     return
                 }
                 continuation.resume(returning: sdp)
@@ -256,19 +368,6 @@ final class BackendSessionClient: NSObject {
         }
     }
 
-    private func resumeOpenContinuation(error: Error?) {
-        let continuation = openContinuation
-        openContinuation = nil
-
-        guard let continuation else { return }
-
-        if let error {
-            continuation.resume(throwing: error)
-        } else {
-            continuation.resume(returning: ())
-        }
-    }
-
     private func finishSession(error: Error?) {
         guard !isFinishingSession else { return }
         isFinishingSession = true
@@ -285,8 +384,6 @@ final class BackendSessionClient: NSObject {
         self.dataChannel = nil
         self.peerConnection = nil
         sessionID = nil
-
-        resumeOpenContinuation(error: error)
 
         for continuation in pendingUtteranceContinuations.values {
             continuation.resume(throwing: error ?? URLError(.networkConnectionLost))
@@ -323,7 +420,7 @@ final class BackendSessionClient: NSObject {
         }
 
         if let error = result.error, !error.isEmpty {
-            continuation.resume(throwing: URLError(.badServerResponse, userInfo: [NSLocalizedDescriptionKey: error]))
+            continuation.resume(throwing: SessionError.utteranceRejected(error))
             return
         }
 
@@ -399,8 +496,6 @@ extension BackendSessionClient: RTCDataChannelDelegate {
             guard let self, self.dataChannel === dataChannel else { return }
 
             switch dataChannel.readyState {
-            case .open:
-                self.resumeOpenContinuation(error: nil)
             case .closed:
                 self.finishSession(error: URLError(.networkConnectionLost))
             default:

@@ -710,11 +710,6 @@
 			package = 389AF1632F954C930031FFE3 /* XCRemoteSwiftPackageReference "FluidAudio" */;
 			productName = FluidAudio;
 		};
-		389AF1662F954C930031FFE3 /* fluidaudiocli */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 389AF1632F954C930031FFE3 /* XCRemoteSwiftPackageReference "FluidAudio" */;
-			productName = fluidaudiocli;
-		};
 		5A7B8C9D0E1F223344556678 /* WebRTC */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 5A7B8C9D0E1F223344556679 /* XCLocalSwiftPackageReference "../webrtc-multiplatform" */;

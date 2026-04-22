@@ -10,6 +10,8 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/FluidInference/FluidAudio.git", from: "0.13.6"),
+        .package(url: "https://github.com/HashNuke/mlx-audio-swift.git", branch: "tincan"),
+        .package(url: "https://github.com/ml-explore/mlx-swift.git", .upToNextMajor(from: "0.30.6")),
         .package(url: "https://github.com/microsoft/onnxruntime-swift-package-manager.git", from: "1.24.2"),
     ],
     targets: [
@@ -19,6 +21,9 @@ let package = Package(
             name: "tincan-inference-macos",
             dependencies: [
                 .product(name: "FluidAudio", package: "FluidAudio"),
+                .product(name: "MLX", package: "mlx-swift"),
+                .product(name: "MLXAudioTTS", package: "mlx-audio-swift"),
+                .product(name: "MLXNN", package: "mlx-swift"),
                 .product(name: "onnxruntime", package: "onnxruntime-swift-package-manager"),
             ]
         ),

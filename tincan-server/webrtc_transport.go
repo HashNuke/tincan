@@ -88,8 +88,10 @@ func (t *webrtcTransport) handleRegisterSession(w http.ResponseWriter, r *http.R
 	}
 
 	sessionID := uuid.NewString()
+	log.Printf("webrtc: registering session %s", sessionID)
 	peerConnection, err := webrtc.NewPeerConnection(webrtc.Configuration{})
 	if err != nil {
+		log.Printf("webrtc: create peer connection failed for session %s: %v", sessionID, err)
 		http.Error(w, fmt.Sprintf("create peer connection: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -132,6 +134,7 @@ func (t *webrtcTransport) handleRegisterSession(w http.ResponseWriter, r *http.R
 
 	offer := webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: request.OfferSDP}
 	if err := peerConnection.SetRemoteDescription(offer); err != nil {
+		log.Printf("webrtc: rejected remote description for session %s: %v", sessionID, err)
 		t.closeSession(sessionID)
 		http.Error(w, fmt.Sprintf("set remote description: %v", err), http.StatusBadRequest)
 		return
@@ -140,11 +143,13 @@ func (t *webrtcTransport) handleRegisterSession(w http.ResponseWriter, r *http.R
 	gatherComplete := webrtc.GatheringCompletePromise(peerConnection)
 	answer, err := peerConnection.CreateAnswer(nil)
 	if err != nil {
+		log.Printf("webrtc: create answer failed for session %s: %v", sessionID, err)
 		t.closeSession(sessionID)
 		http.Error(w, fmt.Sprintf("create answer: %v", err), http.StatusInternalServerError)
 		return
 	}
 	if err := peerConnection.SetLocalDescription(answer); err != nil {
+		log.Printf("webrtc: set local description failed for session %s: %v", sessionID, err)
 		t.closeSession(sessionID)
 		http.Error(w, fmt.Sprintf("set local description: %v", err), http.StatusInternalServerError)
 		return
@@ -153,10 +158,13 @@ func (t *webrtcTransport) handleRegisterSession(w http.ResponseWriter, r *http.R
 
 	localDescription := peerConnection.LocalDescription()
 	if localDescription == nil {
+		log.Printf("webrtc: missing local description for session %s", sessionID)
 		t.closeSession(sessionID)
 		http.Error(w, "missing local description", http.StatusInternalServerError)
 		return
 	}
+
+	log.Printf("webrtc: session %s registered", sessionID)
 
 	writeJSON(w, http.StatusOK, webrtcAnswerResponse{
 		SessionID: sessionID,
