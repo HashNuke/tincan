@@ -266,41 +266,99 @@ struct TincanSettingsSectionCard<Content: View>: View {
 struct TincanWaveStrip: View {
     let levels: [Double]
     let accent: Color
-    private let barWidth: CGFloat = 4
-    private let barCount = 14
+    private let dotSize: CGFloat = 9
+    private let dotSpacing: CGFloat = 3
+    private let dotCount = 17
+    private let motionFrameInterval: TimeInterval = 1.0 / 18.0
+    private let sweepCycleDuration: TimeInterval = 1.1
 
     var body: some View {
-        HStack(spacing: 4) {
-            ForEach(Array(displayedLevels.enumerated()), id: \.offset) { index, level in
-                RoundedRectangle(cornerRadius: 2, style: .continuous)
-                    .fill(barColor(for: level, index: index))
-                    .frame(width: barWidth, height: barHeight(for: level))
+        TimelineView(.animation(minimumInterval: motionFrameInterval, paused: activityLevel <= 0.02)) { context in
+            HStack(spacing: dotSpacing) {
+                ForEach(0..<dotCount, id: \.self) { index in
+                    Circle()
+                        .fill(dotFillColor(for: index, timestamp: context.date.timeIntervalSinceReferenceDate))
+                        .overlay(
+                            Circle()
+                                .stroke(
+                                    dotStrokeColor(for: index, timestamp: context.date.timeIntervalSinceReferenceDate),
+                                    lineWidth: 1
+                                )
+                        )
+                        .frame(width: dotSize, height: dotSize)
+                }
             }
+            .frame(maxWidth: .infinity, minHeight: dotSize, maxHeight: dotSize)
+            .padding(.vertical, 8)
+            .animation(.easeOut(duration: 0.16), value: activityLevel)
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 8)
-        .animation(.easeOut(duration: 0.14), value: displayedLevels)
     }
 
-    private var displayedLevels: [Double] {
-        let clippedLevels = Array(levels.suffix(barCount))
-        if clippedLevels.count == barCount {
-            return clippedLevels
+    private var centerIndex: Int {
+        dotCount / 2
+    }
+
+    private var activityLevel: Double {
+        let recentLevels = Array(levels.suffix(4))
+        guard !recentLevels.isEmpty else { return 0 }
+
+        let peak = recentLevels.max() ?? 0
+        let average = recentLevels.reduce(0.0, +) / Double(recentLevels.count)
+        return max(0, min(1, peak * 0.7 + average * 0.3))
+    }
+
+    private func activation(for index: Int) -> Double {
+        guard activityLevel > 0 else { return 0 }
+
+        let distance = Double(abs(index - centerIndex))
+        let reach = activityLevel * Double(centerIndex + 1)
+        return max(0, min(1, reach - distance))
+    }
+
+    private func dotFillColor(for index: Int, timestamp: TimeInterval) -> Color {
+        let dotActivation = activation(for: index)
+        guard dotActivation > 0 else { return .clear }
+
+        let distance = Double(abs(index - centerIndex))
+        let normalizedDistance = centerIndex == 0 ? 0 : distance / Double(centerIndex)
+        let intensity = 0.28
+            + dotActivation * (0.42 + (1 - normalizedDistance) * 0.18)
+            + shimmer(for: index, timestamp: timestamp)
+            + sweepHighlight(for: index, timestamp: timestamp) * 0.08
+        return accent.opacity(min(0.96, intensity))
+    }
+
+    private func dotStrokeColor(for index: Int, timestamp: TimeInterval) -> Color {
+        let dotActivation = activation(for: index)
+        if dotActivation > 0 {
+            let intensity = 0.24
+                + dotActivation * 0.36
+                + sweepHighlight(for: index, timestamp: timestamp) * 0.4
+            return accent.opacity(min(0.98, intensity))
         }
-        return Array(repeating: 0.0, count: barCount - clippedLevels.count) + clippedLevels
+
+        return TincanPalette.shellBorder.opacity(0.85)
     }
 
-    private func barHeight(for level: Double) -> CGFloat {
-        let normalizedLevel = max(0, min(1, level))
-        let minHeight: CGFloat = 8
-        let maxHeight: CGFloat = 34
-        return minHeight + CGFloat(pow(normalizedLevel, 0.75)) * (maxHeight - minHeight)
+    private func shimmer(for index: Int, timestamp: TimeInterval) -> Double {
+        let dotActivation = activation(for: index)
+        guard dotActivation > 0 else { return 0 }
+
+        let phase = timestamp * 7.0 + Double(index) * 0.82
+        let normalized = (sin(phase) + 1) * 0.5
+        return normalized * 0.07 * dotActivation
     }
 
-    private func barColor(for level: Double, index: Int) -> Color {
-        let normalizedLevel = max(0, min(1, level))
-        let restingOpacity = index < 4 ? 0.28 : 0.14
-        return accent.opacity(restingOpacity + normalizedLevel * 0.72)
+    private func sweepHighlight(for index: Int, timestamp: TimeInterval) -> Double {
+        guard activityLevel > 0.04 else { return 0 }
+
+        let distance = Double(abs(index - centerIndex))
+        let reach = max(0.35, activityLevel * Double(centerIndex + 1) - 0.1)
+        let phase = (timestamp / sweepCycleDuration).truncatingRemainder(dividingBy: 1)
+        let normalizedTravel = phase <= 0.5 ? phase * 2 : (1 - phase) * 2
+        let sweepPosition = normalizedTravel * reach
+        let proximity = max(0, 1 - abs(distance - sweepPosition) / 1.35)
+        return proximity * activation(for: index)
     }
 }
 
