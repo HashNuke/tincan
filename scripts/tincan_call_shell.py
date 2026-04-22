@@ -30,6 +30,7 @@ DEFAULT_SERVER_URL = "http://127.0.0.1:55055"
 TINCAN_CHANNEL_LABEL = "tincan"
 SEND_SAMPLE_RATE = 16_000
 PLAY_SAMPLE_RATE = 48_000
+HEARTBEAT_INTERVAL_SECONDS = 5.0
 
 
 @dataclass(frozen=True)
@@ -562,6 +563,7 @@ class TincanWebRTCClient:
         self.pending_results: dict[str, asyncio.Future[dict[str, Any]]] = {}
         self.remote_audio_tasks: set[asyncio.Task[None]] = set()
         self.session_id: str | None = None
+        self.heartbeat_task: asyncio.Task[None] | None = None
         self._attach_peer_events()
         self._attach_data_channel(self.data_channel)
 
@@ -592,6 +594,7 @@ class TincanWebRTCClient:
                 RTCSessionDescription(sdp=str(answer_sdp), type="answer")
             )
             await asyncio.wait_for(self.data_channel_open.wait(), timeout=10.0)
+            self.heartbeat_task = asyncio.create_task(self._heartbeat_loop())
         except Exception:
             await self.close()
             raise
@@ -628,6 +631,12 @@ class TincanWebRTCClient:
         if session_url is not None:
             with contextlib.suppress(HarnessError):
                 http_delete(session_url)
+
+        if self.heartbeat_task is not None:
+            self.heartbeat_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self.heartbeat_task
+            self.heartbeat_task = None
 
         for task in list(self.remote_audio_tasks):
             task.cancel()
@@ -717,6 +726,19 @@ class TincanWebRTCClient:
         for future in self.pending_results.values():
             if not future.done():
                 future.set_exception(exc)
+
+    async def _heartbeat_loop(self) -> None:
+        try:
+            while True:
+                await asyncio.sleep(HEARTBEAT_INTERVAL_SECONDS)
+                if self.data_channel.readyState != "open":
+                    continue
+                self.data_channel.send(json.dumps({"type": "ping"}))
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            if self.verbose:
+                print(f"[webrtc] heartbeat loop failed: {exc}", file=sys.stderr)
 
     async def _consume_remote_audio_track(self, track: Any) -> None:
         if self.remote_audio_player is None:
