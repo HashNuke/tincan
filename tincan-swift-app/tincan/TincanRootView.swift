@@ -450,6 +450,8 @@ private struct TincanMacCallTranscriptCard: View {
                         .stroke(statusTone.opacity(0.22), lineWidth: 1)
                 )
         )
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     @ViewBuilder
@@ -754,6 +756,8 @@ private struct TincanCallControlPanel: View {
                         .stroke(TincanTone.mint.accent.opacity(0.25), lineWidth: 1)
                 )
         )
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)
     }
 }
 
