@@ -25,6 +25,7 @@ final class TincanWorkspaceStore: ObservableObject {
     @Published private(set) var lastSyncError: String?
     @Published private(set) var lastRefreshAt: Date?
     @Published private(set) var isRefreshing = false
+    @Published private(set) var isLoadingConversationList = false
     @Published private(set) var liveConnectionStatus: LiveConnectionStatus = .idle
     @Published var selectedConversationID: String?
 
@@ -57,6 +58,7 @@ final class TincanWorkspaceStore: ObservableObject {
     func start() {
         guard !hasStarted else { return }
         hasStarted = true
+        isLoadingConversationList = true
 
         Task {
             await reloadForConnectionChange()
@@ -113,11 +115,15 @@ final class TincanWorkspaceStore: ObservableObject {
         conversationMessages = [:]
         unreadConversationIDs.removeAll()
         stopLiveUpdates()
+        isLoadingConversationList = true
 
         await refreshData(resetSelection: true)
     }
 
     private func refreshData(resetSelection: Bool) async {
+        isLoadingConversationList = conversations.isEmpty
+        defer { isLoadingConversationList = false }
+
         guard let baseURL = serverSettings.serverBaseURL else {
             conversations = []
             agentBackends = []

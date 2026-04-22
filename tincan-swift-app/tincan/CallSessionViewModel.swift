@@ -12,6 +12,7 @@ final class CallSessionViewModel: ObservableObject {
     @Published var logLines: [String] = []
     @Published var isCallActive = false
     @Published var isTransitioningCallState = false
+    @Published private(set) var transitionPhase: TincanCallTransitionPhase = .none
     @Published private(set) var callStartedAt: Date?
     @Published private(set) var isMuted = false
     @Published private(set) var isSpeakerEnabled = true
@@ -43,6 +44,7 @@ final class CallSessionViewModel: ObservableObject {
         }
 
         isTransitioningCallState = true
+        transitionPhase = .starting
         tonePlayer.startOutgoingRing()
         callStateDescription = "Checking mic"
         Task {
@@ -53,6 +55,7 @@ final class CallSessionViewModel: ObservableObject {
                 appendLog("Microphone permission was denied")
                 callStateDescription = "Microphone permission required"
                 isTransitioningCallState = false
+                transitionPhase = .none
                 return
             }
 
@@ -65,6 +68,7 @@ final class CallSessionViewModel: ObservableObject {
     func endCall() {
         guard isCallActive || isTransitioningCallState else { return }
         isTransitioningCallState = true
+        transitionPhase = isCallActive ? .ending : .starting
         tonePlayer.stopOutgoingRing()
         muteGeneration &+= 1
         callStateDescription = isCallActive ? "Ending" : "Canceling"
@@ -156,6 +160,7 @@ final class CallSessionViewModel: ObservableObject {
             tonePlayer.playDisconnectTone()
             callStateDescription = "Call lost"
             isTransitioningCallState = true
+            transitionPhase = .ending
             callKitController.endCall()
         }
     }
@@ -197,6 +202,7 @@ extension CallSessionViewModel: CallKitControllerDelegate {
                 callStateDescription = "Invalid server URL"
                 appendLog("Server connection is incomplete")
                 isTransitioningCallState = false
+                transitionPhase = .none
                 return
             }
 
@@ -235,6 +241,7 @@ extension CallSessionViewModel: CallKitControllerDelegate {
                 isTransportRecovering = false
             }
 
+            transitionPhase = .none
             isTransitioningCallState = false
         }
     }
@@ -262,6 +269,7 @@ extension CallSessionViewModel: CallKitControllerDelegate {
                 tonePlayer.playDisconnectTone()
             }
             shouldPlayDisconnectToneOnDeactivate = true
+            transitionPhase = .none
             isTransitioningCallState = false
         }
     }
@@ -272,6 +280,7 @@ extension CallSessionViewModel: CallKitControllerDelegate {
         isCallActive = false
         callStartedAt = nil
         resetInputLevels()
+        transitionPhase = .none
         isTransitioningCallState = false
         isTransportRecovering = false
         shouldPlayDisconnectToneOnDeactivate = true

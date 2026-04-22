@@ -6,10 +6,17 @@ import CoreImage
 import CoreImage.CIFilterBuiltins
 #endif
 
+enum TincanCallTransitionPhase {
+    case none
+    case starting
+    case ending
+}
+
 struct TincanCallPresentationState {
     let callStateDescription: String
     let isCallActive: Bool
     let isTransitioning: Bool
+    let transitionPhase: TincanCallTransitionPhase
     let callStartedAt: Date?
     let isMuted: Bool
     let isSpeakerEnabled: Bool
@@ -18,6 +25,14 @@ struct TincanCallPresentationState {
     let lastServerTranscript: String
     let logLines: [String]
     let speakerIdentity: TincanSpeakerIdentityPresentation?
+
+    var isStartingTransition: Bool {
+        transitionPhase == .starting
+    }
+
+    var isEndingTransition: Bool {
+        transitionPhase == .ending
+    }
 }
 
 struct TincanSpeakerIdentityPresentation {
@@ -50,6 +65,7 @@ struct TincanIOSRootView: View {
                 callStateDescription: callSession.callStateDescription,
                 isCallActive: callSession.isCallActive,
                 isTransitioning: callSession.isTransitioningCallState,
+                transitionPhase: callSession.transitionPhase,
                 callStartedAt: callSession.callStartedAt,
                 isMuted: callSession.isMuted,
                 isSpeakerEnabled: callSession.isSpeakerEnabled,
@@ -91,12 +107,21 @@ struct TincanMacRootView: View {
 
     @State private var isSettingsPresented = false
 
+    private var transitionPhase: TincanCallTransitionPhase {
+        guard callSession.isTransitioningCallState else { return .none }
+        if callSession.isCallActive || callSession.callStateDescription == "Ending" {
+            return .ending
+        }
+        return .starting
+    }
+
     var body: some View {
         TincanAppSurface(
             callState: TincanCallPresentationState(
                 callStateDescription: callSession.callStateDescription,
                 isCallActive: callSession.isCallActive,
                 isTransitioning: callSession.isTransitioningCallState,
+                transitionPhase: transitionPhase,
                 callStartedAt: callSession.callStartedAt,
                 isMuted: callSession.isMuted,
                 isSpeakerEnabled: callSession.isSpeakerEnabled,
@@ -173,6 +198,7 @@ private struct TincanAppSurface: View {
             } else {
                 TincanHomeScreen(
                     conversations: workspace.conversations,
+                    isLoadingConversations: workspace.isLoadingConversationList,
                     highlightedLiveUpdate: workspace.highlightedLiveUpdate,
                     callState: callState,
                     onOpenSettings: {
@@ -248,6 +274,7 @@ private struct TincanAppSurface: View {
 
 private struct TincanHomeScreen: View {
     let conversations: [TincanConversationSummary]
+    let isLoadingConversations: Bool
     let highlightedLiveUpdate: TincanHighlightedLiveUpdate?
     let callState: TincanCallPresentationState
     let onOpenSettings: () -> Void
@@ -331,7 +358,11 @@ private struct TincanHomeScreen: View {
             }
 
             if conversations.isEmpty {
-                TincanEmptyConversationsCard(isCallActive: callState.isCallActive)
+                if isLoadingConversations {
+                    TincanLoadingConversationsCard()
+                } else {
+                    TincanEmptyConversationsCard(isCallActive: callState.isCallActive)
+                }
             } else {
                 ForEach(remainingConversations) { conversation in
                     TincanConversationRow(
@@ -776,12 +807,15 @@ private struct TincanCallControlPanel: View {
         !callState.isCallActive && !callState.isTransitioning
     }
 
-    private var isStartingOrCanceling: Bool {
-        callState.isTransitioning && !callState.isCallActive
+    private var isStarting: Bool {
+        callState.isStartingTransition
     }
 
     private var accent: Color {
-        if callState.isTransitioning {
+        if callState.isEndingTransition {
+            return TincanPalette.callRed
+        }
+        if callState.isStartingTransition {
             return TincanTone.blue.accent
         }
         return callState.isCallActive ? TincanTone.mint.accent : TincanPalette.shellBorder
@@ -846,9 +880,9 @@ private struct TincanCallControlPanel: View {
                     )
 
                     TincanMiniControlButton(
-                        systemImage: isStartingOrCanceling ? "xmark" : "phone.down.fill",
-                        label: isStartingOrCanceling ? "cancel" : "end",
-                        tone: isStartingOrCanceling ? TincanTone.blue.accent : TincanPalette.callRed,
+                        systemImage: isStarting ? "xmark" : "phone.down.fill",
+                        label: isStarting ? "cancel" : "disconnect",
+                        tone: TincanPalette.callRed,
                         action: callActions.endCall
                     )
 
@@ -862,7 +896,7 @@ private struct TincanCallControlPanel: View {
                 }
 
                 Group {
-                    if isStartingOrCanceling {
+                    if callState.isTransitioning {
                         ProgressView()
                             .controlSize(.small)
                             .tint(accent)
@@ -885,7 +919,6 @@ private struct TincanCallControlPanel: View {
         )
         .frame(maxWidth: .infinity, alignment: .center)
         .fixedSize(horizontal: false, vertical: true)
-        .animation(.spring(response: 0.34, dampingFraction: 0.82), value: isIdle)
         .animation(.easeOut(duration: 0.18), value: callState.isMuted)
         .animation(.easeOut(duration: 0.18), value: callState.isSpeakerEnabled)
     }
@@ -1122,6 +1155,30 @@ private struct TincanEmptyConversationsCard: View {
     }
 }
 
+private struct TincanLoadingConversationsCard: View {
+    var body: some View {
+        HStack(spacing: 12) {
+            ProgressView()
+                .controlSize(.small)
+                .tint(TincanTone.blue.accent)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Loading conversations")
+                    .font(.system(size: 15, weight: .bold, design: .rounded))
+                    .foregroundStyle(TincanPalette.textPrimary)
+
+                Text("Fetching threads from the server.")
+                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .foregroundStyle(TincanPalette.textSecondary)
+            }
+
+            Spacer()
+        }
+        .padding(16)
+        .tincanCard(cornerRadius: 24)
+    }
+}
+
 private struct TincanTranscriptScreen: View {
     let conversation: TincanConversationSummary
     let messages: [TincanConversationMessage]
@@ -1201,14 +1258,20 @@ private struct TincanTranscriptHeader: View {
     }
 
     private var callStatusAccent: Color {
-        if callState.isTransitioning {
+        if callState.isEndingTransition {
+            return TincanPalette.callRed
+        }
+        if callState.isStartingTransition {
             return TincanTone.blue.accent
         }
         return callState.isCallActive ? TincanTone.mint.accent : TincanPalette.textMuted
     }
 
     private var callStatusLabel: String {
-        if callState.isTransitioning {
+        if callState.isEndingTransition {
+            return "ending"
+        }
+        if callState.isStartingTransition {
             return callState.callStateDescription.lowercased()
         }
         return callState.isCallActive ? "on call" : "idle"
@@ -1249,23 +1312,29 @@ private struct TincanTranscriptHeader: View {
 #if os(macOS)
                 TincanMacCallStage(callState: callState, callActions: callActions)
 #else
-                if callState.isCallActive {
+                if callState.isCallActive || callState.isTransitioning {
                     HStack(spacing: 10) {
+                        if callState.isCallActive {
+                            TincanMiniHeaderButton(
+                                systemImage: callState.isSpeakerEnabled ? "speaker.wave.2.fill" : "speaker.slash.fill",
+                                action: callActions.toggleSpeaker
+                            )
+                            TincanMiniHeaderButton(
+                                systemImage: callState.isMuted ? "mic.slash.fill" : "mic.fill",
+                                action: callActions.toggleMute
+                            )
+                        }
                         TincanMiniHeaderButton(
-                            systemImage: callState.isSpeakerEnabled ? "speaker.wave.2.fill" : "speaker.slash.fill",
-                            action: callActions.toggleSpeaker
+                            systemImage: callState.isStartingTransition ? "xmark" : "phone.down.fill",
+                            destructive: true,
+                            action: callActions.endCall
                         )
-                        TincanMiniHeaderButton(
-                            systemImage: callState.isMuted ? "mic.slash.fill" : "mic.fill",
-                            action: callActions.toggleMute
-                        )
-                        TincanMiniHeaderButton(systemImage: "phone.down.fill", destructive: true, action: callActions.endCall)
                     }
                 } else {
                     TincanToolbarButton(
-                        label: callState.isTransitioning ? "starting" : "call",
+                        label: "call",
                         systemImage: "phone.fill",
-                        tone: callState.isTransitioning ? TincanTone.blue.accent : TincanTone.mint.accent,
+                        tone: TincanTone.mint.accent,
                         foreground: TincanPalette.textOnAccent,
                         action: callActions.startCall
                     )
