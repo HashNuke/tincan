@@ -51,6 +51,39 @@ struct TincanCallActions {
     let resetSpeakerProfile: (() -> Void)?
 }
 
+private enum TincanScrollAnchor {
+    static let homeTop = "tincan-home-top"
+    static let transcriptTop = "tincan-transcript-top"
+}
+
+private enum TincanScrollSpace {
+    static let home = "tincan-home-scroll"
+    static let transcript = "tincan-transcript-scroll"
+}
+
+private struct TincanVerticalScrollOffsetPreferenceKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
+private struct TincanScrollOffsetReader: View {
+    let coordinateSpaceName: String
+
+    var body: some View {
+        GeometryReader { geometry in
+            Color.clear
+                .preference(
+                    key: TincanVerticalScrollOffsetPreferenceKey.self,
+                    value: geometry.frame(in: .named(coordinateSpaceName)).minY
+                )
+        }
+        .frame(height: 0)
+    }
+}
+
 #if os(iOS)
 struct TincanIOSRootView: View {
     @ObservedObject var callSession: CallSessionViewModel
@@ -282,6 +315,8 @@ private struct TincanHomeScreen: View {
     let onRefresh: () async -> Void
     let callActions: TincanCallActions
 
+    @State private var scrollOffset: CGFloat = 0
+
     private var featuredConversation: TincanConversationSummary? {
         if let current = conversations.first(where: \.isCurrentCallConversation) {
             return current
@@ -303,6 +338,10 @@ private struct TincanHomeScreen: View {
         let hasTranscript = !callState.lastServerTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         return hasTranscript
 #endif
+    }
+
+    private var shouldShowScrollToTopButton: Bool {
+        scrollOffset > 220
     }
 
     @ViewBuilder
@@ -382,31 +421,53 @@ private struct TincanHomeScreen: View {
 
     var body: some View {
 #if os(iOS)
-        ScrollView(showsIndicators: false) {
-            LazyVStack(alignment: .leading, spacing: 18, pinnedViews: [.sectionHeaders]) {
-                TincanHomeHeader(
-                    onOpenSettings: onOpenSettings
-                )
-                .padding(.top, 8)
+        ScrollViewReader { proxy in
+            ScrollView(showsIndicators: false) {
+                TincanScrollOffsetReader(coordinateSpaceName: TincanScrollSpace.home)
+                    .id(TincanScrollAnchor.homeTop)
 
-                Section {
-                    VStack(alignment: .leading, spacing: 18) {
-                        homeFeed
-                    }
-                } header: {
-                    TincanPinnedCallControlsHeader(
-                        callState: callState,
-                        callActions: callActions
+                LazyVStack(alignment: .leading, spacing: 18, pinnedViews: [.sectionHeaders]) {
+                    TincanHomeHeader(
+                        onOpenSettings: onOpenSettings
                     )
+                    .padding(.top, 8)
+
+                    Section {
+                        VStack(alignment: .leading, spacing: 18) {
+                            homeFeed
+                        }
+                    } header: {
+                        TincanPinnedCallControlsHeader(
+                            callState: callState,
+                            callActions: callActions
+                        )
+                    }
+                }
+                .padding(.bottom, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .coordinateSpace(name: TincanScrollSpace.home)
+            .onPreferenceChange(TincanVerticalScrollOffsetPreferenceKey.self) { value in
+                scrollOffset = max(0, -value)
+            }
+            .overlay(alignment: .bottomTrailing) {
+                if shouldShowScrollToTopButton {
+                    TincanScrollToTopButton {
+                        withAnimation(.easeInOut(duration: 0.24)) {
+                            proxy.scrollTo(TincanScrollAnchor.homeTop, anchor: .top)
+                        }
+                    }
+                    .padding(.trailing, 12)
+                    .padding(.bottom, 20)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
-            .padding(.bottom, 8)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .refreshable {
+                await onRefresh()
+            }
+            .animation(.easeOut(duration: 0.2), value: shouldShowScrollToTopButton)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
-        .refreshable {
-            await onRefresh()
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
 #else
         VStack(alignment: .leading, spacing: 18) {
             TincanMacCallTranscriptCard(
@@ -414,11 +475,33 @@ private struct TincanHomeScreen: View {
                 callActions: callActions
             )
 
-            ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 18) {
-                    homeFeed
+            ScrollViewReader { proxy in
+                ScrollView(showsIndicators: false) {
+                    TincanScrollOffsetReader(coordinateSpaceName: TincanScrollSpace.home)
+                        .id(TincanScrollAnchor.homeTop)
+
+                    VStack(alignment: .leading, spacing: 18) {
+                        homeFeed
+                    }
+                    .padding(.bottom, 24)
                 }
-                .padding(.bottom, 24)
+                .coordinateSpace(name: TincanScrollSpace.home)
+                .onPreferenceChange(TincanVerticalScrollOffsetPreferenceKey.self) { value in
+                    scrollOffset = max(0, -value)
+                }
+                .overlay(alignment: .bottomTrailing) {
+                    if shouldShowScrollToTopButton {
+                        TincanScrollToTopButton {
+                            withAnimation(.easeInOut(duration: 0.24)) {
+                                proxy.scrollTo(TincanScrollAnchor.homeTop, anchor: .top)
+                            }
+                        }
+                        .padding(.trailing, 14)
+                        .padding(.bottom, 18)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
+                }
+                .animation(.easeOut(duration: 0.2), value: shouldShowScrollToTopButton)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
@@ -1186,6 +1269,8 @@ private struct TincanTranscriptScreen: View {
     let callActions: TincanCallActions
     let onBack: () -> Void
 
+    @State private var scrollOffset: CGFloat = 0
+
     private var tone: TincanTone {
         tincanTone(for: conversation)
     }
@@ -1197,6 +1282,10 @@ private struct TincanTranscriptScreen: View {
             }
             return lhs.id < rhs.id
         }
+    }
+
+    private var shouldShowScrollToTopButton: Bool {
+        scrollOffset > 180
     }
 
     var body: some View {
@@ -1213,6 +1302,9 @@ private struct TincanTranscriptScreen: View {
 
             ScrollViewReader { proxy in
                 ScrollView(showsIndicators: false) {
+                    TincanScrollOffsetReader(coordinateSpaceName: TincanScrollSpace.transcript)
+                        .id(TincanScrollAnchor.transcriptTop)
+
                     LazyVStack(alignment: .leading, spacing: 14) {
                         if timelineMessages.isEmpty {
                             TincanEmptyTranscriptCard()
@@ -1225,6 +1317,23 @@ private struct TincanTranscriptScreen: View {
                     }
                     .padding(18)
                 }
+                .coordinateSpace(name: TincanScrollSpace.transcript)
+                .onPreferenceChange(TincanVerticalScrollOffsetPreferenceKey.self) { value in
+                    scrollOffset = max(0, -value)
+                }
+                .overlay(alignment: .bottomTrailing) {
+                    if shouldShowScrollToTopButton {
+                        TincanScrollToTopButton {
+                            withAnimation(.easeInOut(duration: 0.24)) {
+                                proxy.scrollTo(TincanScrollAnchor.transcriptTop, anchor: .top)
+                            }
+                        }
+                        .padding(.trailing, 18)
+                        .padding(.bottom, 18)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
+                }
+                .animation(.easeOut(duration: 0.2), value: shouldShowScrollToTopButton)
                 .onAppear {
                     scrollToLatest(proxy: proxy)
                 }
@@ -1354,6 +1463,30 @@ private struct TincanTranscriptHeader: View {
         }
         .padding(18)
         .background(TincanPalette.panelMuted.opacity(0.97))
+    }
+}
+
+private struct TincanScrollToTopButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "arrow.up")
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(TincanPalette.textPrimary)
+                .frame(width: 46, height: 46)
+                .background(
+                    Circle()
+                        .fill(TincanPalette.panelRaised.opacity(0.96))
+                        .overlay(
+                            Circle()
+                                .stroke(TincanTone.blue.accent.opacity(0.34), lineWidth: 1)
+                        )
+                )
+                .shadow(color: Color.black.opacity(0.22), radius: 16, x: 0, y: 8)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Scroll to top")
     }
 }
 
