@@ -31,6 +31,8 @@ func TestRenderRouterUserPrompt(t *testing.T) {
 		"Allowed actions:",
 		"Per-action fields:",
 		`"action": string`,
+		"immediate_feedback must be a short, audio-friendly, non-empty acknowledgement for every action except ignore and ask_clarifying_question.",
+		"If action is ask_clarifying_question and immediate_feedback is omitted or empty, put the spoken clarification question in message.",
 		`"Emma, do the iOS signing fix" => action=new_conversation, agent_profile="Emma", message="do the iOS signing fix"`,
 		`"Atlas, ask Hercules to run the date command" => action=new_conversation, agent_profile="Hercules", message="run the date command"`,
 		`"Atlas, what do you have from hercules#4" => action=read_conversation_update, conversation_handle="hercules#4"`,

@@ -24,15 +24,18 @@ Response schema:
 }
 
 Per-action fields:
-- new_conversation: required fields are action and agent_profile. Include message when the user already stated the work or question for that agent. Include conversation_title only when it adds a short, useful title. Include conversation_notes only when the stored notes should be fully replaced. Omit conversation_handle and immediate_feedback.
-- message: required fields are action and message. Include conversation_handle only when the user explicitly targets an existing conversation handle; otherwise omit it and let the current conversation handle be used. Omit agent_profile, conversation_title, conversation_notes, and immediate_feedback.
-- read_conversation_update: required field is action. Include conversation_handle when the user names a conversation handle; otherwise omit it only if the current conversation handle is clearly the target. Omit message, agent_profile, conversation_title, conversation_notes, and immediate_feedback.
-- switch_context: required fields are action and conversation_handle. Omit message, agent_profile, conversation_title, conversation_notes, and immediate_feedback.
-- ask_clarifying_question: required fields are action and immediate_feedback. Omit message, agent_profile, conversation_handle, conversation_title, and conversation_notes.
+- new_conversation: required fields are action, agent_profile, and immediate_feedback. Include message when the user already stated the work or question for that agent. Include conversation_title only when it adds a short, useful title. Include conversation_notes only when the stored notes should be fully replaced. Omit conversation_handle.
+- message: required fields are action, message, and immediate_feedback. Include conversation_handle only when the user explicitly targets an existing conversation handle; otherwise omit it and let the current conversation handle be used. Omit agent_profile, conversation_title, and conversation_notes.
+- read_conversation_update: required fields are action and immediate_feedback. Include conversation_handle when the user names a conversation handle; otherwise omit it only if the current conversation handle is clearly the target. Omit message, agent_profile, conversation_title, and conversation_notes.
+- switch_context: required fields are action, conversation_handle, and immediate_feedback. Omit message, agent_profile, conversation_title, and conversation_notes.
+- ask_clarifying_question: required fields are action and message. Use message for the clarification question the user should hear next. immediate_feedback is optional for this action and may be omitted or empty. Omit agent_profile, conversation_handle, conversation_title, and conversation_notes.
 - ignore: return only {"action":"ignore"}.
 
 Rules:
 - Return only the fields listed for the chosen action. Omit unused fields.
+- immediate_feedback must be a short, audio-friendly, non-empty acknowledgement for every action except ignore and ask_clarifying_question.
+- Never return an empty string for immediate_feedback on new_conversation, message, read_conversation_update, or switch_context.
+- If action is ask_clarifying_question and immediate_feedback is omitted or empty, put the spoken clarification question in message.
 - Only choose new_conversation when the user explicitly asks for a new chat/session/conversation and does not mention a conversation handle.
 - If the transcript starts by directly addressing a defined agent profile, treat that as a request to initiate a new conversation with that profile unless the user clearly asks to switch to an existing conversation handle instead.
 - If the transcript addresses or names an existing conversation handle and asks for status, progress, updates, what it has, or what happened, prefer read_conversation_update over message.
