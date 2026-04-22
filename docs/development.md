@@ -40,25 +40,42 @@ Notes:
 * `--force-model-downloads` redownloads the pinned models and Kitten G2P assets.
 * The app should pass a writable `--data-dir` to `tincan-server`; no writable server data is bundled in `BundledRuntime`.
 
-## Audio Harness
+## Call Shell
 
-Use `scripts/tincan_audio_harness.py` for prerecorded speech tests without talking into the microphone yourself.
+Use `scripts/tincan_call_shell.py` for prerecorded speech tests and interactive WebRTC call sessions without talking into the microphone yourself.
 
 Direct WebRTC send to `tincan-server`:
 
 ```bash
-uv run python scripts/tincan_audio_harness.py send /absolute/path/to/sample.wav
-uv run python scripts/tincan_audio_harness.py send sample.m4a --server http://127.0.0.1:55055 --repeat 3
+uv run python scripts/tincan_call_shell.py send /absolute/path/to/sample.wav
+uv run python scripts/tincan_call_shell.py send sample.m4a --server http://127.0.0.1:55055 --repeat 3
+```
+
+Interactive WebRTC shell:
+
+```bash
+uv run python scripts/tincan_call_shell.py interactive
+uv run python scripts/tincan_call_shell.py interactive --device "MacBook Pro Speakers"
+```
+
+Interactive commands:
+
+```text
+SAY Atlas, ask Emma to run the date command and tell me what day is today
+FILE /absolute/path/to/sample.wav
+HELP
+EXIT
 ```
 
 Loopback playback into a virtual device such as BlackHole:
 
 ```bash
-uv run python scripts/tincan_audio_harness.py devices
-uv run python scripts/tincan_audio_harness.py play sample.wav --device "BlackHole 2ch"
+uv run python scripts/tincan_call_shell.py devices
+uv run python scripts/tincan_call_shell.py play sample.wav --device "BlackHole 2ch"
 ```
 
 Notes:
 
 * `send` matches the current app transport: it sends `audio/wav` utterances over the `tincan` WebRTC data channel.
+* `interactive` keeps one WebRTC session open, treats bare text as `SAY`, uses macOS `say` for `SAY <text>`, and auto-plays `feedback_audio_url`, `play_audio`, and `notify` audio received from the server.
 * `play` is for end-to-end app testing. Point the Swift app's input device at the same loopback device so the app treats the playback as microphone input.

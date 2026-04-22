@@ -9,12 +9,14 @@ import contextlib
 import io
 import json
 import sys
+import tempfile
 import uuid
 import wave
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib import error as urlerror
+from urllib import parse as urlparse
 from urllib import request as urlrequest
 
 import av
@@ -34,6 +36,18 @@ class DecodedAudio:
     sample_rate: int
     channels: int
     duration_seconds: float
+
+
+@dataclass(frozen=True)
+class PlaybackJob:
+    url: str
+    description: str
+
+
+@dataclass(frozen=True)
+class NotificationPlaybackChoice:
+    text: str
+    audio_url: str | None
 
 
 class HarnessError(RuntimeError):
@@ -86,6 +100,52 @@ def parse_args() -> argparse.Namespace:
         "--verbose",
         action="store_true",
         help="Print connection state changes and non-result data channel traffic",
+    )
+
+    interactive_parser = subparsers.add_parser(
+        "interactive",
+        help="Keep a WebRTC session open and drive it with SAY/FILE commands from stdin",
+    )
+    interactive_parser.add_argument(
+        "--server",
+        default=DEFAULT_SERVER_URL,
+        help=f"tincan server base URL (default: {DEFAULT_SERVER_URL})",
+    )
+    interactive_parser.add_argument(
+        "--response-timeout",
+        type=float,
+        default=60.0,
+        help="Seconds to wait for each utterance_result",
+    )
+    interactive_parser.add_argument(
+        "--device",
+        help="Output device index or a case-insensitive substring of the output device name",
+    )
+    interactive_parser.add_argument(
+        "--sample-rate",
+        type=int,
+        default=PLAY_SAMPLE_RATE,
+        help=f"Playback output sample rate (default: {PLAY_SAMPLE_RATE})",
+    )
+    interactive_parser.add_argument(
+        "--stereo",
+        action="store_true",
+        help="Preserve stereo instead of downmixing to mono for received audio playback",
+    )
+    interactive_parser.add_argument(
+        "--volume",
+        type=float,
+        default=1.0,
+        help="Linear gain multiplier for received audio playback (default: 1.0)",
+    )
+    interactive_parser.add_argument(
+        "--voice",
+        help="Optional macOS say voice name for SAY commands",
+    )
+    interactive_parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Print connection state changes and raw non-result data channel traffic",
     )
 
     play_parser = subparsers.add_parser(
@@ -143,6 +203,29 @@ def ensure_existing_file(path: Path) -> Path:
 
 
 def decode_audio(path: Path, sample_rate: int, channels: int) -> DecodedAudio:
+    return decode_audio_input(
+        lambda: av.open(str(path)),
+        source_label=str(path),
+        sample_rate=sample_rate,
+        channels=channels,
+    )
+
+
+def decode_audio_bytes(audio_bytes: bytes, source_label: str, sample_rate: int, channels: int) -> DecodedAudio:
+    return decode_audio_input(
+        lambda: av.open(io.BytesIO(audio_bytes)),
+        source_label=source_label,
+        sample_rate=sample_rate,
+        channels=channels,
+    )
+
+
+def decode_audio_input(
+    open_container: Callable[[], Any],
+    source_label: str,
+    sample_rate: int,
+    channels: int,
+) -> DecodedAudio:
     if channels not in (1, 2):
         raise HarnessError(f"unsupported channel count: {channels}")
 
@@ -151,14 +234,14 @@ def decode_audio(path: Path, sample_rate: int, channels: int) -> DecodedAudio:
     total_samples = 0
 
     try:
-        container = av.open(str(path))
+        container = open_container()
     except Exception as exc:  # pragma: no cover - PyAV error types vary by codec
-        raise HarnessError(f"failed to open audio file {path}: {exc}") from exc
+        raise HarnessError(f"failed to open audio source {source_label}: {exc}") from exc
 
     try:
         stream = next((candidate for candidate in container.streams if candidate.type == "audio"), None)
         if stream is None:
-            raise HarnessError(f"no audio stream found in {path}")
+            raise HarnessError(f"no audio stream found in {source_label}")
 
         resampler = av.AudioResampler(format="s16", layout=layout, rate=sample_rate)
 
@@ -171,7 +254,7 @@ def decode_audio(path: Path, sample_rate: int, channels: int) -> DecodedAudio:
 
     pcm_s16 = b"".join(pcm_chunks)
     if not pcm_s16:
-        raise HarnessError(f"decoded audio was empty: {path}")
+        raise HarnessError(f"decoded audio was empty: {source_label}")
 
     duration_seconds = total_samples / sample_rate if total_samples else 0.0
     return DecodedAudio(
@@ -267,6 +350,25 @@ def device_label(index: int | None) -> str:
     return f"{index}: {sd.query_devices(index)['name']}"
 
 
+def text_value(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value)
+
+
+def http_bytes(url: str, timeout: float = 15.0) -> bytes:
+    request = urlrequest.Request(url, method="GET")
+    try:
+        with urlrequest.urlopen(request, timeout=timeout) as response:
+            return response.read()
+    except urlerror.HTTPError as exc:
+        response_body = exc.read().decode("utf-8", errors="replace").strip()
+        message = response_body or exc.reason
+        raise HarnessError(f"GET {url} failed with HTTP {exc.code}: {message}") from exc
+    except OSError as exc:
+        raise HarnessError(f"GET {url} failed: {exc}") from exc
+
+
 def http_json(method: str, url: str, payload: dict[str, Any] | None = None, timeout: float = 15.0) -> dict[str, Any]:
     headers = {"content-type": "application/json"} if payload is not None else {}
     body = json.dumps(payload).encode("utf-8") if payload is not None else None
@@ -322,6 +424,7 @@ class TincanWebRTCClient:
         self.peer_connection = RTCPeerConnection()
         self.data_channel = self.peer_connection.createDataChannel(TINCAN_CHANNEL_LABEL)
         self.data_channel_open = asyncio.Event()
+        self.event_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self.pending_results: dict[str, asyncio.Future[dict[str, Any]]] = {}
         self.session_id: str | None = None
         self._attach_peer_events()
@@ -448,6 +551,7 @@ class TincanWebRTCClient:
 
         if self.verbose:
             print(f"[webrtc] event {message_type}: {json.dumps(payload, ensure_ascii=False)}", file=sys.stderr)
+        self.event_queue.put_nowait(payload)
 
     def _fail_pending(self, exc: Exception) -> None:
         for future in self.pending_results.values():
@@ -476,7 +580,7 @@ async def run_send(args: argparse.Namespace) -> int:
                 response_timeout=args.response_timeout,
             )
 
-            transcript = str(response.get("text", "")).strip()
+            transcript = text_value(response.get("text")).strip()
             print(f"Transcript: {transcript or '(empty)'}")
             feedback_audio_url = response.get("feedback_audio_url")
             if feedback_audio_url:
@@ -495,6 +599,20 @@ async def run_send(args: argparse.Namespace) -> int:
     return 0
 
 
+def play_decoded_audio(decoded: DecodedAudio, output_device: int | None, volume: float) -> None:
+    pcm_s16 = scale_pcm_volume(decoded.pcm_s16, volume)
+    chunk_size_bytes = 4096 * decoded.channels * 2
+
+    with sd.RawOutputStream(
+        samplerate=decoded.sample_rate,
+        channels=decoded.channels,
+        dtype="int16",
+        device=output_device,
+    ) as output_stream:
+        for offset in range(0, len(pcm_s16), chunk_size_bytes):
+            output_stream.write(pcm_s16[offset : offset + chunk_size_bytes])
+
+
 async def run_play(args: argparse.Namespace) -> int:
     audio_paths = build_audio_sequence(args.audio, args.repeat)
     output_device = resolve_output_device(args.device)
@@ -506,25 +624,302 @@ async def run_play(args: argparse.Namespace) -> int:
 
     for index, audio_path in enumerate(audio_paths, start=1):
         decoded = decode_audio(audio_path, sample_rate=args.sample_rate, channels=channel_count)
-        pcm_s16 = scale_pcm_volume(decoded.pcm_s16, args.volume)
-        chunk_size_bytes = 4096 * decoded.channels * 2
 
         print(
             f"[{index}/{len(audio_paths)}] playing {audio_path} "
             f"({decoded.duration_seconds:.2f}s, {decoded.sample_rate} Hz, {decoded.channels} ch)"
         )
 
-        with sd.RawOutputStream(
-            samplerate=decoded.sample_rate,
-            channels=decoded.channels,
-            dtype="int16",
-            device=output_device,
-        ) as output_stream:
-            for offset in range(0, len(pcm_s16), chunk_size_bytes):
-                output_stream.write(pcm_s16[offset : offset + chunk_size_bytes])
+        play_decoded_audio(
+            DecodedAudio(
+                pcm_s16=scale_pcm_volume(decoded.pcm_s16, args.volume),
+                sample_rate=decoded.sample_rate,
+                channels=decoded.channels,
+                duration_seconds=decoded.duration_seconds,
+            ),
+            output_device=output_device,
+            volume=1.0,
+        )
 
         if index < len(audio_paths):
             await asyncio.sleep(args.gap)
+
+    return 0
+
+
+def resolve_server_audio_url(server_url: str, audio_url: str) -> str:
+    return urlparse.urljoin(server_url.rstrip("/") + "/", audio_url)
+
+
+def notification_playback_choice(
+    text: str,
+    audio_url: str | None,
+    summary_text: str | None,
+    summary_audio_url: str | None,
+    *,
+    is_audio_playing: bool,
+) -> NotificationPlaybackChoice:
+    trimmed_text = text.strip()
+    trimmed_summary_text = (summary_text or "").strip()
+    normalized_audio_url = audio_url or None
+    normalized_summary_audio_url = summary_audio_url or None
+
+    if not is_audio_playing and trimmed_summary_text:
+        return NotificationPlaybackChoice(
+            text=trimmed_summary_text,
+            audio_url=normalized_summary_audio_url or normalized_audio_url,
+        )
+
+    return NotificationPlaybackChoice(
+        text=trimmed_text or trimmed_summary_text,
+        audio_url=normalized_audio_url,
+    )
+
+
+class AudioPlaybackCoordinator:
+    def __init__(
+        self,
+        *,
+        server_url: str,
+        output_device: int | None,
+        sample_rate: int,
+        channels: int,
+        volume: float,
+    ) -> None:
+        self.server_url = server_url
+        self.output_device = output_device
+        self.sample_rate = sample_rate
+        self.channels = channels
+        self.volume = volume
+        self.queue: asyncio.Queue[PlaybackJob] = asyncio.Queue()
+        self._is_playing = False
+
+    @property
+    def is_audio_playing(self) -> bool:
+        return self._is_playing or not self.queue.empty()
+
+    async def enqueue(self, audio_url: str, description: str) -> None:
+        absolute_url = resolve_server_audio_url(self.server_url, audio_url)
+        await self.queue.put(PlaybackJob(url=absolute_url, description=description))
+
+    async def run(self) -> None:
+        while True:
+            job = await self.queue.get()
+            try:
+                self._is_playing = True
+                print(f"[playback] {job.description}")
+                audio_bytes = await asyncio.to_thread(http_bytes, job.url)
+                decoded = await asyncio.to_thread(
+                    decode_audio_bytes,
+                    audio_bytes,
+                    job.url,
+                    self.sample_rate,
+                    self.channels,
+                )
+                await asyncio.to_thread(
+                    play_decoded_audio,
+                    decoded,
+                    self.output_device,
+                    self.volume,
+                )
+            except Exception as exc:
+                print(f"[playback] failed for {job.url}: {exc}", file=sys.stderr)
+            finally:
+                self._is_playing = False
+                self.queue.task_done()
+
+
+def interactive_prompt() -> str | None:
+    try:
+        return input("tincan> ")
+    except EOFError:
+        return None
+
+
+def parse_interactive_command(line: str) -> tuple[str, str | None]:
+    stripped = line.strip()
+    if not stripped:
+        return "empty", None
+
+    command, separator, remainder = stripped.partition(" ")
+    normalized = command.casefold()
+    payload = remainder.strip() if separator else ""
+
+    if normalized in {"exit", "quit"}:
+        return "exit", None
+    if normalized in {"help", "?"}:
+        return "help", None
+    if normalized == "say":
+        return "say", payload
+    if normalized == "file":
+        return "file", payload
+    return "say", stripped
+
+
+async def synthesize_say_audio(text: str, destination_dir: Path, voice: str | None) -> Path:
+    if not text.strip():
+        raise HarnessError("SAY requires non-empty text")
+
+    output_path = destination_dir / f"{uuid.uuid4().hex}.aiff"
+    command = ["say", "-o", str(output_path)]
+    if voice:
+        command.extend(["-v", voice])
+    command.append(text)
+
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except FileNotFoundError as exc:
+        raise HarnessError("macOS 'say' command was not found") from exc
+
+    _, stderr = await process.communicate()
+    if process.returncode != 0:
+        message = stderr.decode("utf-8", errors="replace").strip()
+        raise HarnessError(message or f"'say' failed with exit code {process.returncode}")
+
+    return ensure_existing_file(output_path)
+
+
+async def consume_server_events(
+    client: TincanWebRTCClient,
+    playback: AudioPlaybackCoordinator,
+) -> None:
+    while True:
+        payload = await client.event_queue.get()
+        try:
+            message_type = text_value(payload.get("type")).strip() or "unknown"
+
+            if message_type == "play_audio":
+                text = text_value(payload.get("text")).strip()
+                audio_url = text_value(payload.get("url")).strip()
+                print(f"[event] play_audio: {text or audio_url or '(empty)'}")
+                if audio_url:
+                    await playback.enqueue(audio_url, f"play_audio: {text or audio_url}")
+                continue
+
+            if message_type == "notify":
+                text = text_value(payload.get("text")).strip()
+                audio_url = text_value(payload.get("audio_url")).strip()
+                summary_text = text_value(payload.get("summary_text")).strip()
+                summary_audio_url = text_value(payload.get("summary_audio_url")).strip()
+                choice = notification_playback_choice(
+                    text=text,
+                    audio_url=audio_url,
+                    summary_text=summary_text,
+                    summary_audio_url=summary_audio_url,
+                    is_audio_playing=playback.is_audio_playing,
+                )
+                print(f"[event] notify: {choice.text or text or '(empty)'}")
+                if choice.audio_url:
+                    await playback.enqueue(choice.audio_url, f"notify: {choice.text or choice.audio_url}")
+                continue
+
+            print(f"[event] {message_type}: {json.dumps(payload, ensure_ascii=False)}")
+        finally:
+            client.event_queue.task_done()
+
+
+async def send_audio_path(
+    client: TincanWebRTCClient,
+    playback: AudioPlaybackCoordinator,
+    audio_path: Path,
+    response_timeout: float,
+) -> None:
+    decoded = decode_audio(audio_path, sample_rate=SEND_SAMPLE_RATE, channels=1)
+    wav_bytes = pcm_to_wav_bytes(decoded.pcm_s16, decoded.sample_rate, decoded.channels)
+
+    print(
+        f"Sending {audio_path} "
+        f"({decoded.duration_seconds:.2f}s, {len(wav_bytes)} bytes wav)"
+    )
+    response = await client.send_utterance(wav_bytes=wav_bytes, response_timeout=response_timeout)
+
+    transcript = text_value(response.get("text")).strip()
+    print(f"Transcript: {transcript or '(empty)'}")
+
+    feedback_audio_url = text_value(response.get("feedback_audio_url")).strip()
+    if feedback_audio_url:
+        print(f"Feedback audio: {feedback_audio_url}")
+        await playback.enqueue(
+            feedback_audio_url,
+            f"feedback: {transcript or feedback_audio_url}",
+        )
+
+
+async def run_interactive(args: argparse.Namespace) -> int:
+    client = TincanWebRTCClient(args.server, verbose=args.verbose)
+    output_device = resolve_output_device(args.device)
+    playback = AudioPlaybackCoordinator(
+        server_url=args.server,
+        output_device=output_device,
+        sample_rate=args.sample_rate,
+        channels=2 if args.stereo else 1,
+        volume=args.volume,
+    )
+
+    playback_task: asyncio.Task[None] | None = None
+    event_task: asyncio.Task[None] | None = None
+
+    await client.connect()
+    print(f"Connected to {args.server} with session {client.session_id}")
+    print(f"Playback output: {device_label(output_device)}")
+    print("Commands: SAY <text>, FILE <path>, HELP, EXIT")
+    print("Bare text is treated as SAY.")
+
+    try:
+        playback_task = asyncio.create_task(playback.run())
+        event_task = asyncio.create_task(consume_server_events(client, playback))
+
+        with tempfile.TemporaryDirectory(prefix="tincan-audio-harness-") as temp_dir:
+            temp_dir_path = Path(temp_dir)
+
+            while True:
+                line = await asyncio.to_thread(interactive_prompt)
+                if line is None:
+                    print("EOF received. Closing session.")
+                    break
+
+                command, payload = parse_interactive_command(line)
+                if command == "empty":
+                    continue
+                if command == "help":
+                    print("Commands: SAY <text>, FILE <path>, HELP, EXIT")
+                    print("Bare text is treated as SAY.")
+                    continue
+                if command == "exit":
+                    break
+
+                try:
+                    if command == "say":
+                        audio_path = await synthesize_say_audio(payload or "", temp_dir_path, args.voice)
+                    elif command == "file":
+                        if not payload:
+                            raise HarnessError("FILE requires a path")
+                        audio_path = ensure_existing_file(Path(payload))
+                    else:
+                        raise HarnessError(f"unsupported interactive command: {command}")
+
+                    await send_audio_path(
+                        client=client,
+                        playback=playback,
+                        audio_path=audio_path,
+                        response_timeout=args.response_timeout,
+                    )
+                except HarnessError as exc:
+                    print(f"error: {exc}", file=sys.stderr)
+    finally:
+        if event_task is not None:
+            event_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await event_task
+        if playback_task is not None:
+            playback_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await playback_task
+        await client.close()
 
     return 0
 
@@ -547,6 +942,8 @@ async def async_main() -> int:
         return 0
     if args.command == "send":
         return await run_send(args)
+    if args.command == "interactive":
+        return await run_interactive(args)
     if args.command == "play":
         return await run_play(args)
     raise HarnessError(f"unsupported command: {args.command}")
