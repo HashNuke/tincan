@@ -297,10 +297,9 @@ final class MacOnboardingViewModel: ObservableObject {
             return GeneratedAgentBackend(
                 type: backend.configBackendType,
                 options: GeneratedAgentBackendOptions(
-                    connectionType: "server",
+                    connectionType: "command",
                     model: model,
                     modelVariant: "medium",
-                    baseURL: "http://127.0.0.1:4096",
                     agent: "build",
                     extraArgs: []
                 )
@@ -426,7 +425,6 @@ private struct GeneratedAgentBackendOptions: Encodable {
     let connectionType: String
     let model: String
     let modelVariant: String
-    let baseURL: String
     let agent: String
     let extraArgs: [String]
 }

@@ -15,7 +15,6 @@ type AgentBackendOptions struct {
 	ConnectionType string   `json:"connection_type,omitempty"`
 	Model          string   `json:"model,omitempty"`
 	ModelVariant   string   `json:"model_variant,omitempty"`
-	BaseURL        string   `json:"base_url,omitempty"`
 	Agent          string   `json:"agent,omitempty"`
 	ExtraArgs      []string `json:"extra_args,omitempty"`
 }
