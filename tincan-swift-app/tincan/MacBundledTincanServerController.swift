@@ -272,6 +272,19 @@ final class MacBundledTincanServerController {
     func startIfNeeded() async {
         prepareStartupLoggingIfNeeded()
 
+        do {
+            let repairResult = try LocalAgentBackendConfigRepair.repairOpencodeBackendsForLocalServer(
+                at: AppPaths.generatedAgentBackendsURL
+            )
+            if repairResult.didRepair {
+                writeStartupLog(
+                    "repaired local opencode backend config for bundled server launch: \(repairResult.repairedBackendNames.joined(separator: ", "))"
+                )
+            }
+        } catch {
+            writeStartupLog("failed to repair local agent backend config: \(error.localizedDescription)")
+        }
+
         if process?.isRunning == true {
             do {
                 try await waitUntilReachable(timeout: 10)

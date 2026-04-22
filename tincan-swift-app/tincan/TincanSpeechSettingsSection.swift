@@ -16,11 +16,15 @@ struct TincanSpeechSettingsSection: View {
 
 struct TincanSpeechPageContent: View {
     @ObservedObject var speechSettings: TincanSpeechSettingsStore
+    var showsPageCardTitle: Bool = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             TincanSpeechSettingsLocalNote(speechSettings: speechSettings)
-            TincanSpeechModelsSettingsCard(speechSettings: speechSettings)
+            TincanSpeechModelsSettingsCard(
+                speechSettings: speechSettings,
+                showsPageCardTitle: showsPageCardTitle
+            )
             TincanSpeechSettingsActionsCard(speechSettings: speechSettings)
         }
     }
@@ -28,11 +32,15 @@ struct TincanSpeechPageContent: View {
 
 struct TincanServicesPageContent: View {
     @ObservedObject var speechSettings: TincanSpeechSettingsStore
+    var showsPageCardTitle: Bool = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             TincanSpeechSettingsLocalNote(speechSettings: speechSettings)
-            TincanSpeechServicesSettingsCard(speechSettings: speechSettings)
+            TincanSpeechServicesSettingsCard(
+                speechSettings: speechSettings,
+                showsPageCardTitle: showsPageCardTitle
+            )
             TincanSpeechSettingsActionsCard(speechSettings: speechSettings)
         }
     }
@@ -52,10 +60,11 @@ private struct TincanSpeechSettingsLocalNote: View {
 
 private struct TincanSpeechModelsSettingsCard: View {
     @ObservedObject var speechSettings: TincanSpeechSettingsStore
+    var showsPageCardTitle: Bool = true
 
     var body: some View {
         TincanSettingsSectionCard(
-            title: "Speech services",
+            title: showsPageCardTitle ? "Speech services" : nil,
             subtitle: "macOS-only. Pick the active STT and TTS providers for the bundled Mac server."
         ) {
             VStack(alignment: .leading, spacing: 16) {
@@ -91,11 +100,12 @@ private struct TincanSpeechModelsSettingsCard: View {
 
 private struct TincanSpeechServicesSettingsCard: View {
     @ObservedObject var speechSettings: TincanSpeechSettingsStore
+    var showsPageCardTitle: Bool = true
     @State private var isGrokExpanded = true
 
     var body: some View {
         TincanSettingsSectionCard(
-            title: "Services",
+            title: showsPageCardTitle ? "Services" : nil,
             subtitle: "Toggle providers, manage non-secret endpoints, and store credentials locally in Keychain."
         ) {
             VStack(alignment: .leading, spacing: 16) {

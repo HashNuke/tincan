@@ -240,15 +240,17 @@ struct TincanServerModeChip: View {
 }
 
 struct TincanSettingsSectionCard<Content: View>: View {
-    let title: String
+    var title: String? = nil
     var subtitle: String? = nil
     @ViewBuilder let content: Content
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text(title)
-                .font(.system(size: 17, weight: .bold, design: .rounded))
-                .foregroundStyle(TincanPalette.textPrimary)
+            if let title, !title.isEmpty {
+                Text(title)
+                    .font(.system(size: 17, weight: .bold, design: .rounded))
+                    .foregroundStyle(TincanPalette.textPrimary)
+            }
 
             if let subtitle, !subtitle.isEmpty {
                 Text(subtitle)

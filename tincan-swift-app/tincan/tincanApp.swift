@@ -21,5 +21,16 @@ struct tincanApp: App {
 #if os(macOS)
         .windowStyle(.hiddenTitleBar)
 #endif
+
+#if os(macOS)
+        Settings {
+            TincanMacSettingsWindow(
+                callSession: appModel.macCallSession,
+                speechSettings: appModel.macSpeechSettings,
+                workspace: appModel.workspace,
+                serverSettings: appModel.serverSettings
+            )
+        }
+#endif
     }
 }

@@ -22,6 +22,7 @@ final class TincanWorkspaceStore: ObservableObject {
     @Published private(set) var agentBackends: [TincanAgentBackend] = []
     @Published private(set) var agentProfiles: [TincanAgentProfile] = []
     @Published private(set) var highlightedLiveUpdate: TincanHighlightedLiveUpdate?
+    @Published private(set) var conversationListError: String?
     @Published private(set) var lastSyncError: String?
     @Published private(set) var lastRefreshAt: Date?
     @Published private(set) var isRefreshing = false
@@ -110,7 +111,11 @@ final class TincanWorkspaceStore: ObservableObject {
 
     private func reloadForConnectionChange() async {
         highlightedLiveUpdate = nil
+        conversationListError = nil
         lastSyncError = nil
+        conversations = []
+        agentBackends = []
+        agentProfiles = []
         selectedConversationID = nil
         conversationMessages = [:]
         unreadConversationIDs.removeAll()
@@ -123,12 +128,16 @@ final class TincanWorkspaceStore: ObservableObject {
     private func refreshData(resetSelection: Bool) async {
         isLoadingConversationList = conversations.isEmpty
         defer { isLoadingConversationList = false }
+        conversationListError = nil
 
         guard let baseURL = serverSettings.serverBaseURL else {
             conversations = []
             agentBackends = []
             agentProfiles = []
-            lastSyncError = "Connection target is incomplete."
+            let message = "Connection target is incomplete."
+            conversationListError = message
+            lastSyncError = message
+            disconnectLiveUpdates(reason: message)
             return
         }
 
@@ -141,21 +150,19 @@ final class TincanWorkspaceStore: ObservableObject {
         do {
             conversations = try await client.listConversations()
         } catch {
-            conversations = []
+            conversationListError = error.localizedDescription
             failures.append("Conversations: \(error.localizedDescription)")
         }
 
         do {
             agentBackends = try await client.listAgentBackends()
         } catch {
-            agentBackends = []
             failures.append("Backends: \(error.localizedDescription)")
         }
 
         do {
             agentProfiles = try await client.listAgentProfiles()
         } catch {
-            agentProfiles = []
             failures.append("Profiles: \(error.localizedDescription)")
         }
 
@@ -168,7 +175,14 @@ final class TincanWorkspaceStore: ObservableObject {
         lastSyncError = failures.isEmpty ? nil : failures.joined(separator: "\n")
 
         await serverSettings.refreshHealth()
-        restartLiveUpdates()
+        switch serverSettings.healthStatus {
+        case .connected:
+            restartLiveUpdates()
+        case .unreachable(let message, _):
+            disconnectLiveUpdates(reason: message)
+        case .idle, .checking:
+            stopLiveUpdates()
+        }
     }
 
     private func restartLiveUpdates() {
@@ -214,6 +228,14 @@ final class TincanWorkspaceStore: ObservableObject {
     }
 
     private func stopLiveUpdates() {
+        resetLiveUpdates(status: .idle)
+    }
+
+    private func disconnectLiveUpdates(reason: String) {
+        resetLiveUpdates(status: .disconnected(reason))
+    }
+
+    private func resetLiveUpdates(status: LiveConnectionStatus) {
         liveConnectionGeneration &+= 1
         liveReconnectTask?.cancel()
         liveReconnectTask = nil
@@ -225,7 +247,7 @@ final class TincanWorkspaceStore: ObservableObject {
             liveWebSocketTask.cancel(with: .goingAway, reason: nil)
         }
         liveWebSocketTask = nil
-        liveConnectionStatus = .idle
+        liveConnectionStatus = status
     }
 
     private func scheduleLiveReconnect(after delaySeconds: TimeInterval, generation: UInt64) {
@@ -238,7 +260,18 @@ final class TincanWorkspaceStore: ObservableObject {
             }
             guard !Task.isCancelled else { return }
             guard generation == liveConnectionGeneration else { return }
-            restartLiveUpdates()
+            await serverSettings.refreshHealth()
+            guard !Task.isCancelled else { return }
+            guard generation == liveConnectionGeneration else { return }
+
+            switch serverSettings.healthStatus {
+            case .connected:
+                restartLiveUpdates()
+            case .unreachable(let message, _):
+                disconnectLiveUpdates(reason: message)
+            case .idle, .checking:
+                stopLiveUpdates()
+            }
         }
     }
 

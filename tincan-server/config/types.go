@@ -13,6 +13,7 @@ type AgentBackendDefinition struct {
 
 type AgentBackendOptions struct {
 	ConnectionType string   `json:"connection_type,omitempty"`
+	ExecutablePath string   `json:"executable_path,omitempty"`
 	Model          string   `json:"model,omitempty"`
 	ModelVariant   string   `json:"model_variant,omitempty"`
 	Agent          string   `json:"agent,omitempty"`

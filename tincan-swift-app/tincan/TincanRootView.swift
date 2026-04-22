@@ -90,6 +90,9 @@ struct TincanIOSRootView: View {
             ),
             workspace: workspace,
             serverSettings: serverSettings,
+            onOpenSettings: {
+                isSettingsPresented = true
+            },
             settingsTitle: "Settings",
             allowSettingsEditing: false,
             isSettingsPresented: $isSettingsPresented
@@ -109,8 +112,6 @@ struct TincanMacRootView: View {
     @ObservedObject var speechSettings: TincanSpeechSettingsStore
     @ObservedObject var workspace: TincanWorkspaceStore
     @ObservedObject var serverSettings: ServerConnectionStore
-
-    @State private var isSettingsPresented = false
 
     private var transitionPhase: TincanCallTransitionPhase {
         guard callSession.isTransitioningCallState else { return .none }
@@ -152,9 +153,10 @@ struct TincanMacRootView: View {
             speechSettings: speechSettings,
             workspace: workspace,
             serverSettings: serverSettings,
+            onOpenSettings: {},
             settingsTitle: "Settings",
             allowSettingsEditing: true,
-            isSettingsPresented: $isSettingsPresented
+            isSettingsPresented: .constant(false)
         )
         .frame(minWidth: 880, minHeight: 680)
         .task {
@@ -174,6 +176,7 @@ private struct TincanAppSurface: View {
 #endif
     @ObservedObject var workspace: TincanWorkspaceStore
     @ObservedObject var serverSettings: ServerConnectionStore
+    let onOpenSettings: () -> Void
     let settingsTitle: String
     let allowSettingsEditing: Bool
     @Binding var isSettingsPresented: Bool
@@ -204,11 +207,10 @@ private struct TincanAppSurface: View {
                 TincanHomeScreen(
                     conversations: workspace.conversations,
                     isLoadingConversations: workspace.isLoadingConversationList,
+                    conversationListError: workspace.conversationListError,
                     highlightedLiveUpdate: workspace.highlightedLiveUpdate,
                     callState: callState,
-                    onOpenSettings: {
-                        isSettingsPresented = true
-                    },
+                    onOpenSettings: onOpenSettings,
                     onOpenTranscript: { conversation in
                         withAnimation(.easeInOut(duration: 0.2)) {
                             workspace.openConversation(conversation.id)
@@ -229,39 +231,8 @@ private struct TincanAppSurface: View {
 #endif
             }
         }
-#if os(macOS)
-        .overlay(alignment: .topTrailing) {
-            if selectedConversation == nil {
-                TincanIconButton(
-                    systemImage: "gearshape.fill",
-                    tone: TincanPalette.panelRaised,
-                    iconSize: 11,
-                    diameter: 32,
-                    action: {
-                        isSettingsPresented = true
-                    }
-                )
-                .padding(.top, 8)
-                .padding(.trailing, 18)
-                .ignoresSafeArea(.container, edges: .top)
-            }
-        }
-#endif
+#if os(iOS)
         .sheet(isPresented: $isSettingsPresented) {
-#if os(macOS)
-            TincanSettingsScreen(
-                workspace: workspace,
-                serverSettings: serverSettings,
-                speechSettings: speechSettings,
-                callState: callState,
-                title: settingsTitle,
-                allowEditing: allowSettingsEditing,
-                onDismiss: {
-                    isSettingsPresented = false
-                }
-            )
-            .frame(minWidth: 760, minHeight: 620)
-#else
             TincanSettingsScreen(
                 workspace: workspace,
                 serverSettings: serverSettings,
@@ -272,14 +243,15 @@ private struct TincanAppSurface: View {
                     isSettingsPresented = false
                 }
             )
-#endif
         }
+#endif
     }
 }
 
 private struct TincanHomeScreen: View {
     let conversations: [TincanConversationSummary]
     let isLoadingConversations: Bool
+    let conversationListError: String?
     let highlightedLiveUpdate: TincanHighlightedLiveUpdate?
     let callState: TincanCallPresentationState
     let onOpenSettings: () -> Void
@@ -371,6 +343,11 @@ private struct TincanHomeScreen: View {
             if conversations.isEmpty {
                 if isLoadingConversations {
                     TincanLoadingConversationsCard()
+                } else if let conversationListError, !conversationListError.isEmpty {
+                    TincanConnectionFailureCard(
+                        message: conversationListError,
+                        onRetry: onRefresh
+                    )
                 } else {
                     TincanEmptyConversationsCard(isCallActive: callState.isCallActive)
                 }
@@ -1214,6 +1191,61 @@ private struct TincanEmptyConversationsCard: View {
     }
 }
 
+private struct TincanConnectionFailureCard: View {
+    let message: String
+    let onRetry: () async -> Void
+
+    @State private var isRetrying = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Can't reach server")
+                .font(.system(size: 15, weight: .bold, design: .rounded))
+                .foregroundStyle(TincanPalette.textPrimary)
+
+            Text("Connection to the server failed. Check that the server is running, then retry.")
+                .font(.system(size: 13, weight: .medium, design: .rounded))
+                .foregroundStyle(TincanPalette.textSecondary)
+
+            Text(message)
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .foregroundStyle(TincanTone.coral.accent)
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(TincanTone.coral.tint.opacity(0.52))
+                )
+
+            Button {
+                guard !isRetrying else { return }
+                isRetrying = true
+
+                Task {
+                    await onRetry()
+                    await MainActor.run {
+                        isRetrying = false
+                    }
+                }
+            } label: {
+                Text(isRetrying ? "Retrying..." : "Retry connection")
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundStyle(TincanPalette.textPrimary)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(
+                        Capsule(style: .continuous)
+                            .fill(TincanPalette.panelRaised)
+                    )
+            }
+            .buttonStyle(.plain)
+            .disabled(isRetrying)
+        }
+        .padding(16)
+        .tincanCard(cornerRadius: 24)
+    }
+}
+
 private struct TincanLoadingConversationsCard: View {
     var body: some View {
         HStack(spacing: 12) {
@@ -1587,74 +1619,147 @@ private enum TincanSettingsDestination: String, CaseIterable, Hashable, Identifi
     }
 }
 
+#if os(iOS)
 private struct TincanSettingsScreen: View {
+    @ObservedObject var workspace: TincanWorkspaceStore
+    @ObservedObject var serverSettings: ServerConnectionStore
+    let callState: TincanCallPresentationState
+    let title: String
+    let allowEditing: Bool
+    let onDismiss: () -> Void
+
+    var body: some View {
+        TincanCanvas {
+            NavigationStack {
+                List(TincanSettingsDestination.allCases) { destination in
+                    NavigationLink(value: destination) {
+                        TincanSettingsSidebarRow(destination: destination)
+                    }
+                }
+                .listStyle(.insetGrouped)
+                .scrollContentBackground(.hidden)
+                .background(Color.clear)
+                .navigationTitle(title)
+                .navigationBarTitleDisplayMode(.inline)
+                .navigationDestination(for: TincanSettingsDestination.self) { destination in
+                    TincanSettingsPageLayout {
+                        TincanSettingsDestinationContent(
+                            destination: destination,
+                            workspace: workspace,
+                            serverSettings: serverSettings,
+                            callState: callState,
+                            allowEditing: allowEditing
+                        )
+                    }
+                    .navigationTitle(destination.title)
+                    .navigationBarTitleDisplayMode(.inline)
+                }
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Done", action: onDismiss)
+                    }
+                }
+            }
+        }
+    }
+}
+#endif
+
+#if os(macOS)
+struct TincanMacSettingsWindow: View {
+    @ObservedObject var callSession: MacCallSessionViewModel
+    @ObservedObject var speechSettings: TincanSpeechSettingsStore
+    @ObservedObject var workspace: TincanWorkspaceStore
+    @ObservedObject var serverSettings: ServerConnectionStore
+    @State private var selectedDestination: TincanSettingsDestination? = .connectPhone
+
+    private var transitionPhase: TincanCallTransitionPhase {
+        guard callSession.isTransitioningCallState else { return .none }
+        if callSession.isCallActive || callSession.callStateDescription == "Ending" {
+            return .ending
+        }
+        return .starting
+    }
+
+    private var callState: TincanCallPresentationState {
+        TincanCallPresentationState(
+            callStateDescription: callSession.callStateDescription,
+            isCallActive: callSession.isCallActive,
+            isTransitioning: callSession.isTransitioningCallState,
+            transitionPhase: transitionPhase,
+            callStartedAt: callSession.callStartedAt,
+            isMuted: callSession.isMuted,
+            isSpeakerEnabled: callSession.isSpeakerEnabled,
+            inputLevelHistory: callSession.inputLevelHistory,
+            lastLocalTranscript: callSession.lastLocalTranscript,
+            lastServerTranscript: callSession.lastServerTranscript,
+            logLines: callSession.logLines,
+            speakerIdentity: TincanSpeakerIdentityPresentation(
+                phase: callSession.speakerIdentityPhase,
+                title: speakerIdentityTitle(for: callSession.speakerIdentityPhase),
+                description: callSession.identityStatusDescription,
+                detail: callSession.ownerProfileDescription
+            )
+        )
+    }
+
+    var body: some View {
+        NavigationSplitView {
+            List(TincanSettingsDestination.allCases, selection: $selectedDestination) { destination in
+                TincanSettingsSidebarRow(destination: destination)
+                    .tag(destination)
+            }
+            .navigationTitle("Settings")
+            .frame(minWidth: 220)
+        } detail: {
+            Group {
+                if let selectedDestination {
+                    TincanSettingsPageLayout {
+                        TincanSettingsDetailHeading(title: selectedDestination.title)
+                        TincanSettingsDestinationContent(
+                            destination: selectedDestination,
+                            workspace: workspace,
+                            serverSettings: serverSettings,
+                            speechSettings: speechSettings,
+                            callState: callState,
+                            allowEditing: true,
+                            showsPageCardTitle: false
+                        )
+                    }
+                } else {
+                    TincanSettingsPageLayout {
+                        TincanSettingsSelectionPlaceholder()
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+        .navigationSplitViewStyle(.balanced)
+        .frame(minWidth: 880, minHeight: 620)
+        .task(id: serverSettings.connectionRevision) {
+            await speechSettings.load()
+        }
+    }
+}
+#endif
+
+private struct TincanSettingsDestinationContent: View {
+    let destination: TincanSettingsDestination
     @ObservedObject var workspace: TincanWorkspaceStore
     @ObservedObject var serverSettings: ServerConnectionStore
 #if os(macOS)
     @ObservedObject var speechSettings: TincanSpeechSettingsStore
 #endif
     let callState: TincanCallPresentationState
-    let title: String
     let allowEditing: Bool
-    let onDismiss: () -> Void
-    @State private var selectedDestination: TincanSettingsDestination?
-
-    var body: some View {
-        TincanCanvas {
-            NavigationSplitView {
-                List(TincanSettingsDestination.allCases, selection: $selectedDestination) { destination in
-                    NavigationLink(value: destination) {
-                        TincanSettingsSidebarRow(destination: destination)
-                    }
-                }
-                .listStyle(.sidebar)
-                .scrollContentBackground(.hidden)
-                .background(TincanPalette.panelMuted.opacity(0.72))
-                .navigationTitle(title)
-#if os(iOS)
-                .navigationBarTitleDisplayMode(.inline)
-#endif
-            } detail: {
-                Group {
-                    if let selectedDestination {
-                        TincanSettingsPageLayout {
-                            settingsContent(for: selectedDestination)
-                        }
-                    } else {
-                        TincanSettingsPageLayout {
-                            TincanSettingsSelectionPlaceholder()
-                        }
-                    }
-                }
-                .navigationTitle(selectedDestination?.title ?? title)
-#if os(iOS)
-                .navigationBarTitleDisplayMode(.inline)
-#endif
-            }
-        }
-        .toolbar {
-            ToolbarItem(placement: .cancellationAction) {
-                Button("Done", action: onDismiss)
-            }
-        }
-#if os(macOS)
-        .task(id: serverSettings.connectionRevision) {
-            await speechSettings.load()
-        }
-        .task {
-            if selectedDestination == nil {
-                selectedDestination = .connectPhone
-            }
-        }
-#endif
-    }
+    var showsPageCardTitle: Bool = true
 
     @ViewBuilder
-    private func settingsContent(for destination: TincanSettingsDestination) -> some View {
+    var body: some View {
         switch destination {
         case .connectPhone:
             TincanServerSettingsSection(
-                title: "Connect phone",
+                title: showsPageCardTitle ? "Connect phone" : nil,
                 subtitle: "Share the bundled Mac server with your phone or point the app at a remote server.",
                 serverSettings: serverSettings,
                 onApplyConnection: {
@@ -1674,7 +1779,7 @@ private struct TincanSettingsScreen: View {
 
         case .agentBackends:
             TincanSettingsSectionCard(
-                title: "Agent backends",
+                title: showsPageCardTitle ? "Agent backends" : nil,
                 subtitle: allowEditing ? "Server-backed. Editing can be layered on top of this list next." : "Read-only on iPhone."
             ) {
                 VStack(spacing: 10) {
@@ -1690,7 +1795,7 @@ private struct TincanSettingsScreen: View {
 
         case .agentServices:
             TincanSettingsSectionCard(
-                title: "Agent services",
+                title: showsPageCardTitle ? "Agent services" : nil,
                 subtitle: allowEditing ? "Server-backed routing profiles for conversations." : "Read-only on iPhone."
             ) {
                 VStack(spacing: 10) {
@@ -1706,7 +1811,10 @@ private struct TincanSettingsScreen: View {
 
         case .speech:
 #if os(macOS)
-            TincanSpeechPageContent(speechSettings: speechSettings)
+            TincanSpeechPageContent(
+                speechSettings: speechSettings,
+                showsPageCardTitle: showsPageCardTitle
+            )
 #else
             TincanSettingsUnavailableCard(
                 title: "Speech",
@@ -1716,7 +1824,10 @@ private struct TincanSettingsScreen: View {
 
         case .services:
 #if os(macOS)
-            TincanServicesPageContent(speechSettings: speechSettings)
+            TincanServicesPageContent(
+                speechSettings: speechSettings,
+                showsPageCardTitle: showsPageCardTitle
+            )
 #else
             TincanSettingsUnavailableCard(
                 title: "Services",
@@ -1725,7 +1836,7 @@ private struct TincanSettingsScreen: View {
 #endif
 
         case .diagnostics:
-            TincanSettingsSectionCard(title: "Diagnostics") {
+            TincanSettingsSectionCard(title: showsPageCardTitle ? "Diagnostics" : nil) {
                 VStack(alignment: .leading, spacing: 12) {
                     TincanSettingsValueRow(label: "Call", value: callState.callStateDescription)
                     TincanSettingsValueRow(label: "Live", value: liveSummary(workspace.liveConnectionStatus))
@@ -1796,6 +1907,17 @@ private struct TincanSettingsSidebarRow: View {
     }
 }
 
+private struct TincanSettingsDetailHeading: View {
+    let title: String
+
+    var body: some View {
+        Text(title)
+            .font(.system(size: 28, weight: .bold, design: .rounded))
+            .foregroundStyle(TincanPalette.textPrimary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
 private struct TincanSettingsPageLayout<Content: View>: View {
     @ViewBuilder let content: Content
 
@@ -1844,7 +1966,7 @@ private struct TincanSettingsUnavailableCard: View {
 }
 
 private struct TincanServerSettingsSection: View {
-    let title: String
+    var title: String? = nil
     var subtitle: String? = nil
     @ObservedObject var serverSettings: ServerConnectionStore
     let onApplyConnection: () -> Void
