@@ -166,8 +166,14 @@ final class CallSessionViewModel: ObservableObject {
 
     func toggleSpeakerEnabled() {
         isSpeakerEnabled.toggle()
-        appendLog(isSpeakerEnabled ? "Enabled tincan audio playback" : "Disabled tincan audio playback")
-        sessionClient?.setRemoteAudioEnabled(isSpeakerEnabled)
+
+        do {
+            try applyPreferredSpeakerRoute()
+            appendLog(isSpeakerEnabled ? "Routed call audio to speaker" : "Routed call audio to receiver")
+        } catch {
+            isSpeakerEnabled.toggle()
+            appendLog("Failed to switch audio output: \(error.localizedDescription)")
+        }
     }
 }
 
@@ -195,7 +201,8 @@ extension CallSessionViewModel: CallKitControllerDelegate {
                 let sid = try await client.registerSession()
                 sessionID = sid
                 sessionClient = client
-                client.setRemoteAudioEnabled(isSpeakerEnabled)
+                client.setRemoteAudioEnabled(true)
+                try applyPreferredSpeakerRoute()
                 isTransportRecovering = false
                 shouldPlayDisconnectToneOnDeactivate = true
                 appendLog("Session registered: \(sid)")
@@ -303,6 +310,16 @@ extension CallSessionViewModel: AudioTurnPipelineOutput {
 }
 
 private extension CallSessionViewModel {
+    func applyPreferredSpeakerRoute() throws {
+        let session = AVAudioSession.sharedInstance()
+        var options: AVAudioSession.CategoryOptions = [.allowBluetoothHFP, .allowBluetoothA2DP]
+        if isSpeakerEnabled {
+            options.insert(.defaultToSpeaker)
+        }
+        try session.setCategory(.playAndRecord, mode: .voiceChat, options: options)
+        try session.overrideOutputAudioPort(isSpeakerEnabled ? .speaker : .none)
+    }
+
     func shouldUploadCapturedAudio(sessionID: String, muteSnapshot: UInt64) -> Bool {
         !isMuted && sessionID == self.sessionID && muteSnapshot == muteGeneration
     }
