@@ -158,6 +158,13 @@ final class BackendSessionClient: NSObject {
         return "\(collapsedWhitespace.prefix(237))..."
     }
 
+    nonisolated static func validatedSessionDescriptionSDP(_ sdp: String?) -> String? {
+        guard let sdp, !sdp.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        return sdp
+    }
+
     func registerSession() async throws -> String {
         if let sessionID {
             return sessionID
@@ -182,9 +189,7 @@ final class BackendSessionClient: NSObject {
             try await setLocalDescription(offer, on: peerConnection)
             try await waitForIceGatheringComplete(on: peerConnection, timeout: 5)
 
-            guard let finalizedOffer = peerConnection.localDescription?.sdp
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-                  !finalizedOffer.isEmpty else {
+            guard let finalizedOffer = Self.validatedSessionDescriptionSDP(peerConnection.localDescription?.sdp) else {
                 throw SessionError.missingLocalOfferDescription
             }
 

@@ -186,5 +186,25 @@ struct SpeakerIdentityHelpersTests {
                 == "speaker-a: I like apples | speaker-b: I like oranges | speaker-c: I like apples."
         )
     }
+
+    @Test func wakeWordMatchingIgnoresCaseAndPunctuation() {
+        let transcripts = [
+            SpeakerTranscript(speakerId: "speaker-a", transcript: "Atlas, open the router."),
+            SpeakerTranscript(speakerId: "speaker-b", transcript: "I said at last we should merge it."),
+            SpeakerTranscript(speakerId: "speaker-c", transcript: "ATLAS please check tests")
+        ]
+
+        let matchingSpeakerIDs = SpeakerIdentityHelpers.wakeWordMatchingSpeakerIDs(
+            in: transcripts,
+            wakeWord: "Atlas"
+        )
+
+        #expect(matchingSpeakerIDs == ["speaker-a", "speaker-c"])
+    }
+
+    @Test func wakeWordMatchingSupportsMultiWordWakeWord() {
+        #expect(SpeakerIdentityHelpers.containsWakeWord(transcript: "Hey build router, take this one.", wakeWord: "build router"))
+        #expect(!SpeakerIdentityHelpers.containsWakeWord(transcript: "Hey build the router, take this one.", wakeWord: "build router"))
+    }
 #endif
 }

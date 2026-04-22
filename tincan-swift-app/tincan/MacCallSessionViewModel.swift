@@ -7,12 +7,16 @@ import Speech
 @MainActor
 final class MacCallSessionViewModel: ObservableObject {
     private static let inputLevelHistoryLength = 14
+    fileprivate static let logTimestampFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.timeZone = .current
+        return formatter
+    }()
 
     @Published private(set) var callStateDescription = "Idle"
     @Published private(set) var identityStatusDescription = "Identity not ready"
-    @Published private(set) var ownerProfileDescription = "No current-user voice enrolled"
+    @Published private(set) var ownerProfileDescription = "Wake word unavailable"
     @Published private(set) var speakerIdentityPhase: SpeakerIdentityPhase = .unavailable
-    @Published private(set) var lastChallengeTranscript = ""
     @Published private(set) var lastServerTranscript = ""
     @Published private(set) var logLines: [String] = []
     @Published private(set) var isCallActive = false
@@ -24,20 +28,20 @@ final class MacCallSessionViewModel: ObservableObject {
 
     private let audioPipeline = AudioTurnPipeline()
     private let identityManager = SpeakerIdentityManager()
-    private let promptSpeaker = LocalPromptSpeaker()
     private let tonePlayer = CallTonePlayer.shared
     private let serverSettings: ServerConnectionStore
+    private let fileLogger = MacCallFileLogger()
 
     private var sessionClient: BackendSessionClient?
     private var sessionID: String?
     private var eventTask: Task<Void, Never>?
-    private var promptTask: Task<Void, Never>?
-    private var currentChallengePrompt: String?
-    private var ignoreCapturedSegmentsUntil = Date.distantPast
 
     init(serverSettings: ServerConnectionStore) {
         self.serverSettings = serverSettings
         audioPipeline.setDelegate(self)
+        Task {
+            await fileLogger.markSessionBoundary()
+        }
         appendLog("Ready")
         Task {
             let status = await identityManager.currentStatus()
@@ -69,13 +73,10 @@ final class MacCallSessionViewModel: ObservableObject {
             let hasSpeechPermission = await requestSpeechPermission()
             await identityManager.setSpeechRecognitionAuthorized(hasSpeechPermission)
 
-            callStateDescription = "Checking profile"
-            appendLog("Checking current-user voice profile")
-            let hasOwnerProfile = await identityManager.hasOwnerProfile()
-            if !hasSpeechPermission && !hasOwnerProfile {
+            if !hasSpeechPermission {
                 callStateDescription = "Speech recognition permission required"
-                identityStatusDescription = "Speaker identification requires Speech Recognition permission."
-                appendLog("Speech recognition permission is required when no current-user voice profile exists")
+                identityStatusDescription = "Wake-word speaker gating requires Speech Recognition permission."
+                appendLog("Speech recognition permission is required for wake-word speaker gating")
                 isTransitioningCallState = false
                 return
             }
@@ -88,9 +89,20 @@ final class MacCallSessionViewModel: ObservableObject {
             }
 
             let client = BackendSessionClient(serverBaseURL: serverURL)
-            var startupPhase = "session registration"
+            var startupPhase = "wake-word setup"
 
             do {
+                callStateDescription = "Preparing wake word"
+                appendLog("Preparing wake-word speaker gating")
+                let identityStatus = try await identityManager.prepare()
+                applyIdentityStatus(identityStatus)
+
+                startupPhase = "microphone capture"
+                callStateDescription = "Starting mic"
+                appendLog("Starting microphone capture")
+                try await audioPipeline.start()
+
+                startupPhase = "session registration"
                 callStateDescription = "Connecting"
                 appendLog("Registering call session with \(serverURL.absoluteString)")
                 let sid = try await client.registerSession()
@@ -98,31 +110,16 @@ final class MacCallSessionViewModel: ObservableObject {
                 sessionClient = client
                 appendLog("Session registered: \(sid)")
 
-                startupPhase = "speaker identification setup"
-                callStateDescription = "Preparing identity"
-                appendLog("Preparing speaker identification")
-                let identityStatus = try await identityManager.prepare()
-                applyIdentityStatus(identityStatus)
-                startupPhase = "microphone capture"
-                callStateDescription = "Starting mic"
-                appendLog("Starting microphone capture")
-                try await audioPipeline.start()
-
                 subscribeToServerEvents(client: client, sessionID: sid)
 
                 callStateDescription = "Connected"
                 isCallActive = true
                 callStartedAt = Date()
-                tonePlayer.playConnectTone()
-
-                if !hasOwnerProfile {
-                    let challengeStatus = await identityManager.beginIdentification()
-                    applyIdentityStatus(challengeStatus)
-                    appendLog("Speaker identification required before audio will be sent")
-                }
+                appendLog("Connected")
             } catch {
                 callStateDescription = "Call start failed"
                 appendLog("Failed during \(startupPhase): \(error.localizedDescription)")
+                await audioPipeline.stop()
                 if let sid = sessionID {
                     await client.deregisterSession(sid)
                 }
@@ -134,31 +131,6 @@ final class MacCallSessionViewModel: ObservableObject {
         }
     }
 
-    func beginSpeakerIdentification() {
-        guard isCallActive else {
-            appendLog("Start a call before running speaker identification")
-            return
-        }
-
-        Task {
-            let status = await identityManager.beginIdentification()
-            applyIdentityStatus(status)
-            appendLog("Speaker identification prompt is active")
-        }
-    }
-
-    func resetSpeakerProfile() {
-        Task {
-            do {
-                let status = try await identityManager.resetOwnerProfile()
-                applyIdentityStatus(status)
-                appendLog("Current-user voice profile was reset")
-            } catch {
-                appendLog("Failed to reset current-user voice profile: \(error.localizedDescription)")
-            }
-        }
-    }
-
     func endCall() {
         guard isCallActive || isTransitioningCallState else { return }
         isTransitioningCallState = true
@@ -167,8 +139,6 @@ final class MacCallSessionViewModel: ObservableObject {
         Task {
             eventTask?.cancel()
             eventTask = nil
-            promptTask?.cancel()
-            promptTask = nil
 
             await audioPipeline.stop()
             if let client = sessionClient, let sid = sessionID {
@@ -176,14 +146,11 @@ final class MacCallSessionViewModel: ObservableObject {
             }
             sessionID = nil
             sessionClient = nil
-            currentChallengePrompt = nil
-            ignoreCapturedSegmentsUntil = Date.distantPast
 
             callStateDescription = "Disconnected"
             isCallActive = false
             callStartedAt = nil
             resetInputLevels()
-            tonePlayer.playDisconnectTone()
             isTransitioningCallState = false
         }
     }
@@ -289,42 +256,28 @@ final class MacCallSessionViewModel: ObservableObject {
 
     private func appendLog(_ message: String) {
         let timestamp = Date.now.formatted(date: .omitted, time: .standard)
-        logLines.insert("[\(timestamp)] \(message)", at: 0)
+        let line = "[\(timestamp)] \(message)"
+        logLines.insert(line, at: 0)
         if logLines.count > 40 {
             logLines.removeLast(logLines.count - 40)
+        }
+        NSLog("mac call: %@", message)
+        Task {
+            await fileLogger.append(line)
         }
     }
 
     private func applyIdentityStatus(_ status: SpeakerIdentityStatus) {
         speakerIdentityPhase = status.phase
         identityStatusDescription = status.description
-        ownerProfileDescription = status.ownerProfileName.map { "Current user: \($0)" }
-            ?? "No current-user voice enrolled"
-        lastChallengeTranscript = status.lastChallengeTranscript ?? ""
-
-        let previousChallengePrompt = currentChallengePrompt
-        currentChallengePrompt = status.challengePrompt
-
-        guard let challengePrompt = status.challengePrompt, challengePrompt != previousChallengePrompt else {
-            return
-        }
-
-        speakIdentificationPrompt(challengePrompt)
-    }
-
-    private func speakIdentificationPrompt(_ challengePrompt: String) {
-        promptTask?.cancel()
-        ignoreCapturedSegmentsUntil = .distantFuture
-        appendLog("Speaking local speaker-identification prompt")
-        promptTask = Task { @MainActor in
-            await promptSpeaker.speak(
-                "Speaker identification. Please say: \(challengePrompt)"
-            )
-
-            ignoreCapturedSegmentsUntil = Date().addingTimeInterval(0.8)
-            if currentChallengePrompt == challengePrompt {
-                identityStatusDescription = "Waiting for the current speaker to say the spoken identification phrase."
+        if let wakeWord = status.ownerProfileName, !wakeWord.isEmpty {
+            if let transcript = status.lastChallengeTranscript, !transcript.isEmpty {
+                ownerProfileDescription = "Wake word: \(wakeWord) · Last heard: \(transcript)"
+            } else {
+                ownerProfileDescription = "Wake word: \(wakeWord)"
             }
+        } else {
+            ownerProfileDescription = "Wake word unavailable"
         }
     }
 
@@ -357,10 +310,6 @@ extension MacCallSessionViewModel: AudioTurnPipelineOutput {
             appendLog("Ignored speech segment while muted")
             return
         }
-        guard !promptSpeaker.isSpeaking, Date() >= ignoreCapturedSegmentsUntil else {
-            appendLog("Ignored speech captured while tincan was speaking the identification prompt")
-            return
-        }
         let identityManager = self.identityManager
         Task(priority: .userInitiated) {
             let outcome = await identityManager.processSegment(segment)
@@ -381,6 +330,36 @@ extension MacCallSessionViewModel: AudioTurnPipelineOutput {
             } catch {
                 self.appendLog("Upload failed: \(error.localizedDescription)")
             }
+        }
+    }
+}
+
+private actor MacCallFileLogger {
+    func markSessionBoundary() {
+        appendRawLine(
+            "\n[\(MacCallSessionViewModel.logTimestampFormatter.string(from: Date()))] ----- mac call session -----"
+        )
+    }
+
+    func append(_ line: String) {
+        appendRawLine("[\(MacCallSessionViewModel.logTimestampFormatter.string(from: Date()))] \(line)")
+    }
+
+    private func appendRawLine(_ line: String) {
+        let url = AppPaths.macCallLogURL
+        FileManager.default.createFile(atPath: url.path, contents: nil)
+
+        guard let data = "\(line)\n".data(using: .utf8) else {
+            return
+        }
+
+        do {
+            let handle = try FileHandle(forWritingTo: url)
+            defer { try? handle.close() }
+            try handle.seekToEnd()
+            try handle.write(contentsOf: data)
+        } catch {
+            NSLog("Failed writing mac call log entry: %@", error.localizedDescription)
         }
     }
 }

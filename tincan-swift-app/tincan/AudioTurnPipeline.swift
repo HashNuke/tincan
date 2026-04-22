@@ -22,6 +22,8 @@ final class AudioTurnPipeline {
     private var isRunning = false
     private var tapInputDeviceName = "Unknown input device"
     private var tapCallbackCount = 0
+    private var tapDebugLogCount = 0
+    private var tapRejectedDebugLogCount = 0
     private var didLogInputSignal = false
     private var didWarnAboutSilentInput = false
     private var didLogFallbackResampler = false
@@ -43,6 +45,8 @@ final class AudioTurnPipeline {
         audioEngine = AVAudioEngine()
         tapInputDeviceName = AVCaptureDevice.default(for: .audio)?.localizedName ?? "Unknown input device"
         tapCallbackCount = 0
+        tapDebugLogCount = 0
+        tapRejectedDebugLogCount = 0
         didLogInputSignal = false
         didWarnAboutSilentInput = false
         didLogFallbackResampler = false
@@ -79,6 +83,14 @@ final class AudioTurnPipeline {
         await sink.emitLog("Using microphone: \(tapInputDeviceName)")
         await sink.emitLog("Microphone tap format: \(AudioTapSamples.describe(bufferFormat: inputFormat))")
         await sink.emitLog("Microphone capture started")
+
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard let self, self.isRunning, self.tapCallbackCount == 0 else { return }
+            await self.sink.emitLog(
+                "Microphone tap started but has not delivered any buffers after 2s. Tap format: \(AudioTapSamples.describe(bufferFormat: inputFormat))"
+            )
+        }
     }
 
     func stop() async {
@@ -116,10 +128,31 @@ final class AudioTurnPipeline {
 
     private func handleTapBuffer(_ buffer: AVAudioPCMBuffer) {
         guard AudioTapBufferValidator.shouldProcess(buffer) else {
+            if tapRejectedDebugLogCount < 3 {
+                tapRejectedDebugLogCount += 1
+                let rejectionReason = AudioTapBufferValidator.rejectionReason(for: buffer) ?? "unknown reason"
+                let audioBuffers = UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList)
+                let bufferSizes = audioBuffers.map(\.mDataByteSize)
+                Task {
+                    await self.sink.emitLog(
+                        "Rejected microphone tap buffer (\(rejectionReason)); frameLength=\(buffer.frameLength), buffers=\(audioBuffers.count), sizes=\(bufferSizes)"
+                    )
+                }
+            }
             return
         }
 
         tapCallbackCount += 1
+        if tapDebugLogCount < 3 {
+            tapDebugLogCount += 1
+            let audioBuffers = UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList)
+            let bufferSizes = audioBuffers.map(\.mDataByteSize)
+            Task {
+                await self.sink.emitLog(
+                    "Received microphone tap buffer #\(self.tapCallbackCount); frameLength=\(buffer.frameLength), format=\(AudioTapSamples.describe(bufferFormat: buffer.format)), sizes=\(bufferSizes)"
+                )
+            }
+        }
 
         let rawSamples = AudioTapSamples.extractMonoFloatSamples(from: buffer)
         let inputLevel = Self.normalizedInputLevel(from: rawSamples)
@@ -195,18 +228,29 @@ final class AudioTurnPipeline {
 
 enum AudioTapBufferValidator {
     static func shouldProcess(_ buffer: AVAudioPCMBuffer) -> Bool {
+        rejectionReason(for: buffer) == nil
+    }
+
+    static func rejectionReason(for buffer: AVAudioPCMBuffer) -> String? {
         guard buffer.frameLength > 0 else {
-            return false
+            return "frameLength is zero"
         }
 
         let audioBuffers = UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList)
         guard !audioBuffers.isEmpty else {
-            return false
+            return "audio buffer list is empty"
         }
 
-        return audioBuffers.allSatisfy { audioBuffer in
-            audioBuffer.mData != nil && audioBuffer.mDataByteSize > 0
+        for (index, audioBuffer) in audioBuffers.enumerated() {
+            if audioBuffer.mData == nil {
+                return "buffer \(index) has nil mData"
+            }
+            if audioBuffer.mDataByteSize == 0 {
+                return "buffer \(index) has zero byte size"
+            }
         }
+
+        return nil
     }
 }
 

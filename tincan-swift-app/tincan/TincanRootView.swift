@@ -112,8 +112,8 @@ struct TincanMacRootView: View {
                 endCall: callSession.endCall,
                 toggleMute: callSession.toggleMute,
                 toggleSpeaker: callSession.toggleSpeakerEnabled,
-                beginSpeakerIdentification: callSession.beginSpeakerIdentification,
-                resetSpeakerProfile: callSession.resetSpeakerProfile
+                beginSpeakerIdentification: nil,
+                resetSpeakerProfile: nil
             ),
             workspace: workspace,
             serverSettings: serverSettings,
@@ -1587,11 +1587,11 @@ private func speakerIdentityTitle(for phase: SpeakerIdentityPhase) -> String {
     case .preparing:
         return "Preparing"
     case .identificationRequired:
-        return "Identify Speaker"
+        return "Wake Word"
     case .awaitingChallengeResponse:
-        return "Waiting"
+        return "Ambiguous"
     case .ownerVerified:
-        return "Owner Verified"
+        return "Speaker Matched"
     case .unavailable:
         return "Unavailable"
     }
