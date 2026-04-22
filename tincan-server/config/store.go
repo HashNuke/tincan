@@ -131,14 +131,6 @@ func (s *AgentBackendStore) Get(name string) (AgentBackendDefinition, bool) {
 	return backend, ok
 }
 
-func (s *AgentBackendStore) BackendBaseURL(name string) (string, bool) {
-	backend, ok := s.Get(name)
-	if !ok {
-		return "", false
-	}
-	return backend.Options.BaseURL, true
-}
-
 func (s *AgentProfileStore) Create(profile AgentProfile) (AgentProfile, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -292,7 +284,6 @@ func validateAgentBackend(name string, backend AgentBackendDefinition) (string, 
 	backend.Options.ConnectionType = strings.TrimSpace(backend.Options.ConnectionType)
 	backend.Options.Model = strings.TrimSpace(backend.Options.Model)
 	backend.Options.ModelVariant = strings.TrimSpace(backend.Options.ModelVariant)
-	backend.Options.BaseURL = strings.TrimSpace(backend.Options.BaseURL)
 	backend.Options.Agent = strings.TrimSpace(backend.Options.Agent)
 	if name == "" {
 		return "", AgentBackendDefinition{}, fmt.Errorf("agent backend name must not be empty")

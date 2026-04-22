@@ -36,7 +36,6 @@ struct TincanAgentBackend: Identifiable, Equatable {
         let connectionType: String
         let model: String
         let modelVariant: String
-        let baseURL: String
         let agent: String
         let extraArgs: [String]
     }
@@ -291,7 +290,6 @@ private struct AgentBackendDTO: Decodable {
         let connectionType: String?
         let model: String?
         let modelVariant: String?
-        let baseURL: String?
         let agent: String?
         let extraArgs: [String]?
 
@@ -299,7 +297,6 @@ private struct AgentBackendDTO: Decodable {
             case connectionType = "connection_type"
             case model
             case modelVariant = "model_variant"
-            case baseURL = "base_url"
             case agent
             case extraArgs = "extra_args"
         }
@@ -317,7 +314,6 @@ private struct AgentBackendDTO: Decodable {
                 connectionType: options.connectionType ?? "",
                 model: options.model ?? "",
                 modelVariant: options.modelVariant ?? "",
-                baseURL: options.baseURL ?? "",
                 agent: options.agent ?? "",
                 extraArgs: options.extraArgs ?? []
             )

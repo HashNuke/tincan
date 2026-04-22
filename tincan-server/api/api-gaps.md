@@ -260,7 +260,7 @@ Suggested response shape:
       "name": "opencode-1",
       "type": "opencode",
       "options": {
-        "base_url": "http://...",
+        "connection_type": "command",
         "model": "...",
         "agent": "build"
       }
