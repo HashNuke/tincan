@@ -26,20 +26,26 @@ type ConversationCreateResult struct {
 	Status                string `json:"status"`
 }
 
+type ConversationSendResult struct {
+	ConversationID string `json:"conversation_id"`
+	DisplayHandle  string `json:"display_handle"`
+	Queued         bool   `json:"queued"`
+}
+
 type ConversationCreator interface {
 	CreateConversation(profileName string, title string, message string) (ConversationCreateResult, error)
 }
 
 type ConversationMessenger interface {
-	ContinueConversation(conversation conversations.Conversation, message string) error
+	ContinueConversation(conversation conversations.Conversation, message string) (ConversationSendResult, error)
 }
 
 type CallState interface {
-	LinkConversation(transportSessionID string, backendConversationID string, conversationHandle string)
+	LinkConversation(transportSessionID string, conversationID string, conversationHandle string)
 	AppendClarificationExchange(transportSessionID string, userText string, agentQuestion string) bool
 	ClearClarificationHistory(transportSessionID string) bool
 	CurrentConversationHandleForSession(transportSessionID string) (string, bool)
-	CurrentBackendConversationIDForSession(transportSessionID string) (string, bool)
+	CurrentConversationIDForSession(transportSessionID string) (string, bool)
 	ClarificationHistoryForSession(transportSessionID string) []calls.ClarificationMessage
 }
 
@@ -78,13 +84,6 @@ func (c *UserInputController) HandleTranscript(sessionID string, transcript stri
 			"router": routeResult,
 		},
 	}
-	if strings.TrimSpace(routeResult.ImmediateFeedback) != "" {
-		result.OutputEvents = append(result.OutputEvents, output.Event{
-			SessionID: sessionID,
-			Kind:      output.KindImmediateFeedback,
-			Text:      routeResult.ImmediateFeedback,
-		})
-	}
 
 	dispatchResult, err := c.dispatchUserInput(sessionID, routeRequest, routeResult)
 	if err != nil {
@@ -94,6 +93,20 @@ func (c *UserInputController) HandleTranscript(sessionID string, transcript stri
 		result.ResponseBody[key] = value
 	}
 	result.OutputEvents = append(result.OutputEvents, dispatchResult.OutputEvents...)
+
+	if strings.TrimSpace(dispatchResult.ImmediateFeedbackOverride) != "" {
+		routeResult.ImmediateFeedback = dispatchResult.ImmediateFeedbackOverride
+	}
+	result.RouteResult = routeResult
+	result.ResponseBody["router"] = routeResult
+
+	if strings.TrimSpace(routeResult.ImmediateFeedback) != "" {
+		result.OutputEvents = append([]output.Event{{
+			SessionID: sessionID,
+			Kind:      output.KindImmediateFeedback,
+			Text:      routeResult.ImmediateFeedback,
+		}}, result.OutputEvents...)
+	}
 
 	if conversationValue, ok := result.ResponseBody["conversation"]; ok && strings.TrimSpace(routeResult.ConversationNotes) != "" {
 		if conversation, ok := conversationValue.(ConversationCreateResult); ok {
@@ -153,8 +166,8 @@ func (c *UserInputController) buildRouteUserInputRequest(sessionID string, trans
 	request.PendingUpdateHandles = pendingUpdateHandles
 
 	currentConversationHandle, hasCurrentHandle := c.Calls.CurrentConversationHandleForSession(sessionID)
-	currentBackendConversationID, hasCurrentBackendConversationID := c.Calls.CurrentBackendConversationIDForSession(sessionID)
-	if !hasCurrentHandle && !hasCurrentBackendConversationID {
+	currentConversationID, hasCurrentConversationID := c.Calls.CurrentConversationIDForSession(sessionID)
+	if !hasCurrentHandle && !hasCurrentConversationID {
 		return request, nil
 	}
 	request.CurrentConversationHandle = currentConversationHandle
@@ -166,11 +179,11 @@ func (c *UserInputController) buildRouteUserInputRequest(sessionID string, trans
 		})
 	}
 
-	if !hasCurrentBackendConversationID {
+	if !hasCurrentConversationID {
 		return request, nil
 	}
 
-	currentConversation, ok, err := c.Conversations.GetConversationByBackendConversationID(currentBackendConversationID)
+	currentConversation, ok, err := c.Conversations.GetConversationByID(currentConversationID)
 	if err != nil {
 		return tincanrouter.RouteUserInputRequest{}, err
 	}
@@ -190,8 +203,9 @@ func (c *UserInputController) buildRouteUserInputRequest(sessionID string, trans
 }
 
 type dispatchResult struct {
-	ResponseBody map[string]any
-	OutputEvents []output.Event
+	ResponseBody              map[string]any
+	OutputEvents              []output.Event
+	ImmediateFeedbackOverride string
 }
 
 func (c *UserInputController) dispatchUserInput(sessionID string, routeRequest tincanrouter.RouteUserInputRequest, routeResult tincanrouter.RouteUserInputResult) (dispatchResult, error) {
@@ -241,12 +255,12 @@ func (c *UserInputController) dispatchNewConversation(sessionID string, routeRes
 	if err != nil {
 		return dispatchResult{}, err
 	}
-	c.Calls.LinkConversation(sessionID, conversation.BackendConversationID, conversation.DisplayHandle)
+	c.Calls.LinkConversation(sessionID, conversation.ID, conversation.DisplayHandle)
 	log.Printf(
-		"peer %s linked conversation: handle=%q backend_conversation_id=%q status=%q",
+		"peer %s linked conversation: handle=%q conversation_id=%q status=%q",
 		sessionID,
 		conversation.DisplayHandle,
-		conversation.BackendConversationID,
+		conversation.ID,
 		conversation.Status,
 	)
 
@@ -302,7 +316,7 @@ func (c *UserInputController) dispatchSwitchContext(sessionID string, routeReque
 		return dispatchResult{}, err
 	}
 
-	c.Calls.LinkConversation(sessionID, conversation.BackendConversationID, conversation.DisplayHandle)
+	c.Calls.LinkConversation(sessionID, conversation.ID, conversation.DisplayHandle)
 	return dispatchResult{
 		ResponseBody: map[string]any{
 			"current_conversation_handle": conversation.DisplayHandle,
@@ -324,27 +338,35 @@ func (c *UserInputController) dispatchMessage(sessionID string, routeRequest tin
 		return dispatchResult{}, fmt.Errorf("conversation messaging is not configured")
 	}
 	log.Printf(
-		"peer %s scheduling message: handle=%q backend_conversation_id=%q message=%q",
+		"peer %s scheduling message: handle=%q conversation_id=%q message=%q",
 		sessionID,
 		conversation.DisplayHandle,
-		conversation.BackendConversationID,
+		conversation.ID,
 		routeResult.Message,
 	)
-	if err := c.ConversationSend.ContinueConversation(conversation, routeResult.Message); err != nil {
+	sendResult, err := c.ConversationSend.ContinueConversation(conversation, routeResult.Message)
+	if err != nil {
 		return dispatchResult{}, err
 	}
-	c.Calls.LinkConversation(sessionID, conversation.BackendConversationID, conversation.DisplayHandle)
+	c.Calls.LinkConversation(sessionID, conversation.ID, conversation.DisplayHandle)
 	log.Printf(
-		"peer %s refreshed conversation context: handle=%q backend_conversation_id=%q",
+		"peer %s refreshed conversation context: handle=%q conversation_id=%q queued=%t",
 		sessionID,
 		conversation.DisplayHandle,
-		conversation.BackendConversationID,
+		conversation.ID,
+		sendResult.Queued,
 	)
-	return dispatchResult{
+
+	result := dispatchResult{
 		ResponseBody: map[string]any{
 			"resolved_conversation_handle": conversation.DisplayHandle,
+			"conversation_send":            sendResult,
 		},
-	}, nil
+	}
+	if sendResult.Queued {
+		result.ImmediateFeedbackOverride = fmt.Sprintf("Queued that for %s.", conversation.DisplayHandle)
+	}
+	return result, nil
 }
 
 func (c *UserInputController) dispatchAskClarifyingQuestion(sessionID string, routeRequest tincanrouter.RouteUserInputRequest, routeResult tincanrouter.RouteUserInputResult) dispatchResult {

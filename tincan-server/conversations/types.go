@@ -22,6 +22,24 @@ func (Conversation) TableName() string {
 	return "conversations"
 }
 
+type ConversationInput struct {
+	ID             string     `gorm:"primaryKey;type:text"`
+	ConversationID string     `gorm:"column:conversation_id;not null;index:idx_conversation_inputs_conversation"`
+	UserText       string     `gorm:"column:user_text;not null"`
+	Status         string     `gorm:"column:status;not null;index:idx_conversation_inputs_status"`
+	DispatchID     string     `gorm:"column:dispatch_id;index:idx_conversation_inputs_dispatch"`
+	BatchIndex     int        `gorm:"column:batch_index;not null"`
+	ErrorText      string     `gorm:"column:error_text;not null"`
+	CreatedAt      time.Time  `gorm:"column:created_at;not null"`
+	UpdatedAt      time.Time  `gorm:"column:updated_at;not null"`
+	StartedAt      *time.Time `gorm:"column:started_at"`
+	FinishedAt     *time.Time `gorm:"column:finished_at"`
+}
+
+func (ConversationInput) TableName() string {
+	return "conversation_inputs"
+}
+
 type Message struct {
 	ID                 string     `gorm:"primaryKey;type:text"`
 	ConversationID     string     `gorm:"column:conversation_id;not null;index:idx_messages_conversation"`

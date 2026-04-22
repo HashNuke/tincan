@@ -21,7 +21,7 @@ func TestLiveWebSocketSendsSnapshotAndTextEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open sqlite db: %v", err)
 	}
-	if err := db.AutoMigrate(&conversations.Conversation{}, &conversations.Message{}, &conversations.ConversationNote{}); err != nil {
+	if err := db.AutoMigrate(&conversations.Conversation{}, &conversations.ConversationInput{}, &conversations.Message{}, &conversations.ConversationNote{}); err != nil {
 		t.Fatalf("migrate sqlite db: %v", err)
 	}
 
@@ -44,7 +44,7 @@ func TestLiveWebSocketSendsSnapshotAndTextEvents(t *testing.T) {
 
 	callManager := calls.NewManager()
 	callManager.RegisterSession("session-1")
-	callManager.LinkConversation("session-1", "backend-1", "Atlas#1")
+	callManager.LinkConversation("session-1", "conv-1", "Atlas#1")
 
 	srv := &server{
 		callManager:   callManager,

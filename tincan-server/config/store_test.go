@@ -96,8 +96,7 @@ func TestNewAgentBackendStoreAllowsBackendsWithoutModel(t *testing.T) {
   "opencode-default": {
     "type": "opencode",
     "options": {
-      "connection_type": "server",
-      "base_url": "http://127.0.0.1:4096"
+      "connection_type": "command"
     }
   }
 }
@@ -161,8 +160,7 @@ func TestNewAgentBackendStoreMigratesLegacyRootConfigIntoConfigDirectory(t *test
   "opencode-default": {
     "type": "opencode",
     "options": {
-      "connection_type": "server",
-      "base_url": "http://127.0.0.1:4096"
+      "connection_type": "command"
     }
   }
 }

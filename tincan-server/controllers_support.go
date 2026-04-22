@@ -38,11 +38,19 @@ type conversationMessenger struct {
 	service *ConversationService
 }
 
-func (m conversationMessenger) ContinueConversation(conversation conversations.Conversation, message string) error {
-	return m.service.ContinueConversation(ConversationMessageInput{
+func (m conversationMessenger) ContinueConversation(conversation conversations.Conversation, message string) (controllers.ConversationSendResult, error) {
+	result, err := m.service.ContinueConversation(ConversationMessageInput{
 		Conversation: conversation,
 		Message:      message,
 	})
+	if err != nil {
+		return controllers.ConversationSendResult{}, err
+	}
+	return controllers.ConversationSendResult{
+		ConversationID: result.Conversation.ID,
+		DisplayHandle:  result.Conversation.DisplayHandle,
+		Queued:         result.Queued,
+	}, nil
 }
 
 type callAudioRenderer struct {

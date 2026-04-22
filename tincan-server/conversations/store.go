@@ -326,6 +326,213 @@ func (s *Store) GetMostRecentConversationByBackendConversationIDs(backendConvers
 	return conversation, true, nil
 }
 
+func (s *Store) GetMostRecentConversationByIDs(conversationIDs []string) (Conversation, bool, error) {
+	filteredIDs := make([]string, 0, len(conversationIDs))
+	for _, conversationID := range conversationIDs {
+		if conversationID != "" {
+			filteredIDs = append(filteredIDs, conversationID)
+		}
+	}
+	if len(filteredIDs) == 0 {
+		return Conversation{}, false, nil
+	}
+
+	var conversation Conversation
+	err := s.db.
+		Where("id IN ?", filteredIDs).
+		Order("updated_at desc").
+		First(&conversation).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return Conversation{}, false, nil
+		}
+		return Conversation{}, false, fmt.Errorf("get most recent conversation by ids: %w", err)
+	}
+	return conversation, true, nil
+}
+
+func (s *Store) BindBackendConversationID(conversationID string, backendConversationID string) (Conversation, bool, error) {
+	trimmedBackendConversationID := strings.TrimSpace(backendConversationID)
+	if strings.TrimSpace(conversationID) == "" || trimmedBackendConversationID == "" {
+		return Conversation{}, false, fmt.Errorf("bind backend conversation id requires conversation id and backend conversation id")
+	}
+
+	now := time.Now().UTC()
+	var (
+		conversation Conversation
+		changed      bool
+	)
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("id = ?", conversationID).First(&conversation).Error; err != nil {
+			if err == gorm.ErrRecordNotFound {
+				return fmt.Errorf("conversation %q not found", conversationID)
+			}
+			return fmt.Errorf("lookup conversation for backend bind: %w", err)
+		}
+		if strings.TrimSpace(conversation.BackendConversationID) == trimmedBackendConversationID {
+			return nil
+		}
+		if strings.TrimSpace(conversation.BackendConversationID) != "" {
+			return fmt.Errorf("conversation %q is already bound to backend conversation id %q", conversationID, conversation.BackendConversationID)
+		}
+		if err := tx.Model(&Conversation{}).
+			Where("id = ?", conversationID).
+			Updates(map[string]any{
+				"backend_conversation_id": trimmedBackendConversationID,
+				"updated_at":              now,
+			}).Error; err != nil {
+			return fmt.Errorf("bind backend conversation id: %w", err)
+		}
+		conversation.BackendConversationID = trimmedBackendConversationID
+		conversation.UpdatedAt = now
+		changed = true
+		return nil
+	})
+	if err != nil {
+		return Conversation{}, false, err
+	}
+	return conversation, changed, nil
+}
+
+func (s *Store) UpdateConversationStatus(conversationID string, status string) (Conversation, error) {
+	now := time.Now().UTC()
+	if err := s.db.Model(&Conversation{}).
+		Where("id = ?", conversationID).
+		Updates(map[string]any{
+			"status":     status,
+			"updated_at": now,
+		}).Error; err != nil {
+		return Conversation{}, fmt.Errorf("update conversation status: %w", err)
+	}
+	conversation, ok, err := s.GetConversationByID(conversationID)
+	if err != nil {
+		return Conversation{}, err
+	}
+	if !ok {
+		return Conversation{}, fmt.Errorf("conversation %q not found", conversationID)
+	}
+	return conversation, nil
+}
+
+func (s *Store) EnqueueConversationInput(conversationID string, userText string) (ConversationInput, error) {
+	now := time.Now().UTC()
+	input := ConversationInput{
+		ID:             uuid.NewString(),
+		ConversationID: conversationID,
+		UserText:       strings.TrimSpace(userText),
+		Status:         "pending",
+		BatchIndex:     0,
+		ErrorText:      "",
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	if err := s.db.Create(&input).Error; err != nil {
+		return ConversationInput{}, fmt.Errorf("enqueue conversation input: %w", err)
+	}
+	return input, nil
+}
+
+func (s *Store) ListPendingConversationInputs(conversationID string) ([]ConversationInput, error) {
+	var inputs []ConversationInput
+	if err := s.db.
+		Where("conversation_id = ? AND status = ?", conversationID, "pending").
+		Order("created_at asc, id asc").
+		Find(&inputs).Error; err != nil {
+		return nil, fmt.Errorf("list pending conversation inputs: %w", err)
+	}
+	return inputs, nil
+}
+
+func (s *Store) GetRunningConversationInputs(conversationID string) ([]ConversationInput, error) {
+	var inputs []ConversationInput
+	if err := s.db.
+		Where("conversation_id = ? AND status = ?", conversationID, "running").
+		Order("batch_index asc, created_at asc, id asc").
+		Find(&inputs).Error; err != nil {
+		return nil, fmt.Errorf("get running conversation inputs: %w", err)
+	}
+	return inputs, nil
+}
+
+func (s *Store) DrainPendingConversationInputs(conversationID string) ([]ConversationInput, string, error) {
+	now := time.Now().UTC()
+	dispatchID := uuid.NewString()
+	inputs := []ConversationInput{}
+
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.
+			Where("conversation_id = ? AND status = ?", conversationID, "pending").
+			Order("created_at asc, id asc").
+			Find(&inputs).Error; err != nil {
+			return fmt.Errorf("load pending conversation inputs: %w", err)
+		}
+		if len(inputs) == 0 {
+			return nil
+		}
+		for index := range inputs {
+			startedAt := now
+			updates := map[string]any{
+				"status":      "running",
+				"dispatch_id": dispatchID,
+				"batch_index": index,
+				"error_text":  "",
+				"updated_at":  now,
+				"started_at":  &startedAt,
+				"finished_at": nil,
+			}
+			if err := tx.Model(&ConversationInput{}).
+				Where("id = ?", inputs[index].ID).
+				Updates(updates).Error; err != nil {
+				return fmt.Errorf("mark conversation input running: %w", err)
+			}
+			inputs[index].Status = "running"
+			inputs[index].DispatchID = dispatchID
+			inputs[index].BatchIndex = index
+			inputs[index].ErrorText = ""
+			inputs[index].UpdatedAt = now
+			inputs[index].StartedAt = &startedAt
+			inputs[index].FinishedAt = nil
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	if len(inputs) == 0 {
+		return nil, "", nil
+	}
+	return inputs, dispatchID, nil
+}
+
+func (s *Store) MarkConversationDispatchCompleted(conversationID string, dispatchID string) error {
+	now := time.Now().UTC()
+	if err := s.db.Model(&ConversationInput{}).
+		Where("conversation_id = ? AND dispatch_id = ? AND status = ?", conversationID, dispatchID, "running").
+		Updates(map[string]any{
+			"status":      "completed",
+			"updated_at":  now,
+			"finished_at": &now,
+		}).Error; err != nil {
+		return fmt.Errorf("mark conversation dispatch completed: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) MarkConversationDispatchFailed(conversationID string, dispatchID string, errorText string) error {
+	now := time.Now().UTC()
+	if err := s.db.Model(&ConversationInput{}).
+		Where("conversation_id = ? AND dispatch_id = ? AND status = ?", conversationID, dispatchID, "running").
+		Updates(map[string]any{
+			"status":      "failed",
+			"error_text":  strings.TrimSpace(errorText),
+			"updated_at":  now,
+			"finished_at": &now,
+		}).Error; err != nil {
+		return fmt.Errorf("mark conversation dispatch failed: %w", err)
+	}
+	return nil
+}
+
 func (s *Store) CreateMessage(message Message) (Message, bool, error) {
 	now := time.Now().UTC()
 	previewText := buildPreviewText(message.SummaryText, message.DetailText)

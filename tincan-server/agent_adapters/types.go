@@ -16,13 +16,20 @@ type Adapter interface {
 	ValidateBackend(name string, backend tincanconfig.AgentBackendDefinition) error
 	SupportsModelDiscovery() bool
 	ListModels(backend tincanconfig.AgentBackendDefinition) ([]string, error)
-	StartConversation(profile tincanconfig.AgentProfile, backend tincanconfig.AgentBackendDefinition, title string, message string) (ConversationStartResult, error)
-	ContinueConversation(conversation conversations.Conversation, backend tincanconfig.AgentBackendDefinition, message string) error
+	BuildConversationCommand(input ConversationCommandInput) (ManagedCommand, error)
 	RunRouterPrompt(profile tincanconfig.AgentProfile, backend tincanconfig.AgentBackendDefinition, prompt Prompt, rawTranscript string) (tincanrouter.RouteUserInputResult, error)
 	RunConversationUpdatePrompt(profile tincanconfig.AgentProfile, backend tincanconfig.AgentBackendDefinition, prompt Prompt, rawUpdate string) (tincanrouter.ProcessConversationUpdateResult, error)
 }
 
-type ConversationStartResult struct {
-	BackendConversationID string
-	Status                string
+type ConversationCommandInput struct {
+	Conversation conversations.Conversation
+	Backend      tincanconfig.AgentBackendDefinition
+	Title        string
+	Inputs       []conversations.ConversationInput
+}
+
+type ManagedCommand struct {
+	Program string
+	Args    []string
+	Stdin   string
 }

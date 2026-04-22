@@ -1,7 +1,14 @@
 export const TincanConversationHooks = async ({ client }) => {
-  const callbackUrl =
-    process.env.TINCAN_OPENCODE_HOOK_URL ||
-    "http://127.0.0.1:55055/hooks/opencode"
+  const server = process.env.TINCAN_SERVER
+  const conversationId = process.env.TINCAN_CONVERSATION_ID
+
+  if (!server || !conversationId) {
+    return {
+      event: async () => {},
+    }
+  }
+
+  const callbackUrl = new URL("/hooks/opencode", server).toString()
 
   async function publish(payload) {
     try {
@@ -37,8 +44,25 @@ export const TincanConversationHooks = async ({ client }) => {
 
   return {
     event: async ({ event }) => {
+      if (event.type === "message.part.updated") {
+        const part = event.properties.part
+        if (part?.type !== "text" || !part?.time?.end || !part?.text?.trim()) {
+          return
+        }
+        await publish({
+          conversation_id: conversationId,
+          event_type: event.type,
+          session_id: part.sessionID,
+          message_id: part.messageID,
+          part_id: part.id,
+          text: part.text,
+        })
+        return
+      }
+
       if (event.type === "session.status") {
         await publish({
+          conversation_id: conversationId,
           event_type: event.type,
           session_id: event.properties.sessionID,
           status_type: event.properties.status.type,
@@ -48,6 +72,7 @@ export const TincanConversationHooks = async ({ client }) => {
 
       if (event.type === "session.idle") {
         await publish({
+          conversation_id: conversationId,
           event_type: event.type,
           session_id: event.properties.sessionID,
           status_type: "idle",
@@ -57,6 +82,7 @@ export const TincanConversationHooks = async ({ client }) => {
 
       if (event.type === "session.error") {
         await publish({
+          conversation_id: conversationId,
           event_type: event.type,
           session_id: event.properties.sessionID,
           error_name: event.properties.error?.name,

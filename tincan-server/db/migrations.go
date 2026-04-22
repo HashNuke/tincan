@@ -111,6 +111,27 @@ CREATE TABLE IF NOT EXISTS conversation_notes (
 );
 `,
 		},
+		{
+			name: "2026_04_22_create_conversation_inputs",
+			sql: `
+CREATE TABLE IF NOT EXISTS conversation_inputs (
+  id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL,
+  user_text TEXT NOT NULL,
+  status TEXT NOT NULL,
+  dispatch_id TEXT,
+  batch_index INTEGER NOT NULL DEFAULT 0,
+  error_text TEXT NOT NULL DEFAULT '',
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NOT NULL,
+  started_at DATETIME,
+  finished_at DATETIME
+);
+CREATE INDEX IF NOT EXISTS idx_conversation_inputs_conversation ON conversation_inputs(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_conversation_inputs_status ON conversation_inputs(status);
+CREATE INDEX IF NOT EXISTS idx_conversation_inputs_dispatch ON conversation_inputs(dispatch_id);
+`,
+		},
 	}
 
 	for _, migration := range migrations {

@@ -3,17 +3,23 @@ package main
 import (
 	"fmt"
 	"log"
+	"strings"
 
 	"tincan-server/agent_adapters"
 	tincanconfig "tincan-server/config"
 	"tincan-server/conversations"
 )
 
+type ConversationDispatcher interface {
+	DispatchConversation(conversationID string, title string) (ManagedDispatchResult, error)
+}
+
 type ConversationService struct {
 	profiles      *tincanconfig.AgentProfileStore
 	backends      *tincanconfig.AgentBackendStore
 	conversations *conversations.Store
 	agentAdapters map[string]agent_adapters.Adapter
+	dispatcher    ConversationDispatcher
 }
 
 type ConversationCreateInput struct {
@@ -38,16 +44,32 @@ type ConversationCreateResult struct {
 	Status                string `json:"status"`
 }
 
-func NewConversationService(profiles *tincanconfig.AgentProfileStore, backends *tincanconfig.AgentBackendStore, conversationsStore *conversations.Store, agentAdapters map[string]agent_adapters.Adapter) *ConversationService {
+type ConversationContinueResult struct {
+	Conversation conversations.Conversation
+	Queued       bool
+}
+
+func NewConversationService(
+	profiles *tincanconfig.AgentProfileStore,
+	backends *tincanconfig.AgentBackendStore,
+	conversationsStore *conversations.Store,
+	agentAdapters map[string]agent_adapters.Adapter,
+	dispatcher ConversationDispatcher,
+) *ConversationService {
 	return &ConversationService{
 		profiles:      profiles,
 		backends:      backends,
 		conversations: conversationsStore,
 		agentAdapters: agentAdapters,
+		dispatcher:    dispatcher,
 	}
 }
 
 func (s *ConversationService) CreateConversation(input ConversationCreateInput) (ConversationCreateResult, error) {
+	if strings.TrimSpace(input.Message) == "" {
+		return ConversationCreateResult{}, fmt.Errorf("create conversation requires non-empty message")
+	}
+
 	profile, ok := s.profiles.Get(input.ProfileName)
 	if !ok {
 		return ConversationCreateResult{}, fmt.Errorf("unknown agent profile %q", input.ProfileName)
@@ -62,6 +84,9 @@ func (s *ConversationService) CreateConversation(input ConversationCreateInput) 
 	if !ok {
 		return ConversationCreateResult{}, fmt.Errorf("no agent adapter for backend type %q", backend.Type)
 	}
+	if err := adapter.ValidateBackend(profile.AgentBackend, backend); err != nil {
+		return ConversationCreateResult{}, err
+	}
 
 	conversationNumber, err := s.conversations.NextConversationNumber(profile.Name)
 	if err != nil {
@@ -73,84 +98,110 @@ func (s *ConversationService) CreateConversation(input ConversationCreateInput) 
 		title = "Untitled conversation"
 	}
 
-	log.Printf(
-		"starting backend conversation: profile=%q backend=%q backend_type=%q working_directory=%q title=%q",
-		profile.Name,
-		profile.AgentBackend,
-		backend.Type,
-		profile.WorkingDirectory,
-		title,
-	)
-
-	adapterResult, err := adapter.StartConversation(profile, backend, title, input.Message)
-	if err != nil {
-		return ConversationCreateResult{}, fmt.Errorf("start backend conversation: %w", err)
-	}
-
 	conversation, err := s.conversations.CreateConversation(conversations.Conversation{
 		DisplayHandle:         fmt.Sprintf("%s#%d", profile.Name, conversationNumber),
 		AgentProfileName:      profile.Name,
 		ConversationNumber:    conversationNumber,
 		AgentBackend:          profile.AgentBackend,
 		WorkingDirectory:      profile.WorkingDirectory,
-		BackendConversationID: adapterResult.BackendConversationID,
-		Status:                adapterResult.Status,
+		BackendConversationID: "",
+		Status:                "starting",
 	})
 	if err != nil {
 		return ConversationCreateResult{}, fmt.Errorf("persist conversation: %w", err)
 	}
 
+	if _, err := s.conversations.EnqueueConversationInput(conversation.ID, input.Message); err != nil {
+		return ConversationCreateResult{}, fmt.Errorf("enqueue initial conversation input: %w", err)
+	}
+
 	log.Printf(
-		"created conversation: handle=%q backend_conversation_id=%q status=%q",
+		"created managed conversation: handle=%q status=%q title=%q",
 		conversation.DisplayHandle,
-		conversation.BackendConversationID,
 		conversation.Status,
+		title,
 	)
 
+	if s.dispatcher == nil {
+		return ConversationCreateResult{}, fmt.Errorf("conversation dispatcher is not configured")
+	}
+
+	dispatchResult, err := s.dispatcher.DispatchConversation(conversation.ID, title)
+	if err != nil {
+		return ConversationCreateResult{}, fmt.Errorf("dispatch managed conversation: %w", err)
+	}
+	if !dispatchResult.Started {
+		return ConversationCreateResult{}, fmt.Errorf("managed conversation did not start for %q", conversation.DisplayHandle)
+	}
+
+	refreshedConversation, ok, err := s.conversations.GetConversationByID(conversation.ID)
+	if err != nil {
+		return ConversationCreateResult{}, err
+	}
+	if !ok {
+		return ConversationCreateResult{}, fmt.Errorf("conversation %q disappeared after creation", conversation.ID)
+	}
+
 	return ConversationCreateResult{
-		ID:                    conversation.ID,
-		DisplayHandle:         conversation.DisplayHandle,
-		ConversationNumber:    conversation.ConversationNumber,
-		AgentProfileName:      conversation.AgentProfileName,
-		AgentBackend:          conversation.AgentBackend,
-		WorkingDirectory:      conversation.WorkingDirectory,
-		BackendConversationID: conversation.BackendConversationID,
-		Status:                conversation.Status,
+		ID:                    refreshedConversation.ID,
+		DisplayHandle:         refreshedConversation.DisplayHandle,
+		ConversationNumber:    refreshedConversation.ConversationNumber,
+		AgentProfileName:      refreshedConversation.AgentProfileName,
+		AgentBackend:          refreshedConversation.AgentBackend,
+		WorkingDirectory:      refreshedConversation.WorkingDirectory,
+		BackendConversationID: refreshedConversation.BackendConversationID,
+		Status:                refreshedConversation.Status,
 	}, nil
 }
 
-func (s *ConversationService) ContinueConversation(input ConversationMessageInput) error {
-	if input.Message == "" {
-		return fmt.Errorf("continue conversation requires non-empty message")
+func (s *ConversationService) ContinueConversation(input ConversationMessageInput) (ConversationContinueResult, error) {
+	if strings.TrimSpace(input.Message) == "" {
+		return ConversationContinueResult{}, fmt.Errorf("continue conversation requires non-empty message")
 	}
 
 	backend, ok := s.backends.Get(input.Conversation.AgentBackend)
 	if !ok {
-		return fmt.Errorf("unknown agent backend %q", input.Conversation.AgentBackend)
+		return ConversationContinueResult{}, fmt.Errorf("unknown agent backend %q", input.Conversation.AgentBackend)
 	}
 
 	adapter, ok := s.agentAdapters[backend.Type]
 	if !ok {
-		return fmt.Errorf("no agent adapter for backend type %q", backend.Type)
+		return ConversationContinueResult{}, fmt.Errorf("no agent adapter for backend type %q", backend.Type)
+	}
+	if err := adapter.ValidateBackend(input.Conversation.AgentBackend, backend); err != nil {
+		return ConversationContinueResult{}, err
+	}
+
+	if _, err := s.conversations.EnqueueConversationInput(input.Conversation.ID, input.Message); err != nil {
+		return ConversationContinueResult{}, fmt.Errorf("enqueue conversation input: %w", err)
+	}
+
+	if s.dispatcher == nil {
+		return ConversationContinueResult{}, fmt.Errorf("conversation dispatcher is not configured")
+	}
+
+	dispatchResult, err := s.dispatcher.DispatchConversation(input.Conversation.ID, "")
+	if err != nil {
+		return ConversationContinueResult{}, fmt.Errorf("dispatch conversation input: %w", err)
+	}
+
+	refreshedConversation, ok, err := s.conversations.GetConversationByID(input.Conversation.ID)
+	if err != nil {
+		return ConversationContinueResult{}, err
+	}
+	if !ok {
+		return ConversationContinueResult{}, fmt.Errorf("conversation %q not found", input.Conversation.ID)
 	}
 
 	log.Printf(
-		"continuing backend conversation: handle=%q backend_conversation_id=%q backend=%q backend_type=%q",
-		input.Conversation.DisplayHandle,
-		input.Conversation.BackendConversationID,
-		input.Conversation.AgentBackend,
-		backend.Type,
+		"queued managed conversation input: handle=%q queued=%t status=%q",
+		refreshedConversation.DisplayHandle,
+		!dispatchResult.Started,
+		refreshedConversation.Status,
 	)
 
-	if err := adapter.ContinueConversation(input.Conversation, backend, input.Message); err != nil {
-		return fmt.Errorf("continue backend conversation: %w", err)
-	}
-
-	log.Printf(
-		"scheduled backend continuation: handle=%q backend_conversation_id=%q",
-		input.Conversation.DisplayHandle,
-		input.Conversation.BackendConversationID,
-	)
-
-	return nil
+	return ConversationContinueResult{
+		Conversation: refreshedConversation,
+		Queued:       !dispatchResult.Started,
+	}, nil
 }

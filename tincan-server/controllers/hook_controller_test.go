@@ -1,9 +1,6 @@
 package controllers
 
 import (
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 
 	"tincan-server/conversations"
@@ -15,22 +12,11 @@ type fakeHookSessionResolver struct {
 	sessionID string
 }
 
-func (f fakeHookSessionResolver) SessionIDForConversation(backendConversationID string) (string, bool) {
-	if backendConversationID == "" || f.sessionID == "" {
+func (f fakeHookSessionResolver) SessionIDForConversation(conversationID string) (string, bool) {
+	if conversationID == "" || f.sessionID == "" {
 		return "", false
 	}
 	return f.sessionID, true
-}
-
-type fakeHookBackendLookup struct {
-	baseURL string
-}
-
-func (f fakeHookBackendLookup) BackendBaseURL(name string) (string, bool) {
-	if name == "" || f.baseURL == "" {
-		return "", false
-	}
-	return f.baseURL, true
 }
 
 type fakeHookUpdateProcessor struct {
@@ -44,29 +30,7 @@ func (f *fakeHookUpdateProcessor) ProcessConversationUpdate(input tincanrouter.P
 	return f.result, f.err
 }
 
-func TestHookControllerSessionIdleEmitsProcessedNotificationAndSummary(t *testing.T) {
-	messageServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/session/backend-1/message" {
-			t.Fatalf("unexpected message path: %s", r.URL.Path)
-		}
-		if got := r.URL.Query().Get("directory"); got != "/tmp/project" {
-			t.Fatalf("unexpected message directory query: %q", got)
-		}
-
-		messages := []map[string]any{
-			{
-				"info": map[string]any{"role": "assistant"},
-				"parts": []map[string]any{
-					{"type": "text", "text": "The build finished and all tests passed."},
-				},
-			},
-		}
-		if err := json.NewEncoder(w).Encode(messages); err != nil {
-			t.Fatalf("failed to encode messages: %v", err)
-		}
-	}))
-	defer messageServer.Close()
-
+func TestHookControllerCompletedTextPartEmitsProcessedNotificationAndSummary(t *testing.T) {
 	processor := &fakeHookUpdateProcessor{
 		result: tincanrouter.ProcessConversationUpdateResult{
 			NotificationText: "I finished the task.",
@@ -82,20 +46,23 @@ func TestHookControllerSessionIdleEmitsProcessedNotificationAndSummary(t *testin
 		ConversationNumber:    14,
 		AgentBackend:          "opencode-1",
 		WorkingDirectory:      "/tmp/project",
-		BackendConversationID: "backend-1",
+		BackendConversationID: "",
 		Status:                "running",
 	})
 
 	controller := &HookController{
 		Conversations:   store,
-		Backends:        fakeHookBackendLookup{baseURL: messageServer.URL},
 		Sessions:        fakeHookSessionResolver{sessionID: "session-1"},
 		UpdateProcessor: processor,
 	}
 
 	result, handled, err := controller.HandleOpenCodeHook(OpenCodeHookEvent{
-		EventType: "session.idle",
-		SessionID: conversation.BackendConversationID,
+		ConversationID: conversation.ID,
+		EventType:      "message.part.updated",
+		SessionID:      "backend-1",
+		MessageID:      "message-1",
+		PartID:         "part-1",
+		Text:           "The build finished and all tests passed.",
 	})
 	if err != nil {
 		t.Fatalf("HandleOpenCodeHook returned error: %v", err)
@@ -139,5 +106,16 @@ func TestHookControllerSessionIdleEmitsProcessedNotificationAndSummary(t *testin
 	}
 	if update.DetailText != "The build finished and all tests passed." {
 		t.Fatalf("unexpected stored detail text: %q", update.DetailText)
+	}
+
+	refreshedConversation, ok, err := store.GetConversationByID(conversation.ID)
+	if err != nil {
+		t.Fatalf("GetConversationByID returned error: %v", err)
+	}
+	if !ok {
+		t.Fatalf("expected conversation to still exist")
+	}
+	if refreshedConversation.BackendConversationID != "backend-1" {
+		t.Fatalf("expected backend conversation id to bind from hook, got %q", refreshedConversation.BackendConversationID)
 	}
 }

@@ -183,8 +183,8 @@ func (s *server) activeConversationID() (string, bool) {
 		return "", false
 	}
 
-	backendConversationIDs := s.callManager.ActiveBackendConversationIDs()
-	conversation, ok, err := s.conversations.GetMostRecentConversationByBackendConversationIDs(backendConversationIDs)
+	conversationIDs := s.callManager.ActiveConversationIDs()
+	conversation, ok, err := s.conversations.GetMostRecentConversationByIDs(conversationIDs)
 	if err != nil || !ok {
 		return "", false
 	}
@@ -196,11 +196,11 @@ func (s *server) conversationIDForSession(sessionID string) (string, bool) {
 		return "", false
 	}
 
-	backendConversationID, ok := s.callManager.CurrentBackendConversationIDForSession(sessionID)
+	conversationID, ok := s.callManager.CurrentConversationIDForSession(sessionID)
 	if !ok {
 		return "", false
 	}
-	conversation, ok, err := s.conversations.GetConversationByBackendConversationID(backendConversationID)
+	conversation, ok, err := s.conversations.GetConversationByID(conversationID)
 	if err != nil || !ok {
 		return "", false
 	}

@@ -24,9 +24,9 @@ func (f *fakeRouter) RouteUserInput(input tincanrouter.RouteUserInputRequest) (t
 }
 
 type fakeCallState struct {
-	currentHandle    string
-	currentBackendID string
-	history          []calls.ClarificationMessage
+	currentHandle         string
+	currentConversationID string
+	history               []calls.ClarificationMessage
 
 	linkCalls                 []linkedConversation
 	appendClarificationCalls  []clarificationExchange
@@ -34,9 +34,9 @@ type fakeCallState struct {
 }
 
 type linkedConversation struct {
-	sessionID             string
-	backendConversationID string
-	handle                string
+	sessionID      string
+	conversationID string
+	handle         string
 }
 
 type clarificationExchange struct {
@@ -45,14 +45,14 @@ type clarificationExchange struct {
 	question  string
 }
 
-func (f *fakeCallState) LinkConversation(transportSessionID string, backendConversationID string, conversationHandle string) {
+func (f *fakeCallState) LinkConversation(transportSessionID string, conversationID string, conversationHandle string) {
 	f.linkCalls = append(f.linkCalls, linkedConversation{
-		sessionID:             transportSessionID,
-		backendConversationID: backendConversationID,
-		handle:                conversationHandle,
+		sessionID:      transportSessionID,
+		conversationID: conversationID,
+		handle:         conversationHandle,
 	})
 	f.currentHandle = conversationHandle
-	f.currentBackendID = backendConversationID
+	f.currentConversationID = conversationID
 }
 
 func (f *fakeCallState) AppendClarificationExchange(transportSessionID string, userText string, agentQuestion string) bool {
@@ -77,11 +77,11 @@ func (f *fakeCallState) CurrentConversationHandleForSession(transportSessionID s
 	return f.currentHandle, true
 }
 
-func (f *fakeCallState) CurrentBackendConversationIDForSession(transportSessionID string) (string, bool) {
-	if f.currentBackendID == "" {
+func (f *fakeCallState) CurrentConversationIDForSession(transportSessionID string) (string, bool) {
+	if f.currentConversationID == "" {
 		return "", false
 	}
-	return f.currentBackendID, true
+	return f.currentConversationID, true
 }
 
 func (f *fakeCallState) ClarificationHistoryForSession(transportSessionID string) []calls.ClarificationMessage {
@@ -108,8 +108,9 @@ func (f *fakeConversationCreator) CreateConversation(profileName string, title s
 }
 
 type fakeConversationMessenger struct {
-	err   error
-	calls []continueConversationCall
+	err    error
+	result ConversationSendResult
+	calls  []continueConversationCall
 }
 
 type continueConversationCall struct {
@@ -117,9 +118,18 @@ type continueConversationCall struct {
 	message      string
 }
 
-func (f *fakeConversationMessenger) ContinueConversation(conversation conversations.Conversation, message string) error {
+func (f *fakeConversationMessenger) ContinueConversation(conversation conversations.Conversation, message string) (ConversationSendResult, error) {
 	f.calls = append(f.calls, continueConversationCall{conversation: conversation, message: message})
-	return f.err
+	if f.err != nil {
+		return ConversationSendResult{}, f.err
+	}
+	if f.result.ConversationID == "" {
+		f.result.ConversationID = conversation.ID
+	}
+	if f.result.DisplayHandle == "" {
+		f.result.DisplayHandle = conversation.DisplayHandle
+	}
+	return f.result, nil
 }
 
 func TestUserInputControllerAskClarifyingQuestionAppendsHistoryAndEmitsOutput(t *testing.T) {
@@ -264,8 +274,8 @@ func TestUserInputControllerMessageUsesCurrentConversationContext(t *testing.T) 
 		},
 	}
 	callState := &fakeCallState{
-		currentHandle:    conversation.DisplayHandle,
-		currentBackendID: conversation.BackendConversationID,
+		currentHandle:         conversation.DisplayHandle,
+		currentConversationID: conversation.ID,
 	}
 	messenger := &fakeConversationMessenger{}
 	controller := &UserInputController{
@@ -371,8 +381,8 @@ func TestUserInputControllerMessageFallsBackToCurrentHandleImmediateFeedback(t *
 		},
 	}
 	callState := &fakeCallState{
-		currentHandle:    conversation.DisplayHandle,
-		currentBackendID: conversation.BackendConversationID,
+		currentHandle:         conversation.DisplayHandle,
+		currentConversationID: conversation.ID,
 	}
 	messenger := &fakeConversationMessenger{}
 	controller := &UserInputController{
@@ -404,7 +414,7 @@ func newTestConversationStore(t *testing.T) *conversations.Store {
 	if err != nil {
 		t.Fatalf("failed to open sqlite db: %v", err)
 	}
-	if err := db.AutoMigrate(&conversations.Conversation{}, &conversations.Message{}, &conversations.ConversationNote{}); err != nil {
+	if err := db.AutoMigrate(&conversations.Conversation{}, &conversations.ConversationInput{}, &conversations.Message{}, &conversations.ConversationNote{}); err != nil {
 		t.Fatalf("failed to migrate test db: %v", err)
 	}
 	return conversations.NewStore(db)

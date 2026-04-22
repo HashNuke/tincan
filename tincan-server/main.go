@@ -41,6 +41,7 @@ type server struct {
 	backends            *tincanconfig.AgentBackendStore
 	conversations       *conversations.Store
 	agentAdapters       map[string]agent_adapters.Adapter
+	managedScheduler    *ManagedRunScheduler
 	conversationService *ConversationService
 	userInputController *controllers.UserInputController
 	hookController      *controllers.HookController
@@ -117,7 +118,7 @@ func main() {
 		log.Fatalf("failed to resolve data dir: %v", err)
 	}
 
-	srv, err := newServer(dataDir)
+	srv, err := newServer(dataDir, *portFlag)
 	if err != nil {
 		log.Fatalf("failed to initialize server: %v", err)
 	}
@@ -167,7 +168,7 @@ func main() {
 	}
 }
 
-func newServer(dataDir string) (*server, error) {
+func newServer(dataDir string, port int) (*server, error) {
 	appConfig, err := tincanconfig.NewAppConfigStore(dataDir)
 	if err != nil {
 		return nil, fmt.Errorf("init app config: %w", err)
@@ -213,7 +214,13 @@ func newServer(dataDir string) (*server, error) {
 	var updateProcessor controllers.ConversationUpdateProcessor = builtRouter
 
 	callManager := calls.NewManager()
-	conversationService := NewConversationService(profiles, backends, conversationStore, agentAdapters)
+	tincanExecPath, err := resolveTincanExecPath()
+	if err != nil {
+		return nil, err
+	}
+	serverURL := fmt.Sprintf("http://127.0.0.1:%d", port)
+	managedScheduler := NewManagedRunScheduler(serverURL, tincanExecPath, conversationStore, backends, agentAdapters)
+	conversationService := NewConversationService(profiles, backends, conversationStore, agentAdapters, managedScheduler)
 
 	srv := &server{
 		inference:           &inferenceClient{socketPath: inferenceSocketPath()},
@@ -223,6 +230,7 @@ func newServer(dataDir string) (*server, error) {
 		backends:            backends,
 		conversations:       conversationStore,
 		agentAdapters:       agentAdapters,
+		managedScheduler:    managedScheduler,
 		conversationService: conversationService,
 		userInputController: &controllers.UserInputController{
 			Router:             routerService,
@@ -233,7 +241,6 @@ func newServer(dataDir string) (*server, error) {
 		},
 		hookController: &controllers.HookController{
 			Conversations:   conversationStore,
-			Backends:        backends,
 			Sessions:        callManager,
 			UpdateProcessor: updateProcessor,
 		},
@@ -322,14 +329,17 @@ func (s *server) handleOpenCodeHook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid json body", http.StatusBadRequest)
 		return
 	}
-	if event.SessionID == "" {
-		http.Error(w, "missing session id", http.StatusBadRequest)
+	if strings.TrimSpace(event.ConversationID) == "" {
+		http.Error(w, "missing conversation id", http.StatusBadRequest)
 		return
 	}
 	log.Printf(
-		"opencode hook received: event_type=%q session_id=%q status_type=%q error_name=%q error_message=%q",
+		"opencode hook received: conversation_id=%q event_type=%q session_id=%q message_id=%q part_id=%q status_type=%q error_name=%q error_message=%q",
+		event.ConversationID,
 		event.EventType,
 		event.SessionID,
+		event.MessageID,
+		event.PartID,
 		event.StatusType,
 		event.ErrorName,
 		event.ErrorMessage,
@@ -341,22 +351,38 @@ func (s *server) handleOpenCodeHook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !handled {
-		log.Printf("opencode hook ignored: session_id=%q", event.SessionID)
+		log.Printf("opencode hook ignored: conversation_id=%q session_id=%q", event.ConversationID, event.SessionID)
 		w.WriteHeader(http.StatusNoContent)
 		return
+	}
+	switch event.EventType {
+	case "session.idle":
+		if s.managedScheduler != nil {
+			if err := s.managedScheduler.HandleSessionIdle(event.ConversationID); err != nil {
+				http.Error(w, fmt.Sprintf("failed to advance managed conversation on idle: %v", err), http.StatusInternalServerError)
+				return
+			}
+		}
+	case "session.error":
+		if s.managedScheduler != nil {
+			if err := s.managedScheduler.HandleSessionError(event.ConversationID, firstNonEmpty(event.ErrorMessage, event.ErrorName)); err != nil {
+				http.Error(w, fmt.Sprintf("failed to mark managed conversation failed: %v", err), http.StatusInternalServerError)
+				return
+			}
+		}
 	}
 	if err := s.publishOutput(result.OutputEvents...); err != nil {
 		http.Error(w, fmt.Sprintf("failed to publish hook output: %v", err), http.StatusInternalServerError)
 		return
 	}
 	if result.ConversationID != "" {
-		s.broadcastConversationMessageByID(result.ConversationID, result.MessageID)
 		s.broadcastConversationSummaryByID(result.ConversationID)
+		s.broadcastConversationMessageByID(result.ConversationID, result.MessageID)
 	}
 	log.Printf(
-		"opencode hook handled: session_id=%q conversation_id=%q message_id=%q output_events=%d",
-		event.SessionID,
+		"opencode hook handled: conversation_id=%q session_id=%q message_id=%q output_events=%d",
 		result.ConversationID,
+		event.SessionID,
 		result.MessageID,
 		len(result.OutputEvents),
 	)

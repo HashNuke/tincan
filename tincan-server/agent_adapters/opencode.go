@@ -1,12 +1,10 @@
 package agent_adapters
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"log"
-	"net/http"
-	"net/url"
 	"os/exec"
 	"sort"
 	"strings"
@@ -16,42 +14,22 @@ import (
 	tincanrouter "tincan-server/router"
 )
 
-type OpencodeAdapter struct {
-	httpClient *http.Client
-}
-
-type openCodeCreateSessionRequest struct {
-	Title string `json:"title"`
-}
-
-type openCodeSession struct {
-	ID string `json:"id"`
-}
+type OpencodeAdapter struct{}
 
 type openCodeModelRef struct {
 	ProviderID string `json:"providerID"`
 	ModelID    string `json:"modelID"`
 }
 
-type openCodePromptPart struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
-}
-
-type openCodePromptAsyncRequest struct {
-	Model  *openCodeModelRef    `json:"model,omitempty"`
-	Agent  string               `json:"agent,omitempty"`
-	System string               `json:"system,omitempty"`
-	Parts  []openCodePromptPart `json:"parts"`
-}
-
-type openCodeMessageResponse struct {
-	Parts []openCodeResponsePart `json:"parts"`
-}
-
-type openCodeResponsePart struct {
+type openCodeRunOutputPart struct {
 	Type string `json:"type"`
 	Text string `json:"text,omitempty"`
+}
+
+type openCodeRunOutputEvent struct {
+	Type  string                `json:"type"`
+	Part  openCodeRunOutputPart `json:"part"`
+	Error any                   `json:"error,omitempty"`
 }
 
 func (a *OpencodeAdapter) Backend() string {
@@ -62,8 +40,8 @@ func (a *OpencodeAdapter) ValidateBackend(name string, backend tincanconfig.Agen
 	if backend.Options.ConnectionType == "" {
 		return fmt.Errorf("agent backend %q requires options.connection_type for opencode", name)
 	}
-	if backend.Options.ConnectionType == "server" && backend.Options.BaseURL == "" {
-		return fmt.Errorf("agent backend %q requires options.base_url when connection_type=server", name)
+	if backend.Options.ConnectionType != "command" {
+		return fmt.Errorf("agent backend %q requires options.connection_type=command for opencode", name)
 	}
 	return nil
 }
@@ -90,148 +68,28 @@ func (a *OpencodeAdapter) ListModels(backend tincanconfig.AgentBackendDefinition
 	return models, nil
 }
 
-func (a *OpencodeAdapter) StartConversation(profile tincanconfig.AgentProfile, backend tincanconfig.AgentBackendDefinition, title string, message string) (ConversationStartResult, error) {
-	if err := a.ValidateBackend(profile.AgentBackend, backend); err != nil {
-		return ConversationStartResult{}, err
+func (a *OpencodeAdapter) BuildConversationCommand(input ConversationCommandInput) (ManagedCommand, error) {
+	if err := a.ValidateBackend(input.Conversation.AgentBackend, input.Backend); err != nil {
+		return ManagedCommand{}, err
 	}
-	if title == "" {
-		return ConversationStartResult{}, fmt.Errorf("start conversation requires non-empty title")
-	}
-	if message == "" {
-		return ConversationStartResult{}, fmt.Errorf("start conversation requires non-empty message")
+	if len(input.Inputs) == 0 {
+		return ManagedCommand{}, fmt.Errorf("managed conversation command requires at least one input")
 	}
 
-	httpClient := a.httpClient
-	if httpClient == nil {
-		httpClient = http.DefaultClient
+	args := a.baseRunArgs(input.Backend, input.Conversation.WorkingDirectory)
+	if strings.TrimSpace(input.Conversation.BackendConversationID) == "" {
+		if trimmedTitle := strings.TrimSpace(input.Title); trimmedTitle != "" {
+			args = append(args, "--title", trimmedTitle)
+		}
+	} else {
+		args = append(args, "--session", input.Conversation.BackendConversationID)
 	}
 
-	baseURL, err := url.Parse(backend.Options.BaseURL)
-	if err != nil {
-		return ConversationStartResult{}, fmt.Errorf("parse opencode base url: %w", err)
-	}
-
-	session, err := a.createSession(httpClient, *baseURL, profile.WorkingDirectory, title)
-	if err != nil {
-		return ConversationStartResult{}, err
-	}
-	log.Printf(
-		"opencode session created: session_id=%q directory=%q title=%q",
-		session.ID,
-		profile.WorkingDirectory,
-		title,
-	)
-
-	promptURL := *baseURL
-	promptURL.Path = strings.TrimRight(baseURL.Path, "/") + "/session/" + session.ID + "/prompt_async"
-	query := promptURL.Query()
-	query.Set("directory", profile.WorkingDirectory)
-	promptURL.RawQuery = query.Encode()
-
-	modelRef, err := parseOptionalOpenCodeModel(backend.Options.Model)
-	if err != nil {
-		return ConversationStartResult{}, err
-	}
-
-	promptBody, err := json.Marshal(openCodePromptAsyncRequest{
-		Model: modelRef,
-		Agent: backend.Options.Agent,
-		Parts: []openCodePromptPart{{Type: "text", Text: message}},
-	})
-	if err != nil {
-		return ConversationStartResult{}, fmt.Errorf("marshal prompt request: %w", err)
-	}
-
-	promptReq, err := http.NewRequest(http.MethodPost, promptURL.String(), bytes.NewReader(promptBody))
-	if err != nil {
-		return ConversationStartResult{}, fmt.Errorf("build prompt request: %w", err)
-	}
-	promptReq.Header.Set("Content-Type", "application/json")
-
-	promptResp, err := httpClient.Do(promptReq)
-	if err != nil {
-		return ConversationStartResult{}, fmt.Errorf("opencode prompt_async request failed: %w", err)
-	}
-	defer promptResp.Body.Close()
-
-	if promptResp.StatusCode != http.StatusNoContent {
-		return ConversationStartResult{}, fmt.Errorf("opencode prompt_async failed with status %d", promptResp.StatusCode)
-	}
-	log.Printf(
-		"opencode prompt scheduled: session_id=%q directory=%q agent=%q model=%q",
-		session.ID,
-		profile.WorkingDirectory,
-		backend.Options.Agent,
-		backend.Options.Model,
-	)
-
-	return ConversationStartResult{
-		BackendConversationID: session.ID,
-		Status:                "running",
+	return ManagedCommand{
+		Program: "opencode",
+		Args:    args,
+		Stdin:   buildManagedConversationPrompt(input.Inputs),
 	}, nil
-}
-
-func (a *OpencodeAdapter) ContinueConversation(conversation conversations.Conversation, backend tincanconfig.AgentBackendDefinition, message string) error {
-	if err := a.ValidateBackend(conversation.AgentBackend, backend); err != nil {
-		return err
-	}
-	if message == "" {
-		return fmt.Errorf("continue conversation requires non-empty message")
-	}
-
-	httpClient := a.httpClient
-	if httpClient == nil {
-		httpClient = http.DefaultClient
-	}
-
-	baseURL, err := url.Parse(backend.Options.BaseURL)
-	if err != nil {
-		return fmt.Errorf("parse opencode base url: %w", err)
-	}
-
-	promptURL := *baseURL
-	promptURL.Path = strings.TrimRight(baseURL.Path, "/") + "/session/" + conversation.BackendConversationID + "/prompt_async"
-	query := promptURL.Query()
-	query.Set("directory", conversation.WorkingDirectory)
-	promptURL.RawQuery = query.Encode()
-
-	modelRef, err := parseOptionalOpenCodeModel(backend.Options.Model)
-	if err != nil {
-		return err
-	}
-
-	promptBody, err := json.Marshal(openCodePromptAsyncRequest{
-		Model: modelRef,
-		Agent: backend.Options.Agent,
-		Parts: []openCodePromptPart{{Type: "text", Text: message}},
-	})
-	if err != nil {
-		return fmt.Errorf("marshal continue prompt request: %w", err)
-	}
-
-	promptReq, err := http.NewRequest(http.MethodPost, promptURL.String(), bytes.NewReader(promptBody))
-	if err != nil {
-		return fmt.Errorf("build continue prompt request: %w", err)
-	}
-	promptReq.Header.Set("Content-Type", "application/json")
-
-	promptResp, err := httpClient.Do(promptReq)
-	if err != nil {
-		return fmt.Errorf("opencode continue prompt_async request failed: %w", err)
-	}
-	defer promptResp.Body.Close()
-
-	if promptResp.StatusCode != http.StatusNoContent {
-		return fmt.Errorf("opencode continue prompt_async failed with status %d", promptResp.StatusCode)
-	}
-	log.Printf(
-		"opencode continuation scheduled: session_id=%q directory=%q agent=%q model=%q",
-		conversation.BackendConversationID,
-		conversation.WorkingDirectory,
-		backend.Options.Agent,
-		backend.Options.Model,
-	)
-	return nil
 }
 
 func (a *OpencodeAdapter) RunRouterPrompt(profile tincanconfig.AgentProfile, backend tincanconfig.AgentBackendDefinition, prompt Prompt, rawTranscript string) (tincanrouter.RouteUserInputResult, error) {
@@ -239,7 +97,7 @@ func (a *OpencodeAdapter) RunRouterPrompt(profile tincanconfig.AgentProfile, bac
 		return tincanrouter.RouteUserInputResult{}, err
 	}
 
-	raw, err := a.runMessagePrompt(backend, profile.WorkingDirectory, "Router", prompt)
+	raw, err := a.runOneShotPrompt(backend, profile.WorkingDirectory, buildSyntheticPrompt(prompt))
 	if err != nil {
 		return tincanrouter.RouteUserInputResult{}, err
 	}
@@ -262,7 +120,7 @@ func (a *OpencodeAdapter) RunConversationUpdatePrompt(profile tincanconfig.Agent
 		return tincanrouter.ProcessConversationUpdateResult{}, err
 	}
 
-	raw, err := a.runMessagePrompt(backend, profile.WorkingDirectory, "Update processor", prompt)
+	raw, err := a.runOneShotPrompt(backend, profile.WorkingDirectory, buildSyntheticPrompt(prompt))
 	if err != nil {
 		return tincanrouter.ProcessConversationUpdateResult{}, err
 	}
@@ -277,109 +135,115 @@ func (a *OpencodeAdapter) RunConversationUpdatePrompt(profile tincanconfig.Agent
 	return result, nil
 }
 
-func (a *OpencodeAdapter) runMessagePrompt(backend tincanconfig.AgentBackendDefinition, workingDirectory string, title string, prompt Prompt) (string, error) {
-	httpClient := a.httpClient
-	if httpClient == nil {
-		httpClient = http.DefaultClient
+func (a *OpencodeAdapter) baseRunArgs(backend tincanconfig.AgentBackendDefinition, workingDirectory string) []string {
+	args := []string{"run", "--format", "json"}
+	if strings.TrimSpace(workingDirectory) != "" {
+		args = append(args, "--dir", workingDirectory)
 	}
-
-	baseURL, err := url.Parse(backend.Options.BaseURL)
-	if err != nil {
-		return "", fmt.Errorf("parse opencode base url: %w", err)
+	if strings.TrimSpace(backend.Options.Model) != "" {
+		args = append(args, "--model", backend.Options.Model)
 	}
-
-	session, err := a.createSession(httpClient, *baseURL, workingDirectory, title)
-	if err != nil {
-		return "", err
+	if strings.TrimSpace(backend.Options.Agent) != "" {
+		args = append(args, "--agent", backend.Options.Agent)
 	}
-
-	messageURL := baseURL.ResolveReference(&url.URL{Path: strings.TrimRight(baseURL.Path, "/") + "/session/" + session.ID + "/message"})
-	query := messageURL.Query()
-	query.Set("directory", workingDirectory)
-	messageURL.RawQuery = query.Encode()
-
-	modelRef, err := parseOptionalOpenCodeModel(backend.Options.Model)
-	if err != nil {
-		return "", err
+	if strings.TrimSpace(backend.Options.ModelVariant) != "" {
+		args = append(args, "--variant", backend.Options.ModelVariant)
 	}
-
-	body, err := json.Marshal(openCodePromptAsyncRequest{
-		Model:  modelRef,
-		Agent:  backend.Options.Agent,
-		System: prompt.System,
-		Parts:  []openCodePromptPart{{Type: "text", Text: prompt.User}},
-	})
-	if err != nil {
-		return "", fmt.Errorf("marshal prompt request: %w", err)
-	}
-
-	req, err := http.NewRequest(http.MethodPost, messageURL.String(), bytes.NewReader(body))
-	if err != nil {
-		return "", fmt.Errorf("build prompt request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("prompt request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("prompt request failed with status %d", resp.StatusCode)
-	}
-
-	var messageResponse openCodeMessageResponse
-	if err := json.NewDecoder(resp.Body).Decode(&messageResponse); err != nil {
-		return "", fmt.Errorf("decode prompt response: %w", err)
-	}
-
-	var textBuilder strings.Builder
-	for _, part := range messageResponse.Parts {
-		if part.Type == "text" {
-			textBuilder.WriteString(part.Text)
-		}
-	}
-
-	return strings.TrimSpace(textBuilder.String()), nil
+	args = append(args, backend.Options.ExtraArgs...)
+	return args
 }
 
-func (a *OpencodeAdapter) createSession(httpClient *http.Client, baseURL url.URL, directory string, title string) (openCodeSession, error) {
-	createSessionURL := baseURL
-	createSessionURL.Path = strings.TrimRight(baseURL.Path, "/") + "/session"
-	query := createSessionURL.Query()
-	query.Set("directory", directory)
-	createSessionURL.RawQuery = query.Encode()
+func (a *OpencodeAdapter) runOneShotPrompt(backend tincanconfig.AgentBackendDefinition, workingDirectory string, stdin string) (string, error) {
+	args := a.baseRunArgs(backend, workingDirectory)
 
-	createBody, err := json.Marshal(openCodeCreateSessionRequest{Title: title})
+	command := exec.Command("opencode", args...)
+	command.Dir = workingDirectory
+	command.Stdin = strings.NewReader(stdin)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+
+	if err := command.Run(); err != nil {
+		trimmedStderr := strings.TrimSpace(stderr.String())
+		if trimmedStderr == "" {
+			return "", fmt.Errorf("run opencode prompt: %w", err)
+		}
+		return "", fmt.Errorf("run opencode prompt: %w: %s", err, trimmedStderr)
+	}
+
+	text, err := parseOpenCodeRunJSONOutput(stdout.Bytes())
 	if err != nil {
-		return openCodeSession{}, fmt.Errorf("marshal create session request: %w", err)
+		trimmedStderr := strings.TrimSpace(stderr.String())
+		if trimmedStderr == "" {
+			return "", err
+		}
+		return "", fmt.Errorf("%w: %s", err, trimmedStderr)
+	}
+	return text, nil
+}
+
+func buildSyntheticPrompt(prompt Prompt) string {
+	var builder strings.Builder
+	systemPrompt := strings.TrimSpace(prompt.System)
+	userPrompt := strings.TrimSpace(prompt.User)
+
+	if systemPrompt != "" {
+		builder.WriteString("Follow these instructions exactly.\n\n")
+		builder.WriteString("<SYSTEM>\n")
+		builder.WriteString(systemPrompt)
+		builder.WriteString("\n</SYSTEM>\n\n")
+	}
+	if userPrompt != "" {
+		builder.WriteString("<USER>\n")
+		builder.WriteString(userPrompt)
+		builder.WriteString("\n</USER>\n")
 	}
 
-	createReq, err := http.NewRequest(http.MethodPost, createSessionURL.String(), bytes.NewReader(createBody))
-	if err != nil {
-		return openCodeSession{}, fmt.Errorf("build create session request: %w", err)
-	}
-	createReq.Header.Set("Content-Type", "application/json")
+	return strings.TrimSpace(builder.String())
+}
 
-	createResp, err := httpClient.Do(createReq)
-	if err != nil {
-		return openCodeSession{}, fmt.Errorf("create opencode session request failed: %w", err)
+func buildManagedConversationPrompt(inputs []conversations.ConversationInput) string {
+	if len(inputs) == 0 {
+		return ""
 	}
-	defer createResp.Body.Close()
-
-	if createResp.StatusCode != http.StatusOK {
-		return openCodeSession{}, fmt.Errorf("create opencode session failed with status %d", createResp.StatusCode)
+	if len(inputs) == 1 {
+		return strings.TrimSpace(inputs[0].UserText)
 	}
 
-	var session openCodeSession
-	if err := json.NewDecoder(createResp.Body).Decode(&session); err != nil {
-		return openCodeSession{}, fmt.Errorf("decode opencode session response: %w", err)
+	var builder strings.Builder
+	builder.WriteString("The user sent these follow-up messages while you were already working in this same conversation. Continue the same session and address them in order.\n\n")
+	for index, input := range inputs {
+		builder.WriteString(fmt.Sprintf("%d. %s\n", index+1, strings.TrimSpace(input.UserText)))
 	}
-	if session.ID == "" {
-		return openCodeSession{}, fmt.Errorf("opencode session response missing id")
+	return strings.TrimSpace(builder.String())
+}
+
+func parseOpenCodeRunJSONOutput(raw []byte) (string, error) {
+	scanner := bufio.NewScanner(bytes.NewReader(raw))
+	var builder strings.Builder
+
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+
+		var event openCodeRunOutputEvent
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			return "", fmt.Errorf("decode opencode json output: %w", err)
+		}
+		if event.Type != "text" || event.Part.Type != "text" {
+			continue
+		}
+		builder.WriteString(event.Part.Text)
 	}
-	return session, nil
+	if err := scanner.Err(); err != nil {
+		return "", fmt.Errorf("read opencode json output: %w", err)
+	}
+
+	return strings.TrimSpace(builder.String()), nil
 }
 
 func parseOptionalOpenCodeModel(raw string) (*openCodeModelRef, error) {

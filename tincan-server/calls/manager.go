@@ -11,9 +11,9 @@ type EventSink interface {
 }
 
 type Session struct {
-	State                  SessionState
-	EventSink              EventSink
-	BackendConversationIDs map[string]struct{}
+	State           SessionState
+	EventSink       EventSink
+	ConversationIDs map[string]struct{}
 }
 
 type Manager struct {
@@ -33,8 +33,8 @@ func (m *Manager) RegisterSession(transportSessionID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.sessions[transportSessionID] = &Session{
-		State:                  SessionState{TransportSessionID: transportSessionID},
-		BackendConversationIDs: make(map[string]struct{}),
+		State:           SessionState{TransportSessionID: transportSessionID},
+		ConversationIDs: make(map[string]struct{}),
 	}
 }
 
@@ -49,9 +49,9 @@ func (m *Manager) RemoveSession(transportSessionID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.sessions, transportSessionID)
-	for backendID, sessionID := range m.conversationSessions {
+	for conversationID, sessionID := range m.conversationSessions {
 		if sessionID == transportSessionID {
-			delete(m.conversationSessions, backendID)
+			delete(m.conversationSessions, conversationID)
 		}
 	}
 }
@@ -78,27 +78,27 @@ func (m *Manager) SetEventSink(transportSessionID string, sink EventSink) bool {
 	return true
 }
 
-func (m *Manager) LinkConversation(transportSessionID string, backendConversationID string, conversationHandle string) {
+func (m *Manager) LinkConversation(transportSessionID string, conversationID string, conversationHandle string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	session, ok := m.sessions[transportSessionID]
 	if !ok {
 		return
 	}
-	session.BackendConversationIDs[backendConversationID] = struct{}{}
-	session.State.CurrentBackendConversationID = backendConversationID
+	session.ConversationIDs[conversationID] = struct{}{}
+	session.State.CurrentConversationID = conversationID
 	session.State.CurrentConversationHandle = conversationHandle
-	m.conversationSessions[backendConversationID] = transportSessionID
+	m.conversationSessions[conversationID] = transportSessionID
 }
 
-func (m *Manager) SessionIDForConversation(backendConversationID string) (string, bool) {
+func (m *Manager) SessionIDForConversation(conversationID string) (string, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	sessionID, ok := m.conversationSessions[backendConversationID]
+	sessionID, ok := m.conversationSessions[conversationID]
 	return sessionID, ok
 }
 
-func (m *Manager) BackendConversationIDsForSession(transportSessionID string) []string {
+func (m *Manager) ConversationIDsForSession(transportSessionID string) []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	session, ok := m.sessions[transportSessionID]
@@ -106,42 +106,42 @@ func (m *Manager) BackendConversationIDsForSession(transportSessionID string) []
 		return nil
 	}
 
-	backendConversationIDs := make([]string, 0, len(session.BackendConversationIDs))
-	for backendConversationID := range session.BackendConversationIDs {
-		backendConversationIDs = append(backendConversationIDs, backendConversationID)
+	conversationIDs := make([]string, 0, len(session.ConversationIDs))
+	for conversationID := range session.ConversationIDs {
+		conversationIDs = append(conversationIDs, conversationID)
 	}
-	slices.Sort(backendConversationIDs)
-	return backendConversationIDs
+	slices.Sort(conversationIDs)
+	return conversationIDs
 }
 
-func (m *Manager) ActiveBackendConversationIDs() []string {
+func (m *Manager) ActiveConversationIDs() []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	backendConversationIDs := make([]string, 0, len(m.sessions))
+	conversationIDs := make([]string, 0, len(m.sessions))
 	seen := make(map[string]struct{}, len(m.sessions))
 	for _, session := range m.sessions {
-		if session.State.CurrentBackendConversationID == "" {
+		if session.State.CurrentConversationID == "" {
 			continue
 		}
-		if _, ok := seen[session.State.CurrentBackendConversationID]; ok {
+		if _, ok := seen[session.State.CurrentConversationID]; ok {
 			continue
 		}
-		seen[session.State.CurrentBackendConversationID] = struct{}{}
-		backendConversationIDs = append(backendConversationIDs, session.State.CurrentBackendConversationID)
+		seen[session.State.CurrentConversationID] = struct{}{}
+		conversationIDs = append(conversationIDs, session.State.CurrentConversationID)
 	}
-	slices.Sort(backendConversationIDs)
-	return backendConversationIDs
+	slices.Sort(conversationIDs)
+	return conversationIDs
 }
 
-func (m *Manager) CurrentBackendConversationIDForSession(transportSessionID string) (string, bool) {
+func (m *Manager) CurrentConversationIDForSession(transportSessionID string) (string, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	session, ok := m.sessions[transportSessionID]
-	if !ok || session.State.CurrentBackendConversationID == "" {
+	if !ok || session.State.CurrentConversationID == "" {
 		return "", false
 	}
-	return session.State.CurrentBackendConversationID, true
+	return session.State.CurrentConversationID, true
 }
 
 func (m *Manager) CurrentConversationHandleForSession(transportSessionID string) (string, bool) {

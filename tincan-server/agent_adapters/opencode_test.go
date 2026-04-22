@@ -1,6 +1,12 @@
 package agent_adapters
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	tincanconfig "tincan-server/config"
+	"tincan-server/conversations"
+)
 
 func TestParseOptionalOpenCodeModelAllowsEmptyString(t *testing.T) {
 	model, err := parseOptionalOpenCodeModel("")
@@ -74,5 +80,92 @@ func TestParseOpenCodeModelsOutputIgnoresNoise(t *testing.T) {
 	}
 	if models[0] != "openai/gpt-5.3-codex-spark" || models[1] != "openrouter/openai/gpt-5" {
 		t.Fatalf("unexpected parsed models: %v", models)
+	}
+}
+
+func TestBuildConversationCommandForNewConversation(t *testing.T) {
+	adapter := &OpencodeAdapter{}
+	command, err := adapter.BuildConversationCommand(ConversationCommandInput{
+		Conversation: conversations.Conversation{
+			AgentBackend:     "opencode-1",
+			WorkingDirectory: "/tmp/project",
+		},
+		Backend: tincanconfig.AgentBackendDefinition{
+			Type: "opencode",
+			Options: tincanconfig.AgentBackendOptions{
+				ConnectionType: "command",
+				Model:          "openai/gpt-5.3-codex-spark",
+				ModelVariant:   "medium",
+				Agent:          "build",
+				ExtraArgs:      []string{"--share"},
+			},
+		},
+		Title: "Build fixes",
+		Inputs: []conversations.ConversationInput{{
+			UserText: "Fix the failing build.",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("BuildConversationCommand returned error: %v", err)
+	}
+
+	if command.Program != "opencode" {
+		t.Fatalf("unexpected program: %q", command.Program)
+	}
+	if !strings.Contains(strings.Join(command.Args, " "), "--title Build fixes") {
+		t.Fatalf("expected title args, got %v", command.Args)
+	}
+	if !strings.Contains(strings.Join(command.Args, " "), "--dir /tmp/project") {
+		t.Fatalf("expected dir args, got %v", command.Args)
+	}
+	if strings.TrimSpace(command.Stdin) != "Fix the failing build." {
+		t.Fatalf("unexpected stdin: %q", command.Stdin)
+	}
+}
+
+func TestBuildConversationCommandBatchesQueuedFollowUps(t *testing.T) {
+	adapter := &OpencodeAdapter{}
+	command, err := adapter.BuildConversationCommand(ConversationCommandInput{
+		Conversation: conversations.Conversation{
+			AgentBackend:          "opencode-1",
+			WorkingDirectory:      "/tmp/project",
+			BackendConversationID: "sess-123",
+		},
+		Backend: tincanconfig.AgentBackendDefinition{
+			Type: "opencode",
+			Options: tincanconfig.AgentBackendOptions{
+				ConnectionType: "command",
+			},
+		},
+		Inputs: []conversations.ConversationInput{
+			{UserText: "First update."},
+			{UserText: "Second update."},
+		},
+	})
+	if err != nil {
+		t.Fatalf("BuildConversationCommand returned error: %v", err)
+	}
+
+	if !strings.Contains(strings.Join(command.Args, " "), "--session sess-123") {
+		t.Fatalf("expected session args, got %v", command.Args)
+	}
+	if !strings.Contains(command.Stdin, "1. First update.") || !strings.Contains(command.Stdin, "2. Second update.") {
+		t.Fatalf("expected numbered batch prompt, got %q", command.Stdin)
+	}
+}
+
+func TestParseOpenCodeRunJSONOutputCollectsCompletedText(t *testing.T) {
+	raw := []byte(`
+{"type":"tool_use","part":{"type":"tool"}}
+{"type":"text","part":{"type":"text","text":"{\"action\":\"ignore\""}}
+{"type":"text","part":{"type":"text","text":"}"}}
+`)
+
+	text, err := parseOpenCodeRunJSONOutput(raw)
+	if err != nil {
+		t.Fatalf("parseOpenCodeRunJSONOutput returned error: %v", err)
+	}
+	if text != `{"action":"ignore"}` {
+		t.Fatalf("unexpected parsed text: %q", text)
 	}
 }

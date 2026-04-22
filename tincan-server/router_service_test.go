@@ -8,7 +8,6 @@ import (
 
 	"tincan-server/agent_adapters"
 	tincanconfig "tincan-server/config"
-	"tincan-server/conversations"
 	tincanrouter "tincan-server/router"
 )
 
@@ -36,12 +35,8 @@ func (a *routerTestAdapter) ListModels(backend tincanconfig.AgentBackendDefiniti
 	return nil, nil
 }
 
-func (a *routerTestAdapter) StartConversation(profile tincanconfig.AgentProfile, backend tincanconfig.AgentBackendDefinition, title string, message string) (agent_adapters.ConversationStartResult, error) {
-	return agent_adapters.ConversationStartResult{}, nil
-}
-
-func (a *routerTestAdapter) ContinueConversation(conversation conversations.Conversation, backend tincanconfig.AgentBackendDefinition, message string) error {
-	return nil
+func (a *routerTestAdapter) BuildConversationCommand(input agent_adapters.ConversationCommandInput) (agent_adapters.ManagedCommand, error) {
+	return agent_adapters.ManagedCommand{}, nil
 }
 
 func (a *routerTestAdapter) RunRouterPrompt(profile tincanconfig.AgentProfile, backend tincanconfig.AgentBackendDefinition, prompt agent_adapters.Prompt, rawTranscript string) (tincanrouter.RouteUserInputResult, error) {

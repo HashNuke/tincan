@@ -260,6 +260,18 @@ build_server() {
   )
 }
 
+build_tincan_exec() {
+  local destination_bin="$1"
+
+  require_command go
+
+  log "Building tincan-exec"
+  (
+    cd "$SERVER_DIR"
+    go build -trimpath -o "$destination_bin" ./cmd/tincan-exec
+  )
+}
+
 main() {
   local runtime_dir="$APP_RUNTIME_DIR_DEFAULT"
   local skip_model_downloads=0
@@ -307,6 +319,7 @@ main() {
 
   build_inference "$runtime_dir/tincan-inference-macos"
   build_server "$runtime_dir/tincan-server"
+  build_tincan_exec "$runtime_dir/tincan-exec"
   stage_manifest "$runtime_dir"
 
   log "Bundled runtime staged at $runtime_dir"

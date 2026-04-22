@@ -140,17 +140,15 @@ func testRoutesWithDataDir(t *testing.T) (Routes, string) {
   "__router__": {
     "type": "opencode",
     "options": {
-      "connection_type": "server",
-      "model": "openai/gpt-5.3-codex-spark",
-      "base_url": "http://127.0.0.1:4096"
+      "connection_type": "command",
+      "model": "openai/gpt-5.3-codex-spark"
     }
   },
   "opencode": {
     "type": "opencode",
     "options": {
-      "connection_type": "server",
-      "model": "anthropic/claude-sonnet-4",
-      "base_url": "http://127.0.0.1:4096"
+      "connection_type": "command",
+      "model": "anthropic/claude-sonnet-4"
     }
   }
 }`), 0o644); err != nil {
@@ -422,9 +420,9 @@ func TestRoutesPatchAgentBackendUpdatesConfig(t *testing.T) {
   "name": "opencode",
   "type": "opencode",
   "options": {
-    "connection_type": "server",
+    "connection_type": "command",
     "model": "openai/gpt-5.3-codex-spark",
-    "base_url": "http://127.0.0.1:5000"
+    "agent": "review"
   }
 }`)
 	req := httptest.NewRequest(http.MethodPatch, "/api/v1/agent-backends/opencode", bytes.NewReader(body))
@@ -436,15 +434,15 @@ func TestRoutesPatchAgentBackendUpdatesConfig(t *testing.T) {
 	}
 
 	backend, _ := routes.Backends.Get("opencode")
-	if backend.Options.BaseURL != "http://127.0.0.1:5000" {
-		t.Fatalf("expected updated base_url, got %q", backend.Options.BaseURL)
+	if backend.Options.Agent != "review" {
+		t.Fatalf("expected updated agent, got %q", backend.Options.Agent)
 	}
 
 	data, err := os.ReadFile(filepath.Join(dataDir, "config", "agent_backends.json"))
 	if err != nil {
 		t.Fatalf("read agent_backends.json: %v", err)
 	}
-	if !bytes.Contains(data, []byte(`"base_url": "http://127.0.0.1:5000"`)) {
+	if !bytes.Contains(data, []byte(`"agent": "review"`)) {
 		t.Fatalf("expected updated backend config, got %s", string(data))
 	}
 }
