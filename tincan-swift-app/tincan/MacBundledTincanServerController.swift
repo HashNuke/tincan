@@ -3,6 +3,52 @@ import AppKit
 import Darwin
 import Foundation
 
+struct BundledServerLogFilePreparationResult {
+    let handle: FileHandle
+    let existingSize: UInt64
+    let wasTruncated: Bool
+}
+
+enum BundledServerLogFilePolicy {
+    static let truncationThresholdBytes: UInt64 = 1_048_576
+
+    static func shouldTruncate(existingSize: UInt64) -> Bool {
+        existingSize > truncationThresholdBytes
+    }
+
+    static func prepareLogFile(
+        at logURL: URL,
+        fileManager: FileManager = .default
+    ) throws -> BundledServerLogFilePreparationResult {
+        _ = fileManager.createFile(atPath: logURL.path, contents: nil)
+
+        let existingSize = try currentSizeOfLogFile(at: logURL, fileManager: fileManager)
+        let handle = try FileHandle(forWritingTo: logURL)
+        let wasTruncated = shouldTruncate(existingSize: existingSize)
+        if wasTruncated {
+            try handle.truncate(atOffset: 0)
+        }
+        _ = try handle.seekToEnd()
+
+        return BundledServerLogFilePreparationResult(
+            handle: handle,
+            existingSize: existingSize,
+            wasTruncated: wasTruncated
+        )
+    }
+
+    private static func currentSizeOfLogFile(
+        at logURL: URL,
+        fileManager: FileManager
+    ) throws -> UInt64 {
+        let attributes = try fileManager.attributesOfItem(atPath: logURL.path)
+        if let size = attributes[.size] as? NSNumber {
+            return size.uint64Value
+        }
+        return 0
+    }
+}
+
 @MainActor
 final class MacBundledTincanServerController {
     private static let timestampFormatter: ISO8601DateFormatter = {
@@ -203,21 +249,21 @@ final class MacBundledTincanServerController {
         guard logHandle == nil else { return }
 
         do {
-            let handle = try prepareLogFile()
-            logHandle = handle
+            let preparedLogFile = try prepareLogFile()
+            logHandle = preparedLogFile.handle
+            if preparedLogFile.wasTruncated {
+                writeStartupLog(
+                    "truncated tincan-server log before launch because it was \(preparedLogFile.existingSize) bytes"
+                )
+            }
             writeStartupLog("mac launcher initialized; log file at \(AppPaths.tincanServerLogURL.path)")
         } catch {
             NSLog("Failed to prepare tincan-server log file: %@", error.localizedDescription)
         }
     }
 
-    private func prepareLogFile() throws -> FileHandle {
-        let logURL = AppPaths.tincanServerLogURL
-        FileManager.default.createFile(atPath: logURL.path, contents: nil)
-
-        let handle = try FileHandle(forWritingTo: logURL)
-        try handle.truncate(atOffset: 0)
-        return handle
+    private func prepareLogFile() throws -> BundledServerLogFilePreparationResult {
+        try BundledServerLogFilePolicy.prepareLogFile(at: AppPaths.tincanServerLogURL)
     }
 
     private func writeStartupLog(_ message: String) {
