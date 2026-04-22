@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	tincanconfig "tincan-server/config"
@@ -444,6 +445,32 @@ func TestRoutesPatchAgentBackendUpdatesConfig(t *testing.T) {
 	}
 	if !bytes.Contains(data, []byte(`"agent": "review"`)) {
 		t.Fatalf("expected updated backend config, got %s", string(data))
+	}
+}
+
+func TestRoutesPatchAgentBackendRejectsLegacyBaseURLField(t *testing.T) {
+	routes := testRoutes(t)
+	mux := http.NewServeMux()
+	routes.Register(mux)
+
+	body := []byte(`{
+  "name": "opencode",
+  "type": "opencode",
+  "options": {
+    "connection_type": "command",
+    "base_url": "http://127.0.0.1:4096"
+  }
+}`)
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/agent-backends/opencode", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "base_url") {
+		t.Fatalf("expected response to mention unknown base_url field, got %q", recorder.Body.String())
 	}
 }
 

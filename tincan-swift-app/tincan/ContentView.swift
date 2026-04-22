@@ -17,6 +17,7 @@ struct ContentView: View {
                     await appModel.ensureMacServerStarted()
                 },
                 callSession: appModel.macCallSession,
+                speechSettings: appModel.macSpeechSettings,
                 workspace: appModel.workspace,
                 serverSettings: appModel.serverSettings
             )

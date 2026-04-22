@@ -51,6 +51,7 @@ enum AppPaths {
 
     nonisolated static let generatedAgentProfilesURL = generatedConfigDirectory.appendingPathComponent("agent_profiles.json")
     nonisolated static let generatedAgentBackendsURL = generatedConfigDirectory.appendingPathComponent("agent_backends.json")
+    nonisolated static let generatedAppConfigURL = generatedConfigDirectory.appendingPathComponent("config.json")
     nonisolated static let speakerProfilesURL = appSupportDirectory.appendingPathComponent("speaker_profiles.json")
     nonisolated static let legacyOwnerProfileURL = appSupportDirectory.appendingPathComponent("owner-voice-profile.json")
     nonisolated static let tincanServerLogURL = logsDirectory.appendingPathComponent("tincan-server.log")

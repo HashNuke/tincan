@@ -85,6 +85,7 @@ struct TincanIOSRootView: View {
 struct TincanMacRootView: View {
     let ensureServerStarted: () async -> Void
     @ObservedObject var callSession: MacCallSessionViewModel
+    @ObservedObject var speechSettings: TincanSpeechSettingsStore
     @ObservedObject var workspace: TincanWorkspaceStore
     @ObservedObject var serverSettings: ServerConnectionStore
 
@@ -118,6 +119,7 @@ struct TincanMacRootView: View {
                 beginSpeakerIdentification: nil,
                 resetSpeakerProfile: nil
             ),
+            speechSettings: speechSettings,
             workspace: workspace,
             serverSettings: serverSettings,
             settingsTitle: "Settings",
@@ -137,6 +139,9 @@ struct TincanMacRootView: View {
 private struct TincanAppSurface: View {
     let callState: TincanCallPresentationState
     let callActions: TincanCallActions
+#if os(macOS)
+    @ObservedObject var speechSettings: TincanSpeechSettingsStore
+#endif
     @ObservedObject var workspace: TincanWorkspaceStore
     @ObservedObject var serverSettings: ServerConnectionStore
     let settingsTitle: String
@@ -212,6 +217,20 @@ private struct TincanAppSurface: View {
         }
 #endif
         .sheet(isPresented: $isSettingsPresented) {
+#if os(macOS)
+            TincanSettingsScreen(
+                workspace: workspace,
+                serverSettings: serverSettings,
+                speechSettings: speechSettings,
+                callState: callState,
+                title: settingsTitle,
+                allowEditing: allowSettingsEditing,
+                onDismiss: {
+                    isSettingsPresented = false
+                }
+            )
+            .frame(minWidth: 760, minHeight: 620)
+#else
             TincanSettingsScreen(
                 workspace: workspace,
                 serverSettings: serverSettings,
@@ -222,8 +241,6 @@ private struct TincanAppSurface: View {
                     isSettingsPresented = false
                 }
             )
-#if os(macOS)
-            .frame(minWidth: 760, minHeight: 620)
 #endif
         }
     }
@@ -1348,6 +1365,9 @@ private struct TincanEmptyTranscriptCard: View {
 private struct TincanSettingsScreen: View {
     @ObservedObject var workspace: TincanWorkspaceStore
     @ObservedObject var serverSettings: ServerConnectionStore
+#if os(macOS)
+    @ObservedObject var speechSettings: TincanSpeechSettingsStore
+#endif
     let callState: TincanCallPresentationState
     let title: String
     let allowEditing: Bool
@@ -1410,6 +1430,13 @@ private struct TincanSettingsScreen: View {
                             }
                         }
                     )
+
+#if os(macOS)
+                    TincanSpeechSettingsSection(speechSettings: speechSettings)
+                        .task(id: serverSettings.connectionRevision) {
+                            await speechSettings.load()
+                        }
+#endif
 
                     TincanSettingsSectionCard(
                         title: "Agent backends",

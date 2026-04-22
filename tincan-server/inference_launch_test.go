@@ -10,8 +10,8 @@ import (
 
 func TestConfiguredInferenceModelsUsesAppConfigWhenEnvironmentUnset(t *testing.T) {
 	appConfig := testAppConfigStore(t, `{
-  "stt_model": "custom-parakeet",
-  "tts_model": "custom-kitten"
+  "stt_model": "macos/custom-parakeet",
+  "tts_model": "macos/custom-kitten"
 }
 `)
 
@@ -21,6 +21,22 @@ func TestConfiguredInferenceModelsUsesAppConfigWhenEnvironmentUnset(t *testing.T
 	}
 	if ttsModel != "custom-kitten" {
 		t.Fatalf("expected tts_model from app config, got %q", ttsModel)
+	}
+}
+
+func TestConfiguredInferenceModelsFallsBackWhenProviderIsRemote(t *testing.T) {
+	appConfig := testAppConfigStore(t, `{
+  "stt_model": "grok/grok-stt-v1",
+  "tts_model": "grok/grok-tts-v1"
+}
+`)
+
+	sttModel, ttsModel := configuredInferenceModels(appConfig)
+	if sttModel != defaultBundledSTTModel {
+		t.Fatalf("expected default stt_model %q for remote provider, got %q", defaultBundledSTTModel, sttModel)
+	}
+	if ttsModel != defaultBundledTTSModel {
+		t.Fatalf("expected default tts_model %q for remote provider, got %q", defaultBundledTTSModel, ttsModel)
 	}
 }
 

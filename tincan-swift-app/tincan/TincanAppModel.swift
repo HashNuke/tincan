@@ -13,6 +13,7 @@ final class TincanAppModel: ObservableObject {
 #if os(macOS)
     let macOnboarding = MacOnboardingViewModel()
     let macCallSession: MacCallSessionViewModel
+    let macSpeechSettings: TincanSpeechSettingsStore
     private let bundledServerController: MacBundledTincanServerController
     private var bundledServerStartupTask: Task<Void, Never>?
 #endif
@@ -26,6 +27,7 @@ final class TincanAppModel: ObservableObject {
 
 #if os(macOS)
         macCallSession = MacCallSessionViewModel(serverSettings: serverSettings)
+        macSpeechSettings = TincanSpeechSettingsStore(serverSettings: serverSettings)
         bundledServerController = MacBundledTincanServerController(port: BackendConnectionConfig.port)
 #endif
     }
