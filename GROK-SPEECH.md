@@ -46,7 +46,7 @@ Notes:
 - Add a top-level `services` object for non-secret provider configuration.
 - Do not put API keys in `config.json`.
 - Store secrets in macOS Keychain with:
-  - keychain service: `com.tincanbot`
+  - keychain service: `com.definerun.tincan`
   - account names:
     - `GROK_API_KEY`
     - `GEMINI_API_KEY`
@@ -156,7 +156,7 @@ Notes:
 
 - New darwin-only wrapper around `go-keychain`.
 - Read generic password items using:
-  - service: `com.tincanbot`
+  - service: `com.definerun.tincan`
   - account: `GROK_API_KEY` or `GEMINI_API_KEY`
 - Return explicit errors for:
   - key not found
@@ -258,7 +258,7 @@ Notes:
 `tincan-swift-app/tincan/MacKeychainService.swift`
 
 - New macOS-only wrapper over `Security`.
-- Write/update/delete generic password items under `com.tincanbot`.
+- Write/update/delete generic password items under `com.definerun.tincan`.
 - Support at least:
   - `GROK_API_KEY`
   - `GEMINI_API_KEY`

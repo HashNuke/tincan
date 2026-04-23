@@ -37,6 +37,8 @@ tincan-swift-app/BundledRuntime/
 Notes:
 
 * `--skip-model-downloads` only rebuilds the binaries and restages the runtime tree.
+* Existing model directories are validated before reuse; incomplete staged assets are repaired or redownloaded.
+* Kitten TTS `voices.npz` assets are converted to the `voices.safetensors` file expected by the bundled inference binary.
 * `--force-model-downloads` redownloads the pinned models and Kitten G2P assets.
 * The app should pass a writable `--data-dir` to `tincan-server`; no writable server data is bundled in `BundledRuntime`.
 

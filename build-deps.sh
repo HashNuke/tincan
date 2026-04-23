@@ -103,6 +103,43 @@ is_kitten_model_ready() {
   find "$model_dir" -maxdepth 1 -type f -name '*.safetensors' ! -name 'voices.safetensors' | grep -q .
 }
 
+convert_kitten_voices_npz() {
+  local model_dir="$1"
+  local source_path="$model_dir/voices.npz"
+  local destination_path="$model_dir/voices.safetensors"
+
+  [[ -f "$destination_path" ]] && return 0
+  [[ -f "$source_path" ]] || return 1
+
+  require_command uvx
+
+  log "Converting Kitten TTS voices.npz to voices.safetensors"
+  MODEL_DIR="$model_dir" uvx --with numpy --with safetensors python - <<'PY'
+import os
+from pathlib import Path
+
+import numpy as np
+from safetensors.numpy import save_file
+
+model_dir = Path(os.environ["MODEL_DIR"])
+source_path = model_dir / "voices.npz"
+destination_path = model_dir / "voices.safetensors"
+temporary_path = model_dir / "voices.safetensors.tmp"
+
+if temporary_path.exists():
+    temporary_path.unlink()
+
+with np.load(source_path) as data:
+    tensors = {name: np.ascontiguousarray(data[name]) for name in data.files}
+
+if not tensors:
+    raise SystemExit(f"no voice arrays found in {source_path}")
+
+save_file(tensors, str(temporary_path))
+temporary_path.replace(destination_path)
+PY
+}
+
 download_hf_snapshot() {
   local repo_id="$1"
   local revision="$2"
@@ -149,9 +186,14 @@ ensure_parakeet_model() {
     rm -rf "$destination_dir"
   fi
 
-  if has_existing_stage_dir "$destination_dir"; then
+  if is_parakeet_model_ready "$destination_dir"; then
     log "Parakeet model directory already exists at $destination_dir; skipping download"
     return
+  fi
+
+  if has_existing_stage_dir "$destination_dir"; then
+    log "Parakeet model directory at $destination_dir is incomplete; redownloading"
+    rm -rf "$destination_dir"
   fi
 
   log "Downloading Parakeet model to $destination_dir"
@@ -174,8 +216,17 @@ ensure_kitten_model() {
   fi
 
   if has_existing_stage_dir "$destination_dir"; then
-    log "Kitten TTS model directory already exists at $destination_dir; skipping download"
-    return
+    if ! is_kitten_model_ready "$destination_dir"; then
+      convert_kitten_voices_npz "$destination_dir" || true
+    fi
+
+    if is_kitten_model_ready "$destination_dir"; then
+      log "Kitten TTS model directory already exists at $destination_dir; skipping download"
+      return
+    fi
+
+    log "Kitten TTS model directory at $destination_dir is incomplete; redownloading"
+    rm -rf "$destination_dir"
   fi
 
   log "Downloading Kitten TTS model to $destination_dir"
@@ -186,6 +237,7 @@ ensure_kitten_model() {
     "${TTS_MODEL_REVISION:-$TTS_MODEL_REVISION_DEFAULT}" \
     "$destination_dir"
 
+  convert_kitten_voices_npz "$destination_dir" || true
   is_kitten_model_ready "$destination_dir" || fail "Kitten TTS model download incomplete: $destination_dir"
 }
 
@@ -209,9 +261,14 @@ ensure_kitten_g2p_resources() {
     rm -rf "$destination_dir"
   fi
 
-  if has_existing_stage_dir "$destination_dir"; then
+  if is_kitten_g2p_ready "$destination_dir"; then
     log "Kitten G2P resources directory already exists at $destination_dir; skipping download"
     return
+  fi
+
+  if has_existing_stage_dir "$destination_dir"; then
+    log "Kitten G2P resources directory at $destination_dir is incomplete; redownloading"
+    rm -rf "$destination_dir"
   fi
 
   log "Downloading Kitten G2P resources to $destination_dir"

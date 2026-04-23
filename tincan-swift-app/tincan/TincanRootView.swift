@@ -348,7 +348,6 @@ private struct TincanHomeScreen: View {
                     TincanLoadingConversationsCard()
                 } else if let conversationListError, !conversationListError.isEmpty {
                     TincanConnectionFailureCard(
-                        message: conversationListError,
                         onRetry: onRefresh
                     )
                 } else {
@@ -1266,30 +1265,17 @@ private struct TincanEmptyConversationsCard: View {
 }
 
 private struct TincanConnectionFailureCard: View {
-    let message: String
     let onRetry: () async -> Void
 
     @State private var isRetrying = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        HStack(spacing: 12) {
             Text("Can't reach server")
                 .font(.system(size: 15, weight: .bold, design: .rounded))
                 .foregroundStyle(TincanPalette.textPrimary)
 
-            Text("Connection to the server failed. Check that the server is running, then retry.")
-                .font(.system(size: 13, weight: .medium, design: .rounded))
-                .foregroundStyle(TincanPalette.textSecondary)
-
-            Text(message)
-                .font(.system(size: 11, weight: .medium, design: .monospaced))
-                .foregroundStyle(TincanTone.coral.accent)
-                .padding(12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .fill(TincanTone.coral.tint.opacity(0.52))
-                )
+            Spacer(minLength: 12)
 
             Button {
                 guard !isRetrying else { return }
@@ -1302,7 +1288,7 @@ private struct TincanConnectionFailureCard: View {
                     }
                 }
             } label: {
-                Text(isRetrying ? "Retrying..." : "Retry connection")
+                Text(isRetrying ? "Retrying..." : "Retry")
                     .font(.system(size: 11, weight: .bold, design: .monospaced))
                     .foregroundStyle(TincanPalette.textPrimary)
                     .padding(.horizontal, 12)
