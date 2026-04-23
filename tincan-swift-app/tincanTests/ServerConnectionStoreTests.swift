@@ -9,6 +9,7 @@ struct ServerConnectionStoreTests {
         let store = ServerConnectionStore(defaults: defaults)
 
         #expect(store.connectionMode == .localMac)
+        #expect(store.shouldUseBundledServer)
         #expect(store.liveUpdatesURL?.absoluteString == "ws://127.0.0.1:55055/api/v1/live")
         #expect(store.liveUpdatesOriginHeaderValue == "http://127.0.0.1:55055")
     }
@@ -24,6 +25,31 @@ struct ServerConnectionStoreTests {
 
         #expect(store.liveUpdatesURL?.absoluteString == "ws://server.example:64000/api/v1/live")
         #expect(store.liveUpdatesOriginHeaderValue == "http://server.example:64000")
+    }
+
+    @Test func explicitEndpointDisablesBundledServerEvenInLocalMode() {
+        let defaults = makeDefaults()
+        let store = ServerConnectionStore(defaults: defaults)
+
+        store.draftHost = "server.example"
+        store.draftPort = "64000"
+        #expect(store.applyRemoteDraft())
+        store.setConnectionMode(.localMac)
+
+        #expect(!store.shouldUseBundledServer)
+        #expect(store.serverBaseURL?.absoluteString == "http://server.example:64000")
+        #expect(store.liveUpdatesURL?.absoluteString == "ws://server.example:64000/api/v1/live")
+    }
+
+    @Test func persistedExplicitEndpointDisablesBundledServerOnInit() {
+        let defaults = makeDefaults()
+        defaults.set("configured.example", forKey: "server_configured_host")
+        defaults.set(65123, forKey: "server_configured_port")
+
+        let store = ServerConnectionStore(defaults: defaults)
+
+        #expect(!store.shouldUseBundledServer)
+        #expect(store.serverBaseURL?.absoluteString == "http://configured.example:65123")
     }
 
     private func makeDefaults() -> UserDefaults {

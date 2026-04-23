@@ -40,6 +40,7 @@ final class ServerConnectionStore: ObservableObject {
     @Published var draftPort: String
     @Published private(set) var configuredRemoteHost: String
     @Published private(set) var configuredPort: Int
+    @Published private(set) var hasExplicitEndpointConfiguration: Bool
     @Published private(set) var connectionRevision: Int = 0
     @Published private(set) var healthStatus: HealthStatus = .idle
 
@@ -56,6 +57,7 @@ final class ServerConnectionStore: ObservableObject {
         let persistedEndpoint = Self.loadPersistedEndpoint(defaults: defaults)
         configuredRemoteHost = persistedEndpoint.host
         configuredPort = persistedEndpoint.port
+        hasExplicitEndpointConfiguration = persistedEndpoint.isExplicit
         draftHost = persistedEndpoint.host
         draftPort = String(persistedEndpoint.port)
 
@@ -71,23 +73,22 @@ final class ServerConnectionStore: ObservableObject {
     }
 
     var serverBaseURL: URL? {
-        let host: String
-        switch connectionMode {
-        case .localMac:
-            host = "127.0.0.1"
-        case .remote:
-            host = configuredRemoteHost.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
+        let host = effectiveHost
+        let port = effectivePort
 
-        guard !host.isEmpty else {
+        guard !host.isEmpty, port > 0 else {
             return nil
         }
 
         var components = URLComponents()
         components.scheme = "http"
         components.host = host
-        components.port = activePort
+        components.port = port
         return components.url
+    }
+
+    var shouldUseBundledServer: Bool {
+        !hasExplicitEndpointConfiguration
     }
 
     var liveUpdatesURL: URL? {
@@ -107,20 +108,19 @@ final class ServerConnectionStore: ObservableObject {
     }
 
     var shareableHost: String {
-        switch connectionMode {
-        case .localMac:
+        if shouldUseBundledServer {
             return BackendConnectionConfig.publicHost
-        case .remote:
-            return configuredRemoteHost
         }
+
+        return configuredRemoteHost
     }
 
     var shareableConnectionLabel: String {
-        "\(shareableHost):\(activePort)"
+        "\(shareableHost):\(effectivePort)"
     }
 
     var qrPayload: String {
-        "tincan://connect?host=\(shareableHost)&port=\(activePort)"
+        "tincan://connect?host=\(shareableHost)&port=\(effectivePort)"
     }
 
     func setConnectionMode(_ mode: ConnectionMode) {
@@ -139,6 +139,7 @@ final class ServerConnectionStore: ObservableObject {
 
         configuredRemoteHost = host
         configuredPort = port
+        hasExplicitEndpointConfiguration = true
         persistEndpoint()
         connectionRevision += 1
         return true
@@ -173,31 +174,40 @@ final class ServerConnectionStore: ObservableObject {
         defaults.set(configuredPort, forKey: Self.configuredPortKey)
     }
 
-    private var activePort: Int {
-        switch connectionMode {
-        case .localMac:
-            return BackendConnectionConfig.port
-        case .remote:
-            return configuredPort
+    private var effectiveHost: String {
+        if shouldUseBundledServer {
+            return "127.0.0.1"
         }
+
+        return configuredRemoteHost.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private static func loadPersistedEndpoint(defaults: UserDefaults) -> (host: String, port: Int) {
+    private var effectivePort: Int {
+        if shouldUseBundledServer {
+            return BackendConnectionConfig.port
+        }
+
+        return configuredPort
+    }
+
+    private static func loadPersistedEndpoint(defaults: UserDefaults) -> (host: String, port: Int, isExplicit: Bool) {
         let persistedHost = defaults.string(forKey: configuredHostKey)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let persistedPort = defaults.integer(forKey: configuredPortKey)
+        let hasPersistedHost = defaults.object(forKey: configuredHostKey) != nil
+        let hasPersistedPort = defaults.object(forKey: configuredPortKey) != nil
 
-        if let persistedHost, !persistedHost.isEmpty, persistedPort > 0 {
-            return (persistedHost, persistedPort)
+        if hasPersistedHost, hasPersistedPort, let persistedHost, !persistedHost.isEmpty, persistedPort > 0 {
+            return (persistedHost, persistedPort, true)
         }
 
         if let legacyValue = defaults.string(forKey: legacyBackendURLKey),
            let components = URLComponents(string: legacyValue),
            let host = components.host,
            let port = components.port {
-            return (host, port)
+            return (host, port, true)
         }
 
-        return (BackendConnectionConfig.publicHost, BackendConnectionConfig.port)
+        return (BackendConnectionConfig.publicHost, BackendConnectionConfig.port, false)
     }
 }

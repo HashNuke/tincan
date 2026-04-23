@@ -91,7 +91,7 @@ final class TincanSpeechSettingsStore: ObservableObject {
     }
 
     var isRemoteServerSelected: Bool {
-        serverSettings.connectionMode == .remote
+        !serverSettings.shouldUseBundledServer
     }
 
     var grokBaseURLPlaceholder: String {

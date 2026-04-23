@@ -374,6 +374,7 @@ final class MacBundledTincanServerController {
         let disposition = Self.classifyPortListeners(
             listenerPIDs,
             bundledExecutablePath: executableURL.path,
+            trackedPID: readTrackedProcessID(),
             processExecutablePath: processExecutablePath(_:)
         )
 
@@ -773,12 +774,18 @@ final class MacBundledTincanServerController {
     nonisolated static func classifyPortListeners(
         _ listenerPIDs: [pid_t],
         bundledExecutablePath: String,
+        trackedPID: pid_t? = nil,
         processExecutablePath: (pid_t) -> String?
     ) -> PortListenerDisposition {
         var reclaimablePIDs: [pid_t] = []
         var blockingPIDs: [pid_t] = []
 
         for pid in listenerPIDs {
+            if let trackedPID, pid == trackedPID {
+                reclaimablePIDs.append(pid)
+                continue
+            }
+
             guard let executablePath = processExecutablePath(pid) else {
                 blockingPIDs.append(pid)
                 continue

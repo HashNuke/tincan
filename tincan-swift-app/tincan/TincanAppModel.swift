@@ -56,7 +56,7 @@ final class TincanAppModel: ObservableObject {
 
 #if os(macOS)
     func ensureMacServerStarted() async {
-        guard serverSettings.connectionMode == .localMac else {
+        guard serverSettings.shouldUseBundledServer else {
             bundledServerStartupTask?.cancel()
             bundledServerStartupTask = nil
             bundledServerController.stop()
@@ -90,10 +90,11 @@ final class TincanAppModel: ObservableObject {
     }
 
     private func handleConnectionModeChange(_ mode: ServerConnectionStore.ConnectionMode) async {
-        switch mode {
-        case .localMac:
+        _ = mode
+
+        if serverSettings.shouldUseBundledServer {
             await ensureMacServerStarted()
-        case .remote:
+        } else {
             bundledServerStartupTask?.cancel()
             bundledServerStartupTask = nil
             bundledServerController.stop()
