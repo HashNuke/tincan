@@ -25,7 +25,7 @@ from aiortc import RTCPeerConnection, RTCSessionDescription
 from aiortc.mediastreams import MediaStreamError
 
 
-DEFAULT_SERVER_URL = "http://127.0.0.1:55055"
+DEFAULT_SERVER_URL = "http://127.0.0.1:4490"
 TINCAN_CHANNEL_LABEL = "tincan"
 SEND_SAMPLE_RATE = 16_000
 PLAY_SAMPLE_RATE = 48_000

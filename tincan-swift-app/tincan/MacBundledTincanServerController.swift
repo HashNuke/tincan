@@ -308,9 +308,9 @@ final class MacBundledTincanServerController {
             try await launchLock.withExclusiveAccess {
                 try Task.checkCancellation()
                 let executableURL = try resolveExecutableURL()
-                await reclaimTrackedBundledServerIfNeeded(executableURL: executableURL)
+                _ = await reclaimTrackedBundledServerIfNeeded(executableURL: executableURL)
                 try Task.checkCancellation()
-                try await reclaimPortListenersIfNeeded(executableURL: executableURL)
+                try await reclaimPortListenersIfNeeded()
                 try Task.checkCancellation()
                 try applyStartupLogCleanupIfNeeded()
                 writeStartupLog("launching bundled tincan-server from \(executableURL.path)")
@@ -367,37 +367,22 @@ final class MacBundledTincanServerController {
         try await sendSecretUpdates(updates)
     }
 
-    private func reclaimPortListenersIfNeeded(executableURL: URL) async throws {
+    private func reclaimPortListenersIfNeeded() async throws {
         let listenerPIDs = try BundledServerPortListenerLookup.listeningPIDs(on: port)
         guard !listenerPIDs.isEmpty else { return }
 
-        let disposition = Self.classifyPortListeners(
-            listenerPIDs,
-            bundledExecutablePath: executableURL.path,
-            trackedPID: readTrackedProcessID(),
-            processExecutablePath: processExecutablePath(_:)
+        let listenerDescriptions = listenerPIDs.map { pid in
+            let executablePath = processExecutablePath(pid) ?? "unknown executable"
+            return "\(pid) (\(executablePath))"
+        }
+        writeStartupLog(
+            "reclaiming port \(port) by terminating existing listener pid(s): \(listenerDescriptions.joined(separator: ", "))"
         )
 
-        if !disposition.reclaimablePIDs.isEmpty {
-            writeStartupLog(
-                "reclaiming port \(port) by terminating bundled listener pid(s): \(disposition.reclaimablePIDs.map(String.init).joined(separator: ", "))"
-            )
-        }
-
-        for pid in disposition.reclaimablePIDs {
+        for pid in listenerPIDs {
             let executablePath = processExecutablePath(pid) ?? "unknown executable"
             writeStartupLog("terminating pid \(pid) listening on port \(port) (\(executablePath))")
             try await terminatePortListener(pid)
-        }
-
-        if !disposition.blockingPIDs.isEmpty {
-            let blockingDescriptions = disposition.blockingPIDs.map { pid in
-                let executablePath = processExecutablePath(pid) ?? "unknown executable"
-                return "\(pid) (\(executablePath))"
-            }
-            writeStartupLog(
-                "port \(port) is occupied by non-bundled listener pid(s): \(blockingDescriptions.joined(separator: ", "))"
-            )
         }
 
         let remainingPIDs = try BundledServerPortListenerLookup.listeningPIDs(on: port)
@@ -427,38 +412,40 @@ final class MacBundledTincanServerController {
         finishProcessRun()
     }
 
-    private func reclaimTrackedBundledServerIfNeeded(executableURL: URL) async {
-        guard let trackedPID = readTrackedProcessID() else { return }
+    private func reclaimTrackedBundledServerIfNeeded(executableURL: URL) async -> pid_t? {
+        guard let trackedPID = readTrackedProcessID() else { return nil }
 
         guard isProcessRunning(trackedPID) else {
             clearTrackedProcessID()
             writeStartupLog("removed stale tincan-server pid file for pid \(trackedPID)")
-            return
+            return nil
         }
 
         guard let executablePath = processExecutablePath(trackedPID),
               Self.sameBundledExecutablePath(executablePath, executableURL.path) else {
-            writeStartupLog("tracked tincan-server pid \(trackedPID) does not match this bundled runtime; leaving it untouched")
-            clearTrackedProcessID()
-            return
+            writeStartupLog(
+                "tracked tincan-server pid \(trackedPID) does not match this bundled runtime; keeping it eligible for port reclaim"
+            )
+            return trackedPID
         }
 
         writeStartupLog("terminating stale bundled tincan-server pid \(trackedPID) from previous app run")
 
         guard kill(trackedPID, SIGTERM) == 0 else {
             writeStartupLog("failed to terminate stale bundled tincan-server pid \(trackedPID): \(String(cString: strerror(errno)))")
-            return
+            return trackedPID
         }
 
         await waitForProcessToExit(trackedPID, timeout: 5)
 
         if isProcessRunning(trackedPID) {
             writeStartupLog("stale bundled tincan-server pid \(trackedPID) did not exit after SIGTERM")
-            return
+            return trackedPID
         }
 
         clearTrackedProcessID()
         writeStartupLog("stale bundled tincan-server pid \(trackedPID) exited")
+        return nil
     }
 
     private func terminateTrackedBundledServerIfNeeded(executableURL: URL) {
@@ -767,8 +754,37 @@ final class MacBundledTincanServerController {
     private func processExecutablePath(_ pid: pid_t) -> String? {
         var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
         let length = proc_pidpath(pid, &buffer, UInt32(buffer.count))
-        guard length > 0 else { return nil }
-        return String(cString: buffer)
+        if length > 0 {
+            return String(cString: buffer)
+        }
+
+        guard let commandLine = processCommandLine(pid) else { return nil }
+        return Self.executablePath(fromCommandLine: commandLine)
+    }
+
+    private func processCommandLine(_ pid: pid_t) -> String? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/ps")
+        process.arguments = ["-o", "command=", "-p", String(pid)]
+
+        let stdout = Pipe()
+        let stderr = Pipe()
+        process.standardOutput = stdout
+        process.standardError = stderr
+
+        do {
+            try process.run()
+        } catch {
+            return nil
+        }
+
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else { return nil }
+
+        let stdoutData = stdout.fileHandleForReading.readDataToEndOfFile()
+        let commandLine = String(decoding: stdoutData, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return commandLine.isEmpty ? nil : commandLine
     }
 
     nonisolated static func classifyPortListeners(
@@ -807,6 +823,19 @@ final class MacBundledTincanServerController {
     nonisolated static func sameBundledExecutablePath(_ lhs: String, _ rhs: String) -> Bool {
         URL(fileURLWithPath: lhs).resolvingSymlinksInPath().path ==
             URL(fileURLWithPath: rhs).resolvingSymlinksInPath().path
+    }
+
+    nonisolated static func executablePath(fromCommandLine commandLine: String) -> String? {
+        let trimmed = commandLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        guard let executableComponent = trimmed.split(whereSeparator: \ .isWhitespace).first else {
+            return nil
+        }
+
+        let executablePath = String(executableComponent)
+        guard executablePath.hasPrefix("/") else { return nil }
+        return executablePath
     }
 
     private func finishProcessRun() {

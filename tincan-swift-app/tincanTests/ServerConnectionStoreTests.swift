@@ -10,8 +10,8 @@ struct ServerConnectionStoreTests {
 
         #expect(store.connectionMode == .localMac)
         #expect(store.shouldUseBundledServer)
-        #expect(store.liveUpdatesURL?.absoluteString == "ws://127.0.0.1:55055/api/v1/live")
-        #expect(store.liveUpdatesOriginHeaderValue == "http://127.0.0.1:55055")
+        #expect(store.liveUpdatesURL?.absoluteString == "ws://127.0.0.1:4490/api/v1/live")
+        #expect(store.liveUpdatesOriginHeaderValue == "http://127.0.0.1:4490")
     }
 
     @Test func remoteLiveUpdatesOriginUsesConfiguredServerOrigin() {

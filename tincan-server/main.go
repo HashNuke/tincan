@@ -36,6 +36,8 @@ const (
 	inferenceSocketFileName     = "tincan-inference-macos.sock"
 )
 
+var buildVersion = "dev"
+
 type server struct {
 	mu                  sync.Mutex
 	callManager         *calls.Manager
@@ -111,7 +113,7 @@ type bundledRuntimeLayout struct {
 const (
 	defaultBundledSTTModel = tincanconfig.DefaultSTTModel
 	defaultBundledTTSModel = tincanconfig.DefaultTTSModel
-	defaultServerPort      = 55055
+	defaultServerPort      = 4490
 )
 
 func main() {
@@ -184,7 +186,7 @@ func main() {
 	srv.webrtcTransport.RegisterRoutes(mux)
 
 	addr := fmt.Sprintf("0.0.0.0:%d", *portFlag)
-	log.Printf("tincan-server listening on %s", addr)
+	log.Printf("tincan-server %s listening on %s", buildVersion, addr)
 	httpServer := &http.Server{Addr: addr, Handler: mux}
 
 	go func() {

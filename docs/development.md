@@ -6,6 +6,11 @@ Developer-facing notes for building, packaging, and testing tincan live here.
 
 Use `build-deps.sh` to stage the macOS runtime that `tincan-swift-app` ships with. It downloads the pinned STT/TTS models and Kitten G2P assets if they are missing, then builds `tincan-inference-macos` and `tincan-server`.
 
+Versioning:
+
+* `VERSION` at the repo root contains the shared semver core for the project.
+* `build-deps.sh` appends `+YYYYMMDDHHMM` build metadata for bundled runtime builds and injects the full version into the Go binaries.
+
 Requirements:
 
 * `swift`
@@ -51,7 +56,7 @@ Direct WebRTC send to `tincan-server`:
 ```bash
 uv run python scripts/tincan_call_shell.py send
 uv run python scripts/tincan_call_shell.py send /absolute/path/to/sample.wav
-uv run python scripts/tincan_call_shell.py send sample.m4a --server http://127.0.0.1:55055 --repeat 3
+uv run python scripts/tincan_call_shell.py send sample.m4a --server http://127.0.0.1:4490 --repeat 3
 ```
 
 Interactive WebRTC shell:

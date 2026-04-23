@@ -82,7 +82,7 @@ func TestManagedRunSchedulerQueuesFollowUpsAndDispatchesNextBatch(t *testing.T) 
 	}
 
 	scheduler := NewManagedRunScheduler(
-		"http://127.0.0.1:55055",
+		"http://127.0.0.1:4490",
 		wrapperPath,
 		store,
 		backends,

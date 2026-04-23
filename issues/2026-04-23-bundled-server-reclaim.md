@@ -16,7 +16,7 @@ In the sandboxed app, `proc_pidpath(...)` could fail for the already-running
 bundled `tincan-server`, so the launcher logged that PID as `unknown
 executable`, classified it as non-bundled, and refused to terminate it.
 
-That left port `55055` occupied, prevented the new bundled server from starting,
+That left port `4490` occupied, prevented the new bundled server from starting,
 and then caused downstream failures such as transcription requests hitting a
 dead inference socket path.
 

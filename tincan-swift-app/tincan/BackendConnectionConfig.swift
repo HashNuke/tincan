@@ -3,7 +3,7 @@ import Foundation
 enum BackendConnectionConfig {
     static let publicHost = "wheeljack"
     static let bindHost = "0.0.0.0"
-    static let port = 55055
+    static let port = 4490
 
     static let inferencePath = "/infer"
     static let healthPath = "/healthz"

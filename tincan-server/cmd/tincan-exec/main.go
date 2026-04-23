@@ -8,6 +8,8 @@ import (
 	"syscall"
 )
 
+var buildVersion = "dev"
+
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintln(os.Stderr, "usage: tincan-exec <command> [args...]")

@@ -6,6 +6,7 @@ readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly PROJECT_ROOT="$SCRIPT_DIR"
 readonly INFERENCE_DIR="$PROJECT_ROOT/tincan-inference-macos"
 readonly SERVER_DIR="$PROJECT_ROOT/tincan-server"
+readonly VERSION_FILE_PATH="$PROJECT_ROOT/VERSION"
 readonly APP_RUNTIME_DIR_DEFAULT="$PROJECT_ROOT/tincan-swift-app/BundledRuntime"
 
 readonly STT_MODEL_REPO_DEFAULT="FluidInference/parakeet-tdt-0.6b-v3-coreml"
@@ -285,12 +286,14 @@ ensure_kitten_g2p_resources() {
 
 stage_manifest() {
   local runtime_dir="$1"
+  local build_version="$2"
   local manifest_path="$runtime_dir/manifest.json"
   local stt_model_dirname="${STT_MODEL_DIRNAME:-$STT_MODEL_DIRNAME_DEFAULT}"
   local tts_model_dirname="${TTS_MODEL_DIRNAME:-$TTS_MODEL_DIRNAME_DEFAULT}"
 
   cat > "$manifest_path" <<EOF
 {
+  "version": "$build_version",
   "models_dir": "models",
   "inference_executable": "tincan-inference-macos",
   "server_executable": "tincan-server",
@@ -338,31 +341,63 @@ build_inference() {
 
 build_server() {
   local destination_bin="$1"
+  local build_version="$2"
 
   require_command go
 
   log "Building tincan-server"
   (
     cd "$SERVER_DIR"
-    go build -trimpath -o "$destination_bin" .
+    go build -trimpath -ldflags "-X main.buildVersion=$build_version" -o "$destination_bin" .
   )
 }
 
 build_tincan_exec() {
   local destination_bin="$1"
+  local build_version="$2"
 
   require_command go
 
   log "Building tincan-exec"
   (
     cd "$SERVER_DIR"
-    go build -trimpath -o "$destination_bin" ./cmd/tincan-exec
+    go build -trimpath -ldflags "-X main.buildVersion=$build_version" -o "$destination_bin" ./cmd/tincan-exec
   )
+}
+
+resolve_semver_core() {
+  [[ -f "$VERSION_FILE_PATH" ]] || fail "missing version file: $VERSION_FILE_PATH"
+
+  local semver_core
+  semver_core="$(tr -d '[:space:]' < "$VERSION_FILE_PATH")"
+  [[ -n "$semver_core" ]] || fail "version file is empty: $VERSION_FILE_PATH"
+
+  if [[ ! "$semver_core" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+    fail "VERSION must contain a semver core such as 1.2.3 or 1.2.3-rc.1"
+  fi
+
+  printf '%s\n' "$semver_core"
+}
+
+resolve_build_metadata() {
+  require_command date
+  date +%Y%m%d%H%M
+}
+
+resolve_build_version() {
+  local semver_core="$1"
+  local build_metadata="$2"
+
+  [[ "$build_metadata" =~ ^[0-9]{12}$ ]] || fail "build metadata must be YYYYMMDDHHMM"
+  printf '%s+%s\n' "$semver_core" "$build_metadata"
 }
 
 main() {
   local runtime_dir="$APP_RUNTIME_DIR_DEFAULT"
   local skip_model_downloads=0
+  local semver_core
+  local build_metadata
+  local build_version
 
   FORCE_MODEL_DOWNLOADS=0
 
@@ -392,6 +427,9 @@ main() {
   done
 
   runtime_dir="$(resolve_path "$runtime_dir")"
+  semver_core="$(resolve_semver_core)"
+  build_metadata="$(resolve_build_metadata)"
+  build_version="$(resolve_build_version "$semver_core" "$build_metadata")"
 
   local models_dir="$runtime_dir/models"
 
@@ -406,11 +444,11 @@ main() {
   fi
 
   build_inference "$runtime_dir/tincan-inference-macos"
-  build_server "$runtime_dir/tincan-server"
-  build_tincan_exec "$runtime_dir/tincan-exec"
-  stage_manifest "$runtime_dir"
+  build_server "$runtime_dir/tincan-server" "$build_version"
+  build_tincan_exec "$runtime_dir/tincan-exec" "$build_version"
+  stage_manifest "$runtime_dir" "$build_version"
 
-  log "Bundled runtime staged at $runtime_dir"
+  log "Bundled runtime staged at $runtime_dir (version $build_version)"
 }
 
 main "$@"
