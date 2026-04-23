@@ -60,6 +60,7 @@ final class MacCallSessionViewModel: ObservableObject {
 
         isTransitioningCallState = true
         clearRecentTranscripts()
+        callStartedAt = nil
         tonePlayer.startOutgoingRing()
         callStateDescription = "Starting"
         Task {
@@ -124,9 +125,10 @@ final class MacCallSessionViewModel: ObservableObject {
                 subscribeToServerEvents(client: client, sessionID: sid)
 
                 callStateDescription = "Connected"
+                await tonePlayer.playConnectToneWhenOutgoingRingMinimumElapsed()
+                guard sessionID == sid, sessionClient === client, isTransitioningCallState else { return }
                 isCallActive = true
                 callStartedAt = Date()
-                await tonePlayer.playConnectToneWhenOutgoingRingMinimumElapsed()
                 appendLog("Connected")
             } catch {
                 tonePlayer.stopOutgoingRing()

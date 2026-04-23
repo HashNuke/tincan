@@ -45,6 +45,7 @@ final class CallSessionViewModel: ObservableObject {
 
         isTransitioningCallState = true
         transitionPhase = .starting
+        callStartedAt = nil
         tonePlayer.startOutgoingRing()
         callStateDescription = "Checking mic"
         Task {
@@ -226,9 +227,10 @@ extension CallSessionViewModel: CallKitControllerDelegate {
                 await audioPipeline.setCaptureEnabled(!isMuted)
                 subscribeToServerEvents(client: client, sessionID: sid)
                 callStateDescription = "Listening"
+                await tonePlayer.playConnectToneWhenOutgoingRingMinimumElapsed()
+                guard sessionID == sid, sessionClient === client else { return }
                 isCallActive = true
                 callStartedAt = Date()
-                await tonePlayer.playConnectToneWhenOutgoingRingMinimumElapsed()
             } catch {
                 tonePlayer.stopOutgoingRing()
                 callStateDescription = "Audio start failed"

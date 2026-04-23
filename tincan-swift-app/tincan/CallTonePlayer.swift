@@ -4,7 +4,7 @@ import Foundation
 @MainActor
 final class CallTonePlayer: NSObject, AVAudioPlayerDelegate {
     static let shared = CallTonePlayer()
-    private static let minimumOutgoingRingDuration: TimeInterval = 1.5
+    private static let minimumOutgoingRingDuration: TimeInterval = 2
 
     private var activePlayers: [AVAudioPlayer] = []
     private var outgoingRingPlayer: AVAudioPlayer?

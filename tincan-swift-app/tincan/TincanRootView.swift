@@ -117,7 +117,7 @@ struct TincanMacRootView: View {
 
     private var transitionPhase: TincanCallTransitionPhase {
         guard callSession.isTransitioningCallState else { return .none }
-        if callSession.isCallActive || callSession.callStateDescription == "Ending" {
+        if callSession.callStateDescription == "Ending" {
             return .ending
         }
         return .starting
@@ -811,6 +811,14 @@ private struct TincanMacCallMeter: View {
     let callState: TincanCallPresentationState
     let accent: Color
 
+    private var durationLabel: String? {
+        callDurationLabel(
+            startedAt: callState.callStartedAt,
+            isCallActive: callState.isCallActive,
+            isTransitioning: callState.isTransitioning
+        )
+    }
+
     var body: some View {
         VStack(spacing: 6) {
             Group {
@@ -821,6 +829,11 @@ private struct TincanMacCallMeter: View {
                             .foregroundStyle(TincanPalette.textPrimary)
                             .frame(maxWidth: .infinity, alignment: .center)
                     }
+                } else if let durationLabel {
+                    Text(durationLabel)
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .foregroundStyle(callState.isTransitioning ? accent : TincanPalette.textSecondary)
+                        .frame(maxWidth: .infinity, alignment: .center)
                 } else {
                     Text(callState.callStateDescription.lowercased())
                         .font(.system(size: 10, weight: .medium, design: .monospaced))
@@ -906,6 +919,14 @@ private struct TincanCallControlPanel: View {
         return callState.isCallActive ? TincanTone.mint.accent : TincanPalette.shellBorder
     }
 
+    private var durationLabel: String? {
+        callDurationLabel(
+            startedAt: callState.callStartedAt,
+            isCallActive: callState.isCallActive,
+            isTransitioning: callState.isTransitioning
+        )
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: isIdle ? 0 : 14) {
             if isIdle {
@@ -952,6 +973,10 @@ private struct TincanCallControlPanel: View {
                                 .font(.system(size: 11, weight: .medium, design: .monospaced))
                                 .foregroundStyle(TincanPalette.textSecondary)
                         }
+                    } else if let durationLabel {
+                        Text(durationLabel)
+                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                            .foregroundStyle(TincanPalette.textSecondary)
                     }
                 }
 
@@ -1719,7 +1744,7 @@ struct TincanMacSettingsWindow: View {
 
     private var transitionPhase: TincanCallTransitionPhase {
         guard callSession.isTransitioningCallState else { return .none }
-        if callSession.isCallActive || callSession.callStateDescription == "Ending" {
+        if callSession.callStateDescription == "Ending" {
             return .ending
         }
         return .starting
@@ -2219,7 +2244,28 @@ private struct TincanQRCodeCard: View {
 #endif
 
 private func elapsedLabel(since startDate: Date) -> String {
-    let elapsed = max(0, Int(Date().timeIntervalSince(startDate)))
+    elapsedLabel(since: startDate, now: Date())
+}
+
+func callDurationLabel(
+    startedAt: Date?,
+    isCallActive: Bool,
+    isTransitioning: Bool,
+    now: Date = Date()
+) -> String? {
+    if let startedAt, isCallActive {
+        return elapsedLabel(since: startedAt, now: now)
+    }
+
+    if isCallActive || isTransitioning {
+        return "--:--:--"
+    }
+
+    return nil
+}
+
+private func elapsedLabel(since startDate: Date, now: Date) -> String {
+    let elapsed = max(0, Int(now.timeIntervalSince(startDate)))
     let hours = elapsed / 3600
     let minutes = (elapsed % 3600) / 60
     let seconds = elapsed % 60

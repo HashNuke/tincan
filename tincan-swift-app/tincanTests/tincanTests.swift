@@ -92,4 +92,24 @@ struct tincanTests {
         #expect(TincanAgentProcessStatus(conversationStatus: "aborted") == .idle)
     }
 
+    @Test func callDurationLabelShowsPlaceholderBeforeTimerStarts() {
+        #expect(callDurationLabel(startedAt: nil, isCallActive: false, isTransitioning: false) == nil)
+        #expect(callDurationLabel(startedAt: nil, isCallActive: false, isTransitioning: true) == "--:--:--")
+        #expect(callDurationLabel(startedAt: nil, isCallActive: true, isTransitioning: true) == "--:--:--")
+    }
+
+    @Test func callDurationLabelShowsElapsedTimeAfterTimerStarts() {
+        let startedAt = Date(timeIntervalSince1970: 10)
+        let now = Date(timeIntervalSince1970: 3_735)
+
+        #expect(
+            callDurationLabel(
+                startedAt: startedAt,
+                isCallActive: true,
+                isTransitioning: false,
+                now: now
+            ) == "01:02:05"
+        )
+    }
+
 }
