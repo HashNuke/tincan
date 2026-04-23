@@ -102,6 +102,10 @@ final class ServerConnectionStore: ObservableObject {
         return components.url
     }
 
+    var liveUpdatesOriginHeaderValue: String? {
+        serverBaseURL?.absoluteString
+    }
+
     var shareableHost: String {
         switch connectionMode {
         case .localMac:

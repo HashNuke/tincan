@@ -195,7 +195,12 @@ final class TincanWorkspaceStore: ObservableObject {
 
         liveConnectionStatus = .connecting
 
-        let task = URLSession.shared.webSocketTask(with: liveURL)
+        var request = URLRequest(url: liveURL)
+        if let originHeaderValue = serverSettings.liveUpdatesOriginHeaderValue {
+            request.setValue(originHeaderValue, forHTTPHeaderField: "Origin")
+        }
+
+        let task = URLSession.shared.webSocketTask(with: request)
         liveWebSocketTask = task
         task.resume()
 
