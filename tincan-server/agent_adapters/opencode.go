@@ -51,7 +51,7 @@ func (a *OpencodeAdapter) SupportsModelDiscovery() bool {
 }
 
 func (a *OpencodeAdapter) ListModels(backend tincanconfig.AgentBackendDefinition) ([]string, error) {
-	command := exec.Command("opencode", "models")
+	command := exec.Command(opencodeProgram(backend), "models")
 	output, err := command.CombinedOutput()
 	if err != nil {
 		trimmedOutput := strings.TrimSpace(string(output))
@@ -86,7 +86,7 @@ func (a *OpencodeAdapter) BuildConversationCommand(input ConversationCommandInpu
 	}
 
 	return ManagedCommand{
-		Program: "opencode",
+		Program: opencodeProgram(input.Backend),
 		Args:    args,
 		Stdin:   buildManagedConversationPrompt(input.Inputs),
 	}, nil
@@ -156,7 +156,7 @@ func (a *OpencodeAdapter) baseRunArgs(backend tincanconfig.AgentBackendDefinitio
 func (a *OpencodeAdapter) runOneShotPrompt(backend tincanconfig.AgentBackendDefinition, workingDirectory string, stdin string) (string, error) {
 	args := a.baseRunArgs(backend, workingDirectory)
 
-	command := exec.Command("opencode", args...)
+	command := exec.Command(opencodeProgram(backend), args...)
 	command.Dir = workingDirectory
 	command.Stdin = strings.NewReader(stdin)
 
@@ -182,6 +182,16 @@ func (a *OpencodeAdapter) runOneShotPrompt(backend tincanconfig.AgentBackendDefi
 		return "", fmt.Errorf("%w: %s", err, trimmedStderr)
 	}
 	return text, nil
+}
+
+func opencodeProgram(backend tincanconfig.AgentBackendDefinition) string {
+	if command := strings.TrimSpace(backend.Options.Command); command != "" {
+		return command
+	}
+	if command := strings.TrimSpace(backend.Options.ExecutablePath); command != "" {
+		return command
+	}
+	return "opencode"
 }
 
 func buildSyntheticPrompt(prompt Prompt) string {

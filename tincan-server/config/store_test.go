@@ -122,6 +122,44 @@ func TestNewAgentBackendStoreAllowsBackendsWithoutModel(t *testing.T) {
 	}
 }
 
+func TestNewAgentBackendStoreMigratesLegacyExecutablePathToCommand(t *testing.T) {
+	tempDir := t.TempDir()
+	configDir := filepath.Join(tempDir, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("create config dir: %v", err)
+	}
+	backendsPath := filepath.Join(configDir, "agent_backends.json")
+
+	if err := os.WriteFile(backendsPath, []byte(`{
+  "opencode-default": {
+    "type": "opencode",
+    "options": {
+      "connection_type": "command",
+      "executable_path": " /opt/homebrew/bin/opencode "
+    }
+  }
+}
+`), 0o644); err != nil {
+		t.Fatalf("write agent_backends.json: %v", err)
+	}
+
+	store, err := NewAgentBackendStore(tempDir)
+	if err != nil {
+		t.Fatalf("NewAgentBackendStore returned error: %v", err)
+	}
+
+	backend, ok := store.Get("opencode-default")
+	if !ok {
+		t.Fatalf("expected backend to be loaded")
+	}
+	if backend.Options.Command != "/opt/homebrew/bin/opencode" {
+		t.Fatalf("expected command to be normalized from executable_path, got %q", backend.Options.Command)
+	}
+	if backend.Options.ExecutablePath != "" {
+		t.Fatalf("expected legacy executable_path to be cleared after normalization, got %q", backend.Options.ExecutablePath)
+	}
+}
+
 func TestNewAgentProfileStoreMigratesLegacyRootConfigIntoConfigDirectory(t *testing.T) {
 	tempDir := t.TempDir()
 	legacyPath := filepath.Join(tempDir, "agent_profiles.json")

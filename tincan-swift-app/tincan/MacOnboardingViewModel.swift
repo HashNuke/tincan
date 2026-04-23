@@ -298,12 +298,20 @@ final class MacOnboardingViewModel: ObservableObject {
                 type: backend.configBackendType,
                 options: GeneratedAgentBackendOptions(
                     connectionType: "command",
+                    command: commandPath(for: backend),
                     model: model,
                     modelVariant: "medium",
                     agent: "build",
                     extraArgs: []
                 )
             )
+        }
+    }
+
+    private func commandPath(for backend: AgentBackend) -> String? {
+        switch backend {
+        case .opencode:
+            return opencodePath
         }
     }
 
@@ -423,6 +431,7 @@ private struct GeneratedAgentBackend: Encodable {
 
 private struct GeneratedAgentBackendOptions: Encodable {
     let connectionType: String
+    let command: String?
     let model: String
     let modelVariant: String
     let agent: String

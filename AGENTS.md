@@ -25,3 +25,5 @@ The `tincan-server` subdir has the orchestration server. This is a Swift app bas
 * `opencode run` docs - https://opencode.ai/docs/cli/
 
 When git committing, always commit with a changelog-like commit description.
+
+NEVER run UI automation tests in xcode unless I explicitly ask for it to be run.

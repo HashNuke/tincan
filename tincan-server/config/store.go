@@ -77,9 +77,7 @@ func NewAgentBackendStore(dataDir string) (*AgentBackendStore, error) {
 		if backend.Type == "" {
 			return nil, fmt.Errorf("agent backend %q type must not be empty", name)
 		}
-		if backend.Options.Agent == "" {
-			backend.Options.Agent = "build"
-		}
+		backend.Options = normalizeAgentBackendOptions(backend.Options)
 		backends[name] = backend
 	}
 
@@ -281,20 +279,36 @@ func validateAgentProfile(profile AgentProfile) (AgentProfile, string, error) {
 func validateAgentBackend(name string, backend AgentBackendDefinition) (string, AgentBackendDefinition, error) {
 	name = strings.TrimSpace(name)
 	backend.Type = strings.TrimSpace(backend.Type)
-	backend.Options.ConnectionType = strings.TrimSpace(backend.Options.ConnectionType)
-	backend.Options.Model = strings.TrimSpace(backend.Options.Model)
-	backend.Options.ModelVariant = strings.TrimSpace(backend.Options.ModelVariant)
-	backend.Options.Agent = strings.TrimSpace(backend.Options.Agent)
+	backend.Options = normalizeAgentBackendOptions(backend.Options)
 	if name == "" {
 		return "", AgentBackendDefinition{}, fmt.Errorf("agent backend name must not be empty")
 	}
 	if backend.Type == "" {
 		return "", AgentBackendDefinition{}, fmt.Errorf("agent backend %q type must not be empty", name)
 	}
-	if backend.Options.Agent == "" {
-		backend.Options.Agent = "build"
-	}
 	return name, backend, nil
+}
+
+func normalizeAgentBackendOptions(options AgentBackendOptions) AgentBackendOptions {
+	options.ConnectionType = strings.TrimSpace(options.ConnectionType)
+	options.Command = strings.TrimSpace(options.Command)
+	options.ExecutablePath = strings.TrimSpace(options.ExecutablePath)
+	options.Model = strings.TrimSpace(options.Model)
+	options.ModelVariant = strings.TrimSpace(options.ModelVariant)
+	options.Agent = strings.TrimSpace(options.Agent)
+
+	if options.Command == "" {
+		options.Command = options.ExecutablePath
+	}
+
+	// Persist the new command field and treat executable_path as a read-only legacy alias.
+	options.ExecutablePath = ""
+
+	if options.Agent == "" {
+		options.Agent = "build"
+	}
+
+	return options
 }
 
 func decodeAgentProfiles(data []byte) (map[string]AgentProfile, error) {

@@ -123,6 +123,32 @@ func TestBuildConversationCommandForNewConversation(t *testing.T) {
 	}
 }
 
+func TestBuildConversationCommandUsesConfiguredCommandPath(t *testing.T) {
+	adapter := &OpencodeAdapter{}
+	command, err := adapter.BuildConversationCommand(ConversationCommandInput{
+		Conversation: conversations.Conversation{
+			AgentBackend: "opencode-1",
+		},
+		Backend: tincanconfig.AgentBackendDefinition{
+			Type: "opencode",
+			Options: tincanconfig.AgentBackendOptions{
+				ConnectionType: "command",
+				Command:        "/opt/homebrew/bin/opencode",
+			},
+		},
+		Inputs: []conversations.ConversationInput{{
+			UserText: "Check the build.",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("BuildConversationCommand returned error: %v", err)
+	}
+
+	if command.Program != "/opt/homebrew/bin/opencode" {
+		t.Fatalf("expected configured program path, got %q", command.Program)
+	}
+}
+
 func TestBuildConversationCommandBatchesQueuedFollowUps(t *testing.T) {
 	adapter := &OpencodeAdapter{}
 	command, err := adapter.BuildConversationCommand(ConversationCommandInput{

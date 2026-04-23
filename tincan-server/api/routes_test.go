@@ -365,7 +365,8 @@ func TestRoutesCreateAgentBackendPersistsToConfig(t *testing.T) {
   "name": "codex-local",
   "type": "codex",
   "options": {
-    "connection_type": "command"
+    "connection_type": "command",
+    "command": "/opt/homebrew/bin/codex"
   }
 }`)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/agent-backends", bytes.NewReader(body))
@@ -383,12 +384,15 @@ func TestRoutesCreateAgentBackendPersistsToConfig(t *testing.T) {
 	if backend.Options.Agent != "build" {
 		t.Fatalf("expected default agent to be applied, got %q", backend.Options.Agent)
 	}
+	if backend.Options.Command != "/opt/homebrew/bin/codex" {
+		t.Fatalf("expected configured command path to be applied, got %q", backend.Options.Command)
+	}
 
 	data, err := os.ReadFile(filepath.Join(dataDir, "config", "agent_backends.json"))
 	if err != nil {
 		t.Fatalf("read agent_backends.json: %v", err)
 	}
-	if !bytes.Contains(data, []byte(`"codex-local"`)) {
+	if !bytes.Contains(data, []byte(`"command": "/opt/homebrew/bin/codex"`)) {
 		t.Fatalf("expected backend to be persisted, got %s", string(data))
 	}
 }

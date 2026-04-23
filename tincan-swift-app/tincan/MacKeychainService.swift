@@ -17,6 +17,26 @@ struct MacKeychainService {
         }
     }
 
+    func value(account: String) throws -> String? {
+        var query = baseQuery(account: account)
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        switch status {
+        case errSecSuccess:
+            guard let data = item as? Data else {
+                return nil
+            }
+            return String(data: data, encoding: .utf8)
+        case errSecItemNotFound:
+            return nil
+        default:
+            throw KeychainError(status: status)
+        }
+    }
+
     func upsert(value: String, account: String) throws {
         let query = baseQuery(account: account)
         let data = Data(value.utf8)

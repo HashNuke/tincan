@@ -34,6 +34,7 @@ struct TincanConversationDetail: Equatable {
 struct TincanAgentBackend: Identifiable, Equatable {
     struct Options: Equatable {
         let connectionType: String
+        let command: String
         let model: String
         let modelVariant: String
         let agent: String
@@ -327,6 +328,7 @@ private struct AgentBackendsResponse: Decodable {
 private struct AgentBackendDTO: Decodable {
     struct OptionsDTO: Decodable {
         let connectionType: String?
+        let command: String?
         let model: String?
         let modelVariant: String?
         let agent: String?
@@ -334,6 +336,7 @@ private struct AgentBackendDTO: Decodable {
 
         enum CodingKeys: String, CodingKey {
             case connectionType = "connection_type"
+            case command
             case model
             case modelVariant = "model_variant"
             case agent
@@ -351,6 +354,7 @@ private struct AgentBackendDTO: Decodable {
             type: type,
             options: .init(
                 connectionType: options.connectionType ?? "",
+                command: options.command ?? "",
                 model: options.model ?? "",
                 modelVariant: options.modelVariant ?? "",
                 agent: options.agent ?? "",

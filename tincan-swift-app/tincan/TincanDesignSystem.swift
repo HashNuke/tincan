@@ -226,7 +226,7 @@ struct TincanServerModeChip: View {
     var body: some View {
         Button(action: action) {
             Text(label)
-                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .font(.system(size: 14, weight: .semibold, design: .rounded))
                 .foregroundStyle(isSelected ? Color.black.opacity(0.82) : TincanPalette.textSecondary)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
@@ -262,6 +262,39 @@ struct TincanSettingsSectionCard<Content: View>: View {
         }
         .padding(16)
         .tincanCard(cornerRadius: 24)
+    }
+}
+
+enum TincanSettingsTypography {
+    static let pageTitle = Font.system(size: 28, weight: .bold, design: .rounded)
+    static let sectionTitle = Font.system(size: 18, weight: .semibold, design: .rounded)
+    static let body = Font.system(size: 14, weight: .regular, design: .rounded)
+    static let emphasis = Font.system(size: 14, weight: .semibold, design: .rounded)
+    static let control = Font.system(size: 14, weight: .semibold, design: .rounded)
+}
+
+struct TincanSettingsSection<Content: View>: View {
+    var title: String? = nil
+    var subtitle: String? = nil
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            if let title, !title.isEmpty {
+                Text(title)
+                    .font(TincanSettingsTypography.sectionTitle)
+                    .foregroundStyle(TincanPalette.textPrimary)
+            }
+
+            if let subtitle, !subtitle.isEmpty {
+                Text(subtitle)
+                    .font(TincanSettingsTypography.body)
+                    .foregroundStyle(TincanPalette.textSecondary)
+            }
+
+            content
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

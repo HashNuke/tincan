@@ -50,7 +50,7 @@ enum TincanSpeechServiceCatalog {
 
     static func options(
         for target: TincanSpeechModelTarget,
-        enabledServices: Set<TincanSpeechServiceID>
+        availableServices: Set<TincanSpeechServiceID>
     ) -> [TincanSpeechModelOption] {
         var result = [
             TincanSpeechModelOption(
@@ -60,7 +60,7 @@ enum TincanSpeechServiceCatalog {
             ),
         ]
 
-        if enabledServices.contains(.grok) {
+        if availableServices.contains(.grok) {
             result.append(
                 TincanSpeechModelOption(
                     id: "\(target.rawValue)-grok",

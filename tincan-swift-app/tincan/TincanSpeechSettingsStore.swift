@@ -4,6 +4,7 @@ import Foundation
 
 protocol TincanSpeechSettingsKeychainServicing {
     func containsValue(account: String) throws -> Bool
+    func value(account: String) throws -> String?
     func upsert(value: String, account: String) throws
     func deleteValue(account: String) throws
 }
@@ -49,12 +50,12 @@ final class TincanSpeechSettingsStore: ObservableObject {
     @Published var grokBaseURL = ""
     @Published var grokAPIKey = ""
     @Published private(set) var hasStoredGrokAPIKey = false
+    @Published private(set) var maskedStoredGrokAPIKey = ""
+    @Published private(set) var hasEditedGrokAPIKey = false
     @Published private(set) var isLoading = false
     @Published private(set) var isSavingConfig = false
-    @Published private(set) var isSavingAPIKey = false
     @Published private(set) var statusMessage: String?
     @Published private(set) var errorMessage: String?
-    @Published private(set) var lastLoadedAt: Date?
 
     private let serverSettings: ServerConnectionStore
     private let configURL: URL
@@ -64,6 +65,10 @@ final class TincanSpeechSettingsStore: ObservableObject {
     private var persistedConfigPayload: [String: Any] = [:]
     private var persistedServicesPayload: [String: Any] = [:]
     private var persistedGrokPayload: [String: Any] = [:]
+    private var loadedSTTModel = defaultSTTModel
+    private var loadedTTSModel = defaultTTSModel
+    private var loadedGrokEnabled = false
+    private var loadedGrokBaseURL = ""
 
     init(
         serverSettings: ServerConnectionStore,
@@ -87,20 +92,16 @@ final class TincanSpeechSettingsStore: ObservableObject {
         grokEnabled ? [.grok] : []
     }
 
+    var availableServices: Set<TincanSpeechServiceID> {
+        var result = enabledServices
+        if hasStoredGrokAPIKey || hasPendingGrokAPIKey || usesGrok {
+            result.insert(.grok)
+        }
+        return result
+    }
+
     var grokBaseURLPlaceholder: String {
         Self.defaultGrokBaseURL
-    }
-
-    var grokAPIKeyPlaceholder: String {
-        hasStoredGrokAPIKey ? String(repeating: "*", count: 12) : "GROK_API_KEY"
-    }
-
-    var canSaveGrokAPIKey: Bool {
-        !grokAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    var canClearStoredGrokAPIKey: Bool {
-        hasStoredGrokAPIKey
     }
 
     var usesGrok: Bool {
@@ -108,8 +109,35 @@ final class TincanSpeechSettingsStore: ObservableObject {
             TincanSpeechServiceCatalog.provider(for: ttsModel) == .grok
     }
 
+    var showsMaskedStoredGrokAPIKey: Bool {
+        hasStoredGrokAPIKey && !hasEditedGrokAPIKey && grokAPIKey.isEmpty
+    }
+
+    var showsStoredGrokAPIKeyIndicator: Bool {
+        hasStoredGrokAPIKey && !hasEditedGrokAPIKey
+    }
+
+    var hasPendingConfigChanges: Bool {
+        sttModel != loadedSTTModel ||
+            ttsModel != loadedTTSModel ||
+            grokEnabled != loadedGrokEnabled ||
+            normalizedBaseURL(grokBaseURL) != loadedGrokBaseURL
+    }
+
+    var hasPendingChanges: Bool {
+        hasPendingConfigChanges || hasEditedGrokAPIKey
+    }
+
+    var canSave: Bool {
+        !isLoading && !isSavingConfig && hasPendingChanges
+    }
+
+    var canReset: Bool {
+        !isLoading && !isSavingConfig && hasPendingChanges
+    }
+
     func modelOptions(for target: TincanSpeechModelTarget) -> [TincanSpeechModelOption] {
-        TincanSpeechServiceCatalog.options(for: target, enabledServices: enabledServices)
+        TincanSpeechServiceCatalog.options(for: target, availableServices: availableServices)
     }
 
     func selectedModelTitle(for target: TincanSpeechModelTarget) -> String {
@@ -118,12 +146,21 @@ final class TincanSpeechSettingsStore: ObservableObject {
     }
 
     func setModel(_ value: String, for target: TincanSpeechModelTarget) {
+        if TincanSpeechServiceCatalog.provider(for: value) == .grok {
+            grokEnabled = true
+        }
+
         switch target {
         case .speechToText:
             sttModel = value
         case .textToSpeech:
             ttsModel = value
         }
+    }
+
+    func updateGrokAPIKey(_ value: String) {
+        hasEditedGrokAPIKey = true
+        grokAPIKey = value
     }
 
     func setServiceEnabled(_ isEnabled: Bool, serviceID: TincanSpeechServiceID) {
@@ -144,10 +181,7 @@ final class TincanSpeechSettingsStore: ObservableObject {
         do {
             let config = try loadConfigFromDisk()
             apply(config)
-
-            hasStoredGrokAPIKey = try keychain.containsValue(account: Self.grokAPIKeyAccount)
-            grokAPIKey = ""
-            lastLoadedAt = Date()
+            try reloadGrokAPIKeyState()
             errorMessage = nil
         } catch {
             errorMessage = "Speech settings failed: \(error.localizedDescription)"
@@ -156,6 +190,27 @@ final class TincanSpeechSettingsStore: ObservableObject {
 
     func saveConfig() async {
         normalizeDisabledServiceSelections()
+
+        let keyUpdate = grokAPIKeyUpdate()
+        let willHaveGrokAPIKey = switch keyUpdate {
+        case .unchanged:
+            hasStoredGrokAPIKey
+        case .store(let value):
+            !value.isEmpty
+        case .clear:
+            false
+        }
+
+        if usesGrok && !willHaveGrokAPIKey {
+            errorMessage = "A Grok API key is required when a Grok model is selected."
+            return
+        }
+
+        if !hasPendingChanges {
+            statusMessage = "No changes to save."
+            errorMessage = nil
+            return
+        }
 
         let trimmedSTTModel = sttModel.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedTTSModel = ttsModel.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -166,6 +221,24 @@ final class TincanSpeechSettingsStore: ObservableObject {
 
         isSavingConfig = true
         defer { isSavingConfig = false }
+
+        do {
+            try applyGrokAPIKeyUpdate(keyUpdate)
+        } catch {
+            errorMessage = "Updating GROK_API_KEY failed: \(error.localizedDescription)"
+            return
+        }
+
+        if !hasPendingConfigChanges {
+            do {
+                try reloadGrokAPIKeyState()
+                errorMessage = nil
+                statusMessage = statusMessage(for: keyUpdate)
+            } catch {
+                errorMessage = "Refreshing GROK_API_KEY state failed: \(error.localizedDescription)"
+            }
+            return
+        }
 
         var payload = persistedConfigPayload
         payload["stt_model"] = trimmedSTTModel
@@ -197,64 +270,22 @@ final class TincanSpeechSettingsStore: ObservableObject {
         do {
             let config = try writeConfigToDisk(payload)
             apply(config)
+            try reloadGrokAPIKeyState()
             errorMessage = nil
 
             if isRemoteServerSelected {
-                statusMessage = "Speech config saved. Changes apply when the local Mac server is used."
+                statusMessage = "Speech settings saved. Changes apply when the local Mac server is used."
             } else {
-                statusMessage = "Speech config saved. Restarting bundled server..."
+                statusMessage = "Speech settings saved. Restarting bundled server..."
                 do {
                     try await restartLocalServer()
-                    statusMessage = "Speech config saved. Bundled server restarted."
+                    statusMessage = "Speech settings saved. Bundled server restarted."
                 } catch {
-                    errorMessage = "Speech config saved, but restarting bundled server failed: \(error.localizedDescription)"
+                    errorMessage = "Speech settings saved, but restarting bundled server failed: \(error.localizedDescription)"
                 }
             }
-
-            lastLoadedAt = Date()
         } catch {
-            errorMessage = "Saving speech config failed: \(error.localizedDescription)"
-        }
-    }
-
-    func saveGrokAPIKey() {
-        let trimmedAPIKey = grokAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedAPIKey.isEmpty else {
-            errorMessage = "Enter a Grok API key before saving."
-            return
-        }
-
-        isSavingAPIKey = true
-        defer { isSavingAPIKey = false }
-
-        do {
-            try keychain.upsert(value: trimmedAPIKey, account: Self.grokAPIKeyAccount)
-            hasStoredGrokAPIKey = true
-            grokAPIKey = ""
-            errorMessage = nil
-            statusMessage = "Grok API key saved to Keychain."
-        } catch {
-            errorMessage = "Updating GROK_API_KEY failed: \(error.localizedDescription)"
-        }
-    }
-
-    func clearGrokAPIKey() {
-        guard hasStoredGrokAPIKey else {
-            grokAPIKey = ""
-            return
-        }
-
-        isSavingAPIKey = true
-        defer { isSavingAPIKey = false }
-
-        do {
-            try keychain.deleteValue(account: Self.grokAPIKeyAccount)
-            hasStoredGrokAPIKey = false
-            grokAPIKey = ""
-            errorMessage = nil
-            statusMessage = "Grok API key removed from Keychain."
-        } catch {
-            errorMessage = "Clearing GROK_API_KEY failed: \(error.localizedDescription)"
+            errorMessage = "GROK_API_KEY was updated, but saving speech settings failed: \(error.localizedDescription)"
         }
     }
 
@@ -285,6 +316,10 @@ final class TincanSpeechSettingsStore: ObservableObject {
         persistedConfigPayload = config.rawPayload
         persistedServicesPayload = config.services.rawPayload
         persistedGrokPayload = config.services.grok.rawPayload
+        loadedSTTModel = config.sttModel
+        loadedTTSModel = config.ttsModel
+        loadedGrokEnabled = config.services.grok.enabled
+        loadedGrokBaseURL = config.services.grok.baseURLOverride
     }
 
     private func normalizeDisabledServiceSelections() {
@@ -387,5 +422,83 @@ final class TincanSpeechSettingsStore: ObservableObject {
             rawPayload: payload
         )
     }
+
+    private func normalizedBaseURL(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func reloadGrokAPIKeyState() throws {
+        let storedValue = try keychain.value(account: Self.grokAPIKeyAccount)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        hasStoredGrokAPIKey = !(storedValue?.isEmpty ?? true)
+        maskedStoredGrokAPIKey = Self.maskedAPIKey(storedValue)
+        grokAPIKey = ""
+        hasEditedGrokAPIKey = false
+    }
+
+    private func grokAPIKeyUpdate() -> PendingGrokAPIKeyUpdate {
+        guard hasEditedGrokAPIKey else {
+            return .unchanged
+        }
+
+        let trimmedAPIKey = grokAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedAPIKey.isEmpty {
+            return .clear
+        }
+        return .store(trimmedAPIKey)
+    }
+
+    private func applyGrokAPIKeyUpdate(_ update: PendingGrokAPIKeyUpdate) throws {
+        switch update {
+        case .unchanged:
+            return
+        case .store(let value):
+            try keychain.upsert(value: value, account: Self.grokAPIKeyAccount)
+        case .clear:
+            try keychain.deleteValue(account: Self.grokAPIKeyAccount)
+        }
+    }
+
+    private func hasPendingGrokAPIKey(for update: PendingGrokAPIKeyUpdate) -> Bool {
+        switch update {
+        case .unchanged:
+            return hasStoredGrokAPIKey
+        case .store(let value):
+            return !value.isEmpty
+        case .clear:
+            return false
+        }
+    }
+
+    private var hasPendingGrokAPIKey: Bool {
+        hasPendingGrokAPIKey(for: grokAPIKeyUpdate())
+    }
+
+    private func statusMessage(for update: PendingGrokAPIKeyUpdate) -> String {
+        switch update {
+        case .unchanged:
+            return "No changes saved."
+        case .store:
+            return "Grok API key saved."
+        case .clear:
+            return "Grok API key removed."
+        }
+    }
+
+    private static func maskedAPIKey(_ value: String?) -> String {
+        guard let value,
+              !value.isEmpty else {
+            return ""
+        }
+
+        let suffix = String(value.suffix(4))
+        return String(repeating: "*", count: 8) + suffix
+    }
+}
+
+private enum PendingGrokAPIKeyUpdate {
+    case unchanged
+    case store(String)
+    case clear
 }
 #endif

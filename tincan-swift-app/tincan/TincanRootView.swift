@@ -1617,6 +1617,15 @@ private enum TincanSettingsDestination: String, CaseIterable, Hashable, Identifi
             return "stethoscope"
         }
     }
+
+    var showsSpeechSettingsBottomBar: Bool {
+        switch self {
+        case .speech, .services:
+            return true
+        case .connectPhone, .agentBackends, .agentServices, .diagnostics:
+            return false
+        }
+    }
 }
 
 #if os(iOS)
@@ -1726,6 +1735,11 @@ struct TincanMacSettingsWindow: View {
                             showsPageCardTitle: false
                         )
                     }
+                    .safeAreaInset(edge: .bottom, spacing: 0) {
+                        if selectedDestination.showsSpeechSettingsBottomBar {
+                            TincanSpeechSettingsBottomBar(speechSettings: speechSettings)
+                        }
+                    }
                 } else {
                     TincanSettingsPageLayout {
                         TincanSettingsSelectionPlaceholder()
@@ -1760,7 +1774,6 @@ private struct TincanSettingsDestinationContent: View {
         case .connectPhone:
             TincanServerSettingsSection(
                 title: showsPageCardTitle ? "Connect phone" : nil,
-                subtitle: "Share the bundled Mac server with your phone or point the app at a remote server.",
                 serverSettings: serverSettings,
                 onApplyConnection: {
                     let changed = serverSettings.applyRemoteDraft()
@@ -1769,16 +1782,11 @@ private struct TincanSettingsDestinationContent: View {
                             await workspace.refreshAll()
                         }
                     }
-                },
-                onRefreshHealth: {
-                    Task {
-                        await serverSettings.refreshHealth()
-                    }
                 }
             )
 
         case .agentBackends:
-            TincanSettingsSectionCard(
+            TincanSettingsSection(
                 title: showsPageCardTitle ? "Agent backends" : nil,
                 subtitle: allowEditing ? "Server-backed. Editing can be layered on top of this list next." : "Read-only on iPhone."
             ) {
@@ -1794,7 +1802,7 @@ private struct TincanSettingsDestinationContent: View {
             }
 
         case .agentServices:
-            TincanSettingsSectionCard(
+            TincanSettingsSection(
                 title: showsPageCardTitle ? "Agent services" : nil,
                 subtitle: allowEditing ? "Server-backed routing profiles for conversations." : "Read-only on iPhone."
             ) {
@@ -1836,7 +1844,7 @@ private struct TincanSettingsDestinationContent: View {
 #endif
 
         case .diagnostics:
-            TincanSettingsSectionCard(title: showsPageCardTitle ? "Diagnostics" : nil) {
+            TincanSettingsSection(title: showsPageCardTitle ? "Diagnostics" : nil) {
                 VStack(alignment: .leading, spacing: 12) {
                     TincanSettingsValueRow(label: "Call", value: callState.callStateDescription)
                     TincanSettingsValueRow(label: "Live", value: liveSummary(workspace.liveConnectionStatus))
@@ -1855,23 +1863,18 @@ private struct TincanSettingsDestinationContent: View {
 
                     if let lastSyncError = workspace.lastSyncError, !lastSyncError.isEmpty {
                         Text(lastSyncError)
-                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                            .font(TincanSettingsTypography.body)
                             .foregroundStyle(TincanTone.coral.accent)
-                            .padding(12)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(
-                                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                    .fill(TincanTone.coral.tint.opacity(0.52))
-                            )
                     }
 
                     if !callState.lastServerTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         VStack(alignment: .leading, spacing: 6) {
                             Text("Last transcript")
-                                .font(.system(size: 11, weight: .bold, design: .monospaced))
-                                .foregroundStyle(TincanPalette.textMuted)
+                                .font(TincanSettingsTypography.emphasis)
+                                .foregroundStyle(TincanPalette.textSecondary)
                             Text(callState.lastServerTranscript)
-                                .font(.system(size: 13, weight: .medium, design: .rounded))
+                                .font(TincanSettingsTypography.body)
                                 .foregroundStyle(TincanPalette.textSecondary)
                         }
                     }
@@ -1879,12 +1882,12 @@ private struct TincanSettingsDestinationContent: View {
                     if !callState.logLines.isEmpty {
                         VStack(alignment: .leading, spacing: 6) {
                             Text("Recent activity")
-                                .font(.system(size: 11, weight: .bold, design: .monospaced))
-                                .foregroundStyle(TincanPalette.textMuted)
+                                .font(TincanSettingsTypography.emphasis)
+                                .foregroundStyle(TincanPalette.textSecondary)
 
                             ForEach(Array(callState.logLines.prefix(6).enumerated()), id: \.offset) { _, line in
                                 Text(line)
-                                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                    .font(TincanSettingsTypography.body)
                                     .foregroundStyle(TincanPalette.textSecondary)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                             }
@@ -1901,7 +1904,7 @@ private struct TincanSettingsSidebarRow: View {
 
     var body: some View {
         Label(destination.title, systemImage: destination.systemImage)
-            .font(.system(size: 13, weight: .semibold, design: .rounded))
+            .font(.system(size: 14, weight: .semibold, design: .rounded))
             .foregroundStyle(TincanPalette.textPrimary)
             .padding(.vertical, 4)
     }
@@ -1912,7 +1915,7 @@ private struct TincanSettingsDetailHeading: View {
 
     var body: some View {
         Text(title)
-            .font(.system(size: 28, weight: .bold, design: .rounded))
+            .font(TincanSettingsTypography.pageTitle)
             .foregroundStyle(TincanPalette.textPrimary)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -1923,12 +1926,13 @@ private struct TincanSettingsPageLayout<Content: View>: View {
 
     var body: some View {
         ScrollView(showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 28) {
                 content
             }
             .frame(maxWidth: 940)
             .padding(.horizontal, 20)
-            .padding(.vertical, 16)
+            .padding(.top, 16)
+            .padding(.bottom, 28)
             .frame(maxWidth: .infinity, alignment: .top)
         }
     }
@@ -1936,12 +1940,12 @@ private struct TincanSettingsPageLayout<Content: View>: View {
 
 private struct TincanSettingsSelectionPlaceholder: View {
     var body: some View {
-        TincanSettingsSectionCard(
+        TincanSettingsSection(
             title: "Select a page",
             subtitle: "Choose a settings category from the sidebar."
         ) {
             Text("Split settings into smaller pages so each category is easier to scan and maintain.")
-                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .font(TincanSettingsTypography.body)
                 .foregroundStyle(TincanPalette.textSecondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -1953,12 +1957,12 @@ private struct TincanSettingsUnavailableCard: View {
     let message: String
 
     var body: some View {
-        TincanSettingsSectionCard(
+        TincanSettingsSection(
             title: title,
             subtitle: "This page is configured from the Mac app."
         ) {
             Text(message)
-                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .font(TincanSettingsTypography.body)
                 .foregroundStyle(TincanPalette.textSecondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -1970,10 +1974,9 @@ private struct TincanServerSettingsSection: View {
     var subtitle: String? = nil
     @ObservedObject var serverSettings: ServerConnectionStore
     let onApplyConnection: () -> Void
-    let onRefreshHealth: () -> Void
 
     var body: some View {
-        TincanSettingsSectionCard(title: title, subtitle: subtitle) {
+        TincanSettingsSection(title: title, subtitle: subtitle) {
             VStack(alignment: .leading, spacing: 16) {
                 HStack(spacing: 12) {
 #if os(macOS)
@@ -1982,7 +1985,6 @@ private struct TincanServerSettingsSection: View {
                         isSelected: serverSettings.connectionMode == .localMac
                     ) {
                         serverSettings.setConnectionMode(.localMac)
-                        onRefreshHealth()
                     }
 #endif
                     TincanServerModeChip(
@@ -1990,7 +1992,6 @@ private struct TincanServerSettingsSection: View {
                         isSelected: serverSettings.connectionMode == .remote
                     ) {
                         serverSettings.setConnectionMode(.remote)
-                        onRefreshHealth()
                     }
                 }
 
@@ -2003,28 +2004,16 @@ private struct TincanServerSettingsSection: View {
 
                     VStack(alignment: .leading, spacing: 10) {
                         TincanSettingsValueRow(label: "Current", value: serverSettings.shareableConnectionLabel)
-                        TincanSettingsValueRow(label: "Health", value: healthSummary(serverSettings.healthStatus))
 
                         if serverSettings.connectionMode == .remote {
                             VStack(alignment: .leading, spacing: 10) {
                                 TincanLabeledField(label: "Host", text: $serverSettings.draftHost)
                                 TincanLabeledField(label: "Port", text: $serverSettings.draftPort)
 
-                                HStack(spacing: 10) {
-                                    TincanToolbarButton(
-                                        label: "apply",
-                                        systemImage: "arrow.clockwise",
-                                        tone: TincanTone.mint.accent,
-                                        foreground: TincanPalette.textOnAccent,
-                                        action: onApplyConnection
-                                    )
-                                    TincanToolbarButton(label: "check", systemImage: "bolt.horizontal.fill", tone: TincanPalette.panelRaised, action: onRefreshHealth)
-                                }
+                                Button("Apply", action: onApplyConnection)
+                                    .buttonStyle(.borderedProminent)
+                                    .controlSize(.large)
                             }
-                        } else {
-                            Text("The Mac app assumes the server is reachable on loopback and shares `\(serverSettings.shareableConnectionLabel)` for phones.")
-                                .font(.system(size: 11, weight: .medium, design: .monospaced))
-                                .foregroundStyle(TincanPalette.textSecondary)
                         }
                     }
                 }
@@ -2040,10 +2029,10 @@ private struct TincanBackendRow: View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(backend.id)
-                    .font(.system(size: 15, weight: .bold, design: .rounded))
+                    .font(TincanSettingsTypography.emphasis)
                     .foregroundStyle(TincanPalette.textPrimary)
                 Text("\(backend.type) · \(backend.options.model)")
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .font(TincanSettingsTypography.body)
                     .foregroundStyle(TincanPalette.textSecondary)
                     .lineLimit(1)
             }
@@ -2051,14 +2040,10 @@ private struct TincanBackendRow: View {
             Spacer()
 
             Text(backend.options.connectionType.isEmpty ? "server" : backend.options.connectionType)
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .font(TincanSettingsTypography.body)
                 .foregroundStyle(TincanTone.blue.accent)
         }
-        .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(TincanPalette.panelRaised.opacity(0.72))
-        )
+        .padding(.vertical, 4)
     }
 }
 
@@ -2078,10 +2063,10 @@ private struct TincanProfileRow: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(profile.name)
-                    .font(.system(size: 15, weight: .bold, design: .rounded))
+                    .font(TincanSettingsTypography.emphasis)
                     .foregroundStyle(TincanPalette.textPrimary)
                 Text(shortDirectoryName(profile.workingDirectory))
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .font(TincanSettingsTypography.body)
                     .foregroundStyle(TincanPalette.textSecondary)
                     .lineLimit(1)
             }
@@ -2089,14 +2074,10 @@ private struct TincanProfileRow: View {
             Spacer()
 
             Text(profile.agentBackend)
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .font(TincanSettingsTypography.body)
                 .foregroundStyle(TincanTone.blue.accent)
         }
-        .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(TincanPalette.panelRaised.opacity(0.72))
-        )
+        .padding(.vertical, 4)
     }
 }
 
@@ -2105,14 +2086,9 @@ private struct TincanSettingsPlaceholderRow: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 11, weight: .medium, design: .monospaced))
+            .font(TincanSettingsTypography.body)
             .foregroundStyle(TincanPalette.textSecondary)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(12)
-            .background(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(TincanPalette.panelRaised.opacity(0.72))
-            )
     }
 }
 
@@ -2123,11 +2099,11 @@ private struct TincanSettingsValueRow: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
             Text(label)
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                .foregroundStyle(TincanPalette.textMuted)
+                .font(TincanSettingsTypography.body)
+                .foregroundStyle(TincanPalette.textSecondary)
             Spacer()
             Text(value)
-                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                .font(TincanSettingsTypography.emphasis)
                 .foregroundStyle(TincanPalette.textPrimary)
                 .multilineTextAlignment(.trailing)
         }
@@ -2142,18 +2118,12 @@ private struct TincanLabeledField: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(label)
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                .foregroundStyle(TincanPalette.textMuted)
+                .font(TincanSettingsTypography.emphasis)
+                .foregroundStyle(TincanPalette.textSecondary)
 
             TextField("", text: $text)
-                .textFieldStyle(.plain)
-                .foregroundStyle(TincanPalette.textPrimary)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-                .background(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(TincanPalette.panelRaised.opacity(0.82))
-                )
+                .font(TincanSettingsTypography.body)
+                .textFieldStyle(.roundedBorder)
         }
     }
 }
@@ -2175,8 +2145,8 @@ private struct TincanQRCodeCard: View {
                         .fill(Color.white.opacity(0.06))
                         .overlay(
                             Text("QR unavailable")
-                                .font(.system(size: 11, weight: .bold, design: .monospaced))
-                                .foregroundStyle(TincanPalette.textMuted)
+                                .font(TincanSettingsTypography.body)
+                                .foregroundStyle(TincanPalette.textSecondary)
                         )
                 }
             }
@@ -2188,8 +2158,8 @@ private struct TincanQRCodeCard: View {
             )
 
             Text("scan")
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                .foregroundStyle(TincanPalette.textMuted)
+                .font(TincanSettingsTypography.body)
+                .foregroundStyle(TincanPalette.textSecondary)
         }
     }
 
@@ -2226,8 +2196,8 @@ private func healthSummary(_ status: ServerConnectionStore.HealthStatus) -> Stri
         return "idle"
     case .checking:
         return "checking"
-    case .connected(let agentProfileCount, _):
-        return "ok · \(agentProfileCount) profiles"
+    case .connected:
+        return "ok"
     case .unreachable(let message, _):
         return "offline · \(message)"
     }

@@ -20,7 +20,9 @@ final class AudioTurnPipeline {
 
     private var audioStreamContinuation: AsyncStream<[Float]>.Continuation?
     private var processingTask: Task<Void, Never>?
+    private var engineRecoveryTask: Task<Void, Never>?
     private var isRunning = false
+    private var isRecoveringEngine = false
     private var tapInputDeviceName = "Unknown input device"
     private var tapCallbackCount = 0
     private var tapDebugLogCount = 0
@@ -28,9 +30,22 @@ final class AudioTurnPipeline {
     private var didLogInputSignal = false
     private var didWarnAboutSilentInput = false
     private var didLogFallbackResampler = false
+    private var engineStartGeneration: UInt64 = 0
+    private var tapTimeoutRecoveryAttempts = 0
+    private let maximumTapTimeoutRecoveryAttempts = 1
+    private var engineConfigurationObserver: NSObjectProtocol?
+#if os(macOS)
+    private var captureDeviceConnectedObserver: NSObjectProtocol?
+    private var captureDeviceDisconnectedObserver: NSObjectProtocol?
+#endif
 
     init() {
         turnDetector = VadTurnDetector(sink: sink)
+    }
+
+    deinit {
+        engineRecoveryTask?.cancel()
+        removeObservers()
     }
 
     func setDelegate(_ delegate: (any AudioTurnPipelineOutput)?) {
@@ -43,15 +58,8 @@ final class AudioTurnPipeline {
         guard !isRunning else { return }
 
         try await turnDetector.prepare()
-        audioEngine = AVAudioEngine()
         captureState.setEnabled(true)
-        tapInputDeviceName = AVCaptureDevice.default(for: .audio)?.localizedName ?? "Unknown input device"
-        tapCallbackCount = 0
-        tapDebugLogCount = 0
-        tapRejectedDebugLogCount = 0
-        didLogInputSignal = false
-        didWarnAboutSilentInput = false
-        didLogFallbackResampler = false
+        tapTimeoutRecoveryAttempts = 0
 
         let stream = AsyncStream<[Float]> { continuation in
             audioStreamContinuation = continuation
@@ -67,40 +75,31 @@ final class AudioTurnPipeline {
             }
         }
 
-        let inputNode = audioEngine.inputNode
-        let inputFormat = inputNode.outputFormat(forBus: 0)
-        guard inputFormat.channelCount > 0 else {
-            throw AudioTurnPipelineError.noInputChannels
-        }
-        inputNode.removeTap(onBus: 0)
-        inputNode.installTap(onBus: 0, bufferSize: 2_048, format: inputFormat) { [weak self] buffer, _ in
-            guard let self else { return }
-            self.handleTapBuffer(buffer)
-        }
-
-        audioEngine.prepare()
-        try audioEngine.start()
         isRunning = true
-        await sink.resetInputLevel()
-        await sink.emitLog("Using microphone: \(tapInputDeviceName)")
-        await sink.emitLog("Microphone tap format: \(AudioTapSamples.describe(bufferFormat: inputFormat))")
-        await sink.emitLog("Microphone capture started")
-
-        Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
-            guard let self, self.isRunning, self.tapCallbackCount == 0 else { return }
-            await self.sink.emitLog(
-                "Microphone tap started but has not delivered any buffers after 2s. Tap format: \(AudioTapSamples.describe(bufferFormat: inputFormat))"
-            )
+        installObservers()
+        do {
+            try await startAudioEngine(recoveryReason: nil)
+        } catch {
+            removeObservers()
+            stopAudioEngine()
+            audioStreamContinuation?.finish()
+            audioStreamContinuation = nil
+            processingTask?.cancel()
+            processingTask = nil
+            isRunning = false
+            throw error
         }
     }
 
     func stop() async {
         guard isRunning else { return }
 
-        audioEngine.inputNode.removeTap(onBus: 0)
-        audioEngine.stop()
-        audioEngine.reset()
+        isRunning = false
+        engineRecoveryTask?.cancel()
+        engineRecoveryTask = nil
+        isRecoveringEngine = false
+        removeObservers()
+        stopAudioEngine()
         audioStreamContinuation?.finish()
         audioStreamContinuation = nil
         processingTask?.cancel()
@@ -152,6 +151,9 @@ final class AudioTurnPipeline {
         }
 
         tapCallbackCount += 1
+        if tapCallbackCount == 1 {
+            tapTimeoutRecoveryAttempts = 0
+        }
         if tapDebugLogCount < 3 {
             tapDebugLogCount += 1
             let audioBuffers = UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList)
@@ -237,6 +239,190 @@ final class AudioTurnPipeline {
             to: Double(VadManager.sampleRate)
         )
     }
+
+    private func startAudioEngine(recoveryReason: String?) async throws {
+        guard isRunning else { return }
+
+        audioEngine = AVAudioEngine()
+        resetTapDiagnostics()
+        installEngineConfigurationObserver()
+
+        let inputNode = audioEngine.inputNode
+        let inputFormat = inputNode.outputFormat(forBus: 0)
+        guard inputFormat.channelCount > 0 else {
+            throw AudioTurnPipelineError.noInputChannels
+        }
+
+        inputNode.removeTap(onBus: 0)
+        inputNode.installTap(onBus: 0, bufferSize: 2_048, format: inputFormat) { [weak self] buffer, _ in
+            guard let self else { return }
+            self.handleTapBuffer(buffer)
+        }
+
+        guard isRunning else {
+            inputNode.removeTap(onBus: 0)
+            return
+        }
+
+        audioEngine.prepare()
+        try audioEngine.start()
+
+        guard isRunning else {
+            stopAudioEngine()
+            return
+        }
+
+        engineStartGeneration &+= 1
+        let currentGeneration = engineStartGeneration
+        let tapFormatDescription = AudioTapSamples.describe(bufferFormat: inputFormat)
+
+        await sink.resetInputLevel()
+        if let recoveryReason {
+            await sink.emitLog("Recovered microphone capture after \(recoveryReason)")
+        }
+        await sink.emitLog("Using microphone: \(tapInputDeviceName)")
+        await sink.emitLog("Microphone tap format: \(tapFormatDescription)")
+        await sink.emitLog(recoveryReason == nil ? "Microphone capture started" : "Microphone capture resumed")
+        scheduleTapWatchdog(engineGeneration: currentGeneration, tapFormatDescription: tapFormatDescription)
+    }
+
+    private func stopAudioEngine() {
+        removeEngineConfigurationObserver()
+        audioEngine.inputNode.removeTap(onBus: 0)
+        audioEngine.stop()
+        audioEngine.reset()
+    }
+
+    private func resetTapDiagnostics() {
+        tapInputDeviceName = AVCaptureDevice.default(for: .audio)?.localizedName ?? "Unknown input device"
+        tapCallbackCount = 0
+        tapDebugLogCount = 0
+        tapRejectedDebugLogCount = 0
+        didLogInputSignal = false
+        didWarnAboutSilentInput = false
+        didLogFallbackResampler = false
+    }
+
+    private func scheduleTapWatchdog(engineGeneration: UInt64, tapFormatDescription: String) {
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard let self,
+                  self.isRunning,
+                  self.engineStartGeneration == engineGeneration,
+                  self.tapCallbackCount == 0 else { return }
+
+            await self.sink.emitLog(
+                "Microphone tap started but has not delivered any buffers after 2s. Tap format: \(tapFormatDescription)"
+            )
+
+            guard self.tapTimeoutRecoveryAttempts < self.maximumTapTimeoutRecoveryAttempts else { return }
+            self.tapTimeoutRecoveryAttempts += 1
+            self.scheduleEngineRecovery(reason: "the microphone tap did not deliver any buffers")
+        }
+    }
+
+    private func scheduleEngineRecovery(reason: String) {
+        guard isRunning, !isRecoveringEngine else { return }
+        isRecoveringEngine = true
+
+        engineRecoveryTask = Task { [weak self] in
+            guard let self else { return }
+            await self.recoverAudioEngine(reason: reason)
+        }
+    }
+
+    private func recoverAudioEngine(reason: String) async {
+        defer {
+            isRecoveringEngine = false
+            engineRecoveryTask = nil
+        }
+
+        guard isRunning, !Task.isCancelled else { return }
+
+        await sink.emitLog("Reconfiguring microphone capture because \(reason)")
+        await turnDetector.reset()
+        await sink.resetInputLevel()
+
+        guard isRunning, !Task.isCancelled else { return }
+
+        stopAudioEngine()
+
+        guard isRunning, !Task.isCancelled else { return }
+
+        do {
+            try await startAudioEngine(recoveryReason: reason)
+        } catch {
+            guard isRunning, !Task.isCancelled else { return }
+            await sink.emitLog("Failed to recover microphone capture: \(error.localizedDescription)")
+        }
+    }
+
+    private func installObservers() {
+        installEngineConfigurationObserver()
+#if os(macOS)
+        installCaptureDeviceObservers()
+#endif
+    }
+
+    private func removeObservers() {
+        removeEngineConfigurationObserver()
+#if os(macOS)
+        removeCaptureDeviceObservers()
+#endif
+    }
+
+    private func installEngineConfigurationObserver() {
+        removeEngineConfigurationObserver()
+        engineConfigurationObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: audioEngine,
+            queue: .main
+        ) { [weak self] _ in
+            self?.scheduleEngineRecovery(reason: "the audio hardware configuration changed")
+        }
+    }
+
+    private func removeEngineConfigurationObserver() {
+        if let engineConfigurationObserver {
+            NotificationCenter.default.removeObserver(engineConfigurationObserver)
+            self.engineConfigurationObserver = nil
+        }
+    }
+
+#if os(macOS)
+    private func installCaptureDeviceObservers() {
+        guard captureDeviceConnectedObserver == nil, captureDeviceDisconnectedObserver == nil else { return }
+
+        captureDeviceConnectedObserver = NotificationCenter.default.addObserver(
+            forName: AVCaptureDevice.wasConnectedNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let device = notification.object as? AVCaptureDevice, device.hasMediaType(.audio) else { return }
+            self?.scheduleEngineRecovery(reason: "audio input device connected (\(device.localizedName))")
+        }
+
+        captureDeviceDisconnectedObserver = NotificationCenter.default.addObserver(
+            forName: AVCaptureDevice.wasDisconnectedNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let device = notification.object as? AVCaptureDevice, device.hasMediaType(.audio) else { return }
+            self?.scheduleEngineRecovery(reason: "audio input device disconnected (\(device.localizedName))")
+        }
+    }
+
+    private func removeCaptureDeviceObservers() {
+        if let captureDeviceConnectedObserver {
+            NotificationCenter.default.removeObserver(captureDeviceConnectedObserver)
+            self.captureDeviceConnectedObserver = nil
+        }
+        if let captureDeviceDisconnectedObserver {
+            NotificationCenter.default.removeObserver(captureDeviceDisconnectedObserver)
+            self.captureDeviceDisconnectedObserver = nil
+        }
+    }
+#endif
 }
 
 private final class AudioTurnPipelineCaptureState: @unchecked Sendable {

@@ -5,7 +5,7 @@ import Testing
 
 @MainActor
 struct TincanSpeechSettingsStoreTests {
-    @Test func speechModelOptionsOnlyIncludeEnabledServices() {
+    @Test func speechModelOptionsIncludeGrokWhenServiceEnabledOrKeyStored() async throws {
         let store = makeStore()
 
         #expect(store.modelOptions(for: .speechToText).map(\.value) == [TincanSpeechSettingsStore.defaultSTTModel])
@@ -18,6 +18,22 @@ struct TincanSpeechSettingsStoreTests {
             TincanSpeechSettingsStore.grokSTTModel,
         ])
         #expect(store.modelOptions(for: .textToSpeech).map(\.value) == [
+            TincanSpeechSettingsStore.defaultTTSModel,
+            TincanSpeechSettingsStore.grokTTSModel,
+        ])
+
+        let keychain = TestSpeechSettingsKeychain(initialValues: [
+            TincanSpeechSettingsStore.grokAPIKeyAccount: "secret-key-9876",
+        ])
+        let storedKeyStore = makeStore(keychain: keychain)
+
+        await storedKeyStore.load()
+
+        #expect(storedKeyStore.modelOptions(for: .speechToText).map(\.value) == [
+            TincanSpeechSettingsStore.defaultSTTModel,
+            TincanSpeechSettingsStore.grokSTTModel,
+        ])
+        #expect(storedKeyStore.modelOptions(for: .textToSpeech).map(\.value) == [
             TincanSpeechSettingsStore.defaultTTSModel,
             TincanSpeechSettingsStore.grokTTSModel,
         ])
@@ -66,7 +82,7 @@ struct TincanSpeechSettingsStoreTests {
         #expect(payload["stt_model"] as? String == TincanSpeechSettingsStore.defaultSTTModel)
         #expect(payload["tts_model"] as? String == TincanSpeechSettingsStore.defaultTTSModel)
         #expect(restartRecorder.restartCount == 1)
-        #expect(store.statusMessage == "Speech config saved. Bundled server restarted.")
+        #expect(store.statusMessage == "Speech settings saved. Bundled server restarted.")
     }
 
     @Test func savingConfigOmitsDefaultGrokBaseURLOverride() async throws {
@@ -86,22 +102,60 @@ struct TincanSpeechSettingsStoreTests {
         #expect(grok["base_url"] == nil)
     }
 
-    @Test func storedGrokKeyUsesMaskedPlaceholderAndClearRemovesIt() async throws {
-        let keychain = TestSpeechSettingsKeychain(initialValues: [
-            TincanSpeechSettingsStore.grokAPIKeyAccount: "secret-key",
+    @Test func savingGrokKeyUsesPageSaveAndSkipsRestartWhenConfigIsUnchanged() async throws {
+        let keychain = TestSpeechSettingsKeychain()
+        let restartRecorder = TestRestartRecorder()
+        let store = makeStore(
+            keychain: keychain,
+            restartRecorder: restartRecorder
+        )
+
+        store.updateGrokAPIKey("secret-key-1234")
+
+        #expect(store.modelOptions(for: .speechToText).map(\.value) == [
+            TincanSpeechSettingsStore.defaultSTTModel,
+            TincanSpeechSettingsStore.grokSTTModel,
         ])
-        let store = makeStore(keychain: keychain)
+
+        await store.saveConfig()
+        await store.load()
+
+        #expect(store.maskedStoredGrokAPIKey == "********1234")
+        #expect(store.showsMaskedStoredGrokAPIKey)
+        #expect(store.showsStoredGrokAPIKeyIndicator)
+        #expect(keychain.containsStoredValue(for: TincanSpeechSettingsStore.grokAPIKeyAccount))
+        #expect(restartRecorder.restartCount == 0)
+        #expect(store.statusMessage == "Grok API key saved.")
+    }
+
+    @Test func clearingStoredGrokKeyUsesPageSaveAndRemovesTheKey() async throws {
+        let keychain = TestSpeechSettingsKeychain(initialValues: [
+            TincanSpeechSettingsStore.grokAPIKeyAccount: "secret-key-1234",
+        ])
+        let restartRecorder = TestRestartRecorder()
+        let store = makeStore(
+            keychain: keychain,
+            restartRecorder: restartRecorder
+        )
 
         await store.load()
 
-        #expect(store.grokAPIKeyPlaceholder == "************")
-        #expect(store.canClearStoredGrokAPIKey)
+        #expect(!store.canSave)
 
-        store.clearGrokAPIKey()
+        store.updateGrokAPIKey("")
 
-        #expect(!store.canClearStoredGrokAPIKey)
-        #expect(store.grokAPIKey.isEmpty)
-        #expect(keychain.containsStoredValue(for: TincanSpeechSettingsStore.grokAPIKeyAccount) == false)
+        #expect(store.canSave)
+
+        await store.saveConfig()
+        await store.load()
+
+        #expect(!store.hasStoredGrokAPIKey)
+        #expect(store.maskedStoredGrokAPIKey.isEmpty)
+        #expect(!store.showsMaskedStoredGrokAPIKey)
+        #expect(!store.showsStoredGrokAPIKeyIndicator)
+        #expect(!keychain.containsStoredValue(for: TincanSpeechSettingsStore.grokAPIKeyAccount))
+        #expect(restartRecorder.restartCount == 0)
+        #expect(store.statusMessage == "Grok API key removed.")
     }
 
     @Test func savingConfigSkipsRestartWhenRemoteServerSelected() async throws {
@@ -115,7 +169,7 @@ struct TincanSpeechSettingsStoreTests {
         await store.saveConfig()
 
         #expect(restartRecorder.restartCount == 0)
-        #expect(store.statusMessage == "Speech config saved. Changes apply when the local Mac server is used.")
+        #expect(store.statusMessage == "Speech settings saved. Changes apply when the local Mac server is used.")
     }
 
     private func makeStore(
@@ -178,6 +232,10 @@ private final class TestSpeechSettingsKeychain: TincanSpeechSettingsKeychainServ
 
     func containsValue(account: String) throws -> Bool {
         values[account] != nil
+    }
+
+    func value(account: String) throws -> String? {
+        values[account]
     }
 
     func upsert(value: String, account: String) throws {
