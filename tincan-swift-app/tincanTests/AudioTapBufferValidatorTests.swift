@@ -102,4 +102,9 @@ struct AudioTapBufferValidatorTests {
         #expect(abs(resampled[1] - 2) < 0.0001)
         #expect(abs(resampled[2] - 4) < 0.0001)
     }
+
+    @Test func measuresPeakMagnitude() {
+        #expect(AudioTapSamples.peakMagnitude([]) == 0)
+        #expect(abs(AudioTapSamples.peakMagnitude([0, -0.25, 0.125]) - 0.25) < 0.0001)
+    }
 }
