@@ -10,7 +10,7 @@ import (
 	tincanconfig "tincan-server/config"
 )
 
-const defaultMacOSTTSVoice = "alba"
+const defaultMacOSTTSVoice = "expr-voice-5-f"
 
 type speechToTextService interface {
 	transcribe(audioData []byte, contentType string) (string, error)
