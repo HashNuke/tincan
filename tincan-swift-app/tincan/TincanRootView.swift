@@ -2022,48 +2022,77 @@ private struct TincanServerSettingsSection: View {
     @ObservedObject var serverSettings: ServerConnectionStore
     let onApplyConnection: () -> Void
 
+    private var usesLocalServer: Bool {
+        serverSettings.connectionMode == .localMac
+    }
+
     var body: some View {
         TincanSettingsSection(title: title, subtitle: subtitle) {
             VStack(alignment: .leading, spacing: 16) {
-                HStack(spacing: 12) {
 #if os(macOS)
-                    TincanServerModeChip(
-                        label: ServerConnectionStore.ConnectionMode.localMac.title,
-                        isSelected: serverSettings.connectionMode == .localMac
-                    ) {
-                        serverSettings.setConnectionMode(.localMac)
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(spacing: 12) {
+                        Text("Run on this computer")
+                            .font(TincanSettingsTypography.emphasis)
+                            .foregroundStyle(TincanPalette.textPrimary)
+
+                        Spacer()
+
+                        Toggle(
+                            "",
+                            isOn: Binding(
+                                get: { usesLocalServer },
+                                set: { serverSettings.setConnectionMode($0 ? .localMac : .remote) }
+                            )
+                        )
+                        .labelsHidden()
+                        .toggleStyle(.switch)
                     }
-#endif
-                    TincanServerModeChip(
-                        label: ServerConnectionStore.ConnectionMode.remote.title,
-                        isSelected: serverSettings.connectionMode == .remote
-                    ) {
-                        serverSettings.setConnectionMode(.remote)
+
+                    Text("Use the bundled server running on this Mac.")
+                        .font(TincanSettingsTypography.body)
+                        .foregroundStyle(TincanPalette.textSecondary)
+
+                    if usesLocalServer {
+                        TincanQRCodeCard(payload: serverSettings.qrPayload)
+                        TincanSettingsValueRow(label: "Current", value: serverSettings.shareableConnectionLabel)
                     }
                 }
-
-                HStack(alignment: .top, spacing: 16) {
-#if os(macOS)
-                    if serverSettings.connectionMode == .localMac {
-                        TincanQRCodeCard(payload: serverSettings.qrPayload)
-                    }
-#endif
 
                     VStack(alignment: .leading, spacing: 10) {
-                        TincanSettingsValueRow(label: "Current", value: serverSettings.shareableConnectionLabel)
+                        Text("Connect to remote server")
+                            .font(TincanSettingsTypography.emphasis)
+                            .foregroundStyle(TincanPalette.textPrimary)
 
-                        if serverSettings.connectionMode == .remote {
-                            VStack(alignment: .leading, spacing: 10) {
-                                TincanLabeledField(label: "Host", text: $serverSettings.draftHost)
-                                TincanLabeledField(label: "Port", text: $serverSettings.draftPort)
+                        if usesLocalServer {
+                            Text("Turn off \"Run on this computer\" to connect to another tincan server.")
+                                .font(TincanSettingsTypography.body)
+                                .foregroundStyle(TincanPalette.textSecondary)
+                        } else {
+                            TincanSettingsValueRow(label: "Current", value: serverSettings.shareableConnectionLabel)
+                            TincanLabeledField(label: "Host", text: $serverSettings.draftHost)
+                            TincanLabeledField(label: "Port", text: $serverSettings.draftPort)
 
-                                Button("Apply", action: onApplyConnection)
-                                    .buttonStyle(.borderedProminent)
-                                    .controlSize(.large)
-                            }
+                            Button("Apply", action: onApplyConnection)
+                                .buttonStyle(.borderedProminent)
+                                .controlSize(.large)
                         }
                     }
+#else
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Connect to remote server")
+                        .font(TincanSettingsTypography.emphasis)
+                        .foregroundStyle(TincanPalette.textPrimary)
+
+                    TincanSettingsValueRow(label: "Current", value: serverSettings.shareableConnectionLabel)
+                    TincanLabeledField(label: "Host", text: $serverSettings.draftHost)
+                    TincanLabeledField(label: "Port", text: $serverSettings.draftPort)
+
+                    Button("Apply", action: onApplyConnection)
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
                 }
+#endif
             }
         }
     }
