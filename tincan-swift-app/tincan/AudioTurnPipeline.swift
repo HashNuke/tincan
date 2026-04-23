@@ -17,22 +17,20 @@ final class AudioTurnPipeline {
     private let sink = TurnEventSink()
     private let turnDetector: VadTurnDetector
     private let captureState = AudioTurnPipelineCaptureState()
+    private let tapState = AudioTurnPipelineTapState()
 
     private var audioStreamContinuation: AsyncStream<[Float]>.Continuation?
     private var processingTask: Task<Void, Never>?
     private var engineRecoveryTask: Task<Void, Never>?
     private var isRunning = false
     private var isRecoveringEngine = false
-    private var tapInputDeviceName = "Unknown input device"
-    private var tapCallbackCount = 0
-    private var tapDebugLogCount = 0
-    private var tapRejectedDebugLogCount = 0
-    private var didLogInputSignal = false
-    private var didWarnAboutSilentInput = false
-    private var didLogFallbackResampler = false
-    private var engineStartGeneration: UInt64 = 0
+    
     private var tapTimeoutRecoveryAttempts = 0
     private let maximumTapTimeoutRecoveryAttempts = 1
+    private let maximumDigitalSilenceRecoveryAttempts = 1
+    private let minimumDigitalSilenceRecoveryDuration: TimeInterval = 3
+    private let digitalSilencePeakThreshold: Float = 0.000_001
+    private let engineRecoveryRestartDelayNanoseconds: UInt64 = 750_000_000
     private var engineConfigurationObserver: NSObjectProtocol?
 #if os(macOS)
     private var captureDeviceConnectedObserver: NSObjectProtocol?
@@ -60,6 +58,7 @@ final class AudioTurnPipeline {
         try await turnDetector.prepare()
         captureState.setEnabled(true)
         tapTimeoutRecoveryAttempts = 0
+        tapState.resetDigitalSilenceRecovery()
 
         let stream = AsyncStream<[Float]> { continuation in
             audioStreamContinuation = continuation
@@ -100,6 +99,8 @@ final class AudioTurnPipeline {
         isRecoveringEngine = false
         removeObservers()
         stopAudioEngine()
+        tapTimeoutRecoveryAttempts = 0
+        tapState.resetDigitalSilenceRecovery()
         audioStreamContinuation?.finish()
         audioStreamContinuation = nil
         processingTask?.cancel()
@@ -136,8 +137,7 @@ final class AudioTurnPipeline {
 
     private func handleTapBuffer(_ buffer: AVAudioPCMBuffer) {
         guard AudioTapBufferValidator.shouldProcess(buffer) else {
-            if tapRejectedDebugLogCount < 3 {
-                tapRejectedDebugLogCount += 1
+            if tapState.registerRejectedTap() {
                 let rejectionReason = AudioTapBufferValidator.rejectionReason(for: buffer) ?? "unknown reason"
                 let audioBuffers = UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList)
                 let bufferSizes = audioBuffers.map(\.mDataByteSize)
@@ -150,17 +150,16 @@ final class AudioTurnPipeline {
             return
         }
 
-        tapCallbackCount += 1
-        if tapCallbackCount == 1 {
+        let tapInfo = tapState.registerTapCallback()
+        if tapInfo.count == 1 {
             tapTimeoutRecoveryAttempts = 0
         }
-        if tapDebugLogCount < 3 {
-            tapDebugLogCount += 1
+        if tapInfo.shouldLogDebug {
             let audioBuffers = UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList)
             let bufferSizes = audioBuffers.map(\.mDataByteSize)
             Task {
                 await self.sink.emitLog(
-                    "Received microphone tap buffer #\(self.tapCallbackCount); frameLength=\(buffer.frameLength), format=\(AudioTapSamples.describe(bufferFormat: buffer.format)), sizes=\(bufferSizes)"
+                    "Received microphone tap buffer #\(tapInfo.count); frameLength=\(buffer.frameLength), format=\(AudioTapSamples.describe(bufferFormat: buffer.format)), sizes=\(bufferSizes)"
                 )
             }
         }
@@ -171,21 +170,21 @@ final class AudioTurnPipeline {
 
         let rawSamples = AudioTapSamples.extractMonoFloatSamples(from: buffer)
         let inputLevel = Self.normalizedInputLevel(from: rawSamples)
+        updateDigitalSilenceDiagnostics(rawSamples: rawSamples, buffer: buffer)
 
         Task {
             await self.sink.emitInputLevel(inputLevel)
         }
 
-        if inputLevel >= 0.03, !didLogInputSignal {
-            didLogInputSignal = true
+        if inputLevel >= 0.03, !tapState.markDidLogInputSignal() {
             Task {
                 await self.sink.emitLog("Microphone input signal detected")
             }
-        } else if tapCallbackCount >= 45, !didLogInputSignal, !didWarnAboutSilentInput {
-            didWarnAboutSilentInput = true
+        } else if tapInfo.count >= 45, !tapState.didLogInputSignal, !tapState.markDidWarnAboutSilentInput() {
+            let tapInputDeviceName = tapState.tapInputDeviceName
             Task {
                 await self.sink.emitLog(
-                    "Microphone tap is active but the signal is near silent. Current input device: \(self.tapInputDeviceName)"
+                    "Microphone tap is active but the signal is near silent. Current input device: \(tapInputDeviceName)"
                 )
             }
         }
@@ -203,6 +202,27 @@ final class AudioTurnPipeline {
         }
     }
 
+    private func updateDigitalSilenceDiagnostics(rawSamples: [Float], buffer: AVAudioPCMBuffer) {
+#if os(macOS)
+        guard !rawSamples.isEmpty else { return }
+
+        let peakMagnitude = AudioTapSamples.peakMagnitude(rawSamples)
+        guard peakMagnitude <= digitalSilencePeakThreshold else {
+            _ = tapState.updateDigitalSilence(duration: 0, threshold: minimumDigitalSilenceRecoveryDuration, maxAttempts: maximumDigitalSilenceRecoveryAttempts)
+            return
+        }
+
+        let sampleRate = buffer.format.sampleRate
+        if sampleRate > 0 {
+            let duration = Double(buffer.frameLength) / sampleRate
+            let result = tapState.updateDigitalSilence(duration: duration, threshold: minimumDigitalSilenceRecoveryDuration, maxAttempts: maximumDigitalSilenceRecoveryAttempts)
+            if result.shouldRecover {
+                scheduleEngineRecovery(reason: "the microphone tap delivered only digital silence from \(result.deviceName)")
+            }
+        }
+#endif
+    }
+
     private func resampledTapSamples(from buffer: AVAudioPCMBuffer, rawSamples: [Float]) throws -> [Float] {
         do {
             let converted = try tapAudioConverter.resampleBuffer(buffer)
@@ -210,8 +230,7 @@ final class AudioTurnPipeline {
                 return converted
             }
         } catch {
-            if !didLogFallbackResampler {
-                didLogFallbackResampler = true
+            if !tapState.markDidLogFallbackResampler() {
                 Task {
                     await self.sink.emitLog(
                         "Primary microphone converter failed for format \(AudioTapSamples.describe(bufferFormat: buffer.format)): \(error.localizedDescription)"
@@ -224,8 +243,7 @@ final class AudioTurnPipeline {
     }
 
     private func fallbackResampledTapSamples(from buffer: AVAudioPCMBuffer, rawSamples: [Float]) throws -> [Float] {
-        if !didLogFallbackResampler {
-            didLogFallbackResampler = true
+        if !tapState.markDidLogFallbackResampler() {
             Task {
                 await self.sink.emitLog(
                     "Falling back to manual microphone conversion for format \(AudioTapSamples.describe(bufferFormat: buffer.format))"
@@ -244,7 +262,8 @@ final class AudioTurnPipeline {
         guard isRunning else { return }
 
         audioEngine = AVAudioEngine()
-        resetTapDiagnostics()
+        let deviceName = AVCaptureDevice.default(for: .audio)?.localizedName ?? "Unknown input device"
+        tapState.resetDiagnostics(deviceName: deviceName)
         installEngineConfigurationObserver()
 
         let inputNode = audioEngine.inputNode
@@ -272,15 +291,14 @@ final class AudioTurnPipeline {
             return
         }
 
-        engineStartGeneration &+= 1
-        let currentGeneration = engineStartGeneration
+        let currentGeneration = tapState.incrementEngineGeneration()
         let tapFormatDescription = AudioTapSamples.describe(bufferFormat: inputFormat)
 
         await sink.resetInputLevel()
         if let recoveryReason {
             await sink.emitLog("Recovered microphone capture after \(recoveryReason)")
         }
-        await sink.emitLog("Using microphone: \(tapInputDeviceName)")
+        await sink.emitLog("Using microphone: \(deviceName)")
         await sink.emitLog("Microphone tap format: \(tapFormatDescription)")
         await sink.emitLog(recoveryReason == nil ? "Microphone capture started" : "Microphone capture resumed")
         scheduleTapWatchdog(engineGeneration: currentGeneration, tapFormatDescription: tapFormatDescription)
@@ -293,23 +311,13 @@ final class AudioTurnPipeline {
         audioEngine.reset()
     }
 
-    private func resetTapDiagnostics() {
-        tapInputDeviceName = AVCaptureDevice.default(for: .audio)?.localizedName ?? "Unknown input device"
-        tapCallbackCount = 0
-        tapDebugLogCount = 0
-        tapRejectedDebugLogCount = 0
-        didLogInputSignal = false
-        didWarnAboutSilentInput = false
-        didLogFallbackResampler = false
-    }
-
     private func scheduleTapWatchdog(engineGeneration: UInt64, tapFormatDescription: String) {
         Task { [weak self] in
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             guard let self,
                   self.isRunning,
-                  self.engineStartGeneration == engineGeneration,
-                  self.tapCallbackCount == 0 else { return }
+                  self.tapState.engineStartGeneration == engineGeneration,
+                  self.tapState.tapCallbackCount == 0 else { return }
 
             await self.sink.emitLog(
                 "Microphone tap started but has not delivered any buffers after 2s. Tap format: \(tapFormatDescription)"
@@ -346,6 +354,9 @@ final class AudioTurnPipeline {
         guard isRunning, !Task.isCancelled else { return }
 
         stopAudioEngine()
+        audioEngine = AVAudioEngine()
+
+        try? await Task.sleep(nanoseconds: engineRecoveryRestartDelayNanoseconds)
 
         guard isRunning, !Task.isCancelled else { return }
 
@@ -423,6 +434,133 @@ final class AudioTurnPipeline {
         }
     }
 #endif
+}
+
+private final class AudioTurnPipelineTapState: @unchecked Sendable {
+    private let lock = NSLock()
+    
+    private var _tapInputDeviceName = "Unknown input device"
+    private var _tapCallbackCount = 0
+    private var _tapDebugLogCount = 0
+    private var _tapRejectedDebugLogCount = 0
+    private var _didLogInputSignal = false
+    private var _didWarnAboutSilentInput = false
+    private var _didLogFallbackResampler = false
+    private var _digitalSilenceDuration: TimeInterval = 0
+    private var _digitalSilenceRecoveryAttempts = 0
+    private var _engineStartGeneration: UInt64 = 0
+
+    var tapInputDeviceName: String {
+        lock.lock(); defer { lock.unlock() }; return _tapInputDeviceName
+    }
+
+    var tapCallbackCount: Int {
+        lock.lock(); defer { lock.unlock() }; return _tapCallbackCount
+    }
+    
+    var didLogInputSignal: Bool {
+        lock.lock(); defer { lock.unlock() }; return _didLogInputSignal
+    }
+
+    var didWarnAboutSilentInput: Bool {
+        lock.lock(); defer { lock.unlock() }; return _didWarnAboutSilentInput
+    }
+
+    var digitalSilenceRecoveryAttempts: Int {
+        lock.lock(); defer { lock.unlock() }; return _digitalSilenceRecoveryAttempts
+    }
+
+    var engineStartGeneration: UInt64 {
+        lock.lock(); defer { lock.unlock() }; return _engineStartGeneration
+    }
+
+    func resetDiagnostics(deviceName: String) {
+        lock.lock()
+        _tapInputDeviceName = deviceName
+        _tapCallbackCount = 0
+        _tapDebugLogCount = 0
+        _tapRejectedDebugLogCount = 0
+        _didLogInputSignal = false
+        _didWarnAboutSilentInput = false
+        _didLogFallbackResampler = false
+        _digitalSilenceDuration = 0
+        lock.unlock()
+    }
+
+    func resetDigitalSilenceRecovery() {
+        lock.lock()
+        _digitalSilenceRecoveryAttempts = 0
+        lock.unlock()
+    }
+
+    func incrementEngineGeneration() -> UInt64 {
+        lock.lock()
+        _engineStartGeneration &+= 1
+        let gen = _engineStartGeneration
+        lock.unlock()
+        return gen
+    }
+
+    func registerTapCallback() -> (count: Int, shouldLogDebug: Bool) {
+        lock.lock()
+        _tapCallbackCount += 1
+        let count = _tapCallbackCount
+        let shouldLog = _tapDebugLogCount < 3
+        if shouldLog { _tapDebugLogCount += 1 }
+        lock.unlock()
+        return (count, shouldLog)
+    }
+
+    func registerRejectedTap() -> Bool {
+        lock.lock()
+        let shouldLog = _tapRejectedDebugLogCount < 3
+        if shouldLog { _tapRejectedDebugLogCount += 1 }
+        lock.unlock()
+        return shouldLog
+    }
+
+    func markDidLogInputSignal() -> Bool {
+        lock.lock()
+        let alreadyLogged = _didLogInputSignal
+        _didLogInputSignal = true
+        lock.unlock()
+        return alreadyLogged
+    }
+
+    func markDidWarnAboutSilentInput() -> Bool {
+        lock.lock()
+        let alreadyWarned = _didWarnAboutSilentInput
+        _didWarnAboutSilentInput = true
+        lock.unlock()
+        return alreadyWarned
+    }
+
+    func markDidLogFallbackResampler() -> Bool {
+        lock.lock()
+        let alreadyLogged = _didLogFallbackResampler
+        _didLogFallbackResampler = true
+        lock.unlock()
+        return alreadyLogged
+    }
+
+    func updateDigitalSilence(duration: TimeInterval, threshold: TimeInterval, maxAttempts: Int) -> (shouldRecover: Bool, deviceName: String) {
+        lock.lock()
+        defer { lock.unlock() }
+
+        if duration == 0 {
+            _digitalSilenceDuration = 0
+            return (false, "")
+        }
+
+        _digitalSilenceDuration += duration
+
+        if _digitalSilenceDuration >= threshold, !_didLogInputSignal, _digitalSilenceRecoveryAttempts < maxAttempts {
+            _digitalSilenceRecoveryAttempts += 1
+            _didWarnAboutSilentInput = true
+            return (true, _tapInputDeviceName)
+        }
+        return (false, "")
+    }
 }
 
 private final class AudioTurnPipelineCaptureState: @unchecked Sendable {
@@ -516,6 +654,12 @@ enum AudioTapSamples {
         }
 
         return output
+    }
+
+    static func peakMagnitude(_ samples: [Float]) -> Float {
+        samples.reduce(Float.zero) { currentPeak, sample in
+            max(currentPeak, abs(sample))
+        }
     }
 
     static func describe(bufferFormat format: AVAudioFormat) -> String {
