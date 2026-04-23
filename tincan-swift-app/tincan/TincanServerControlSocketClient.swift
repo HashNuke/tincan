@@ -5,7 +5,7 @@ import Foundation
 struct TincanServerControlSocketClient {
     private struct Request: Encodable {
         let action: String
-        let data: [String: String]
+        let data: [String: String]?
     }
 
     private struct Response: Decodable {
@@ -45,14 +45,24 @@ struct TincanServerControlSocketClient {
         self.socketURL = socketURL
     }
 
+    func ping() async throws {
+        try await sendRequest(action: "ping", data: nil)
+    }
+
     func sendSecrets(_ updates: [String: String]) async throws {
         guard !updates.isEmpty else { return }
+
+        try await sendRequest(action: "secrets", data: updates)
+    }
+
+    private func sendRequest(action: String, data: [String: String]?) async throws {
+        let request = Request(action: action, data: data)
 
         let socketURL = self.socketURL
         try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 do {
-                    try Self.sendSecretsSync(updates, to: socketURL)
+                    try Self.sendRequestSync(request, to: socketURL)
                     continuation.resume()
                 } catch {
                     continuation.resume(throwing: error)
@@ -61,8 +71,8 @@ struct TincanServerControlSocketClient {
         }
     }
 
-    private static func sendSecretsSync(_ updates: [String: String], to socketURL: URL) throws {
-        let payload = try JSONEncoder().encode(Request(action: "secrets", data: updates))
+    private static func sendRequestSync(_ request: Request, to socketURL: URL) throws {
+        let payload = try JSONEncoder().encode(request)
         let fileDescriptor = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fileDescriptor >= 0 else {
             throw ClientError.createSocket(String(cString: strerror(errno)))

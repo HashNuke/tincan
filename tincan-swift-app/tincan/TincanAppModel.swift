@@ -36,11 +36,11 @@ final class TincanAppModel: ObservableObject {
                 try await bundledServerController.restart()
             },
             syncLocalServerSecretUpdates: { updates in
-                await bundledServerController.startIfNeeded()
+                try await bundledServerController.startIfNeeded()
                 try await bundledServerController.sendSecretUpdates(updates)
             },
             syncLocalServerSecrets: {
-                await bundledServerController.startIfNeeded()
+                try await bundledServerController.startIfNeeded()
                 try await bundledServerController.syncStoredSecretsFromKeychain()
             }
         )
@@ -69,7 +69,15 @@ final class TincanAppModel: ObservableObject {
         }
 
         let task = Task { @MainActor in
-            await bundledServerController.startIfNeeded()
+            do {
+                try await bundledServerController.startIfNeeded()
+            } catch is CancellationError {
+                return
+            } catch {
+                NSLog("Failed to start bundled tincan-server: %@", error.localizedDescription)
+                return
+            }
+
             do {
                 try await bundledServerController.syncStoredSecretsFromKeychain()
             } catch {

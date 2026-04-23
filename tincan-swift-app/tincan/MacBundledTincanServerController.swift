@@ -274,9 +274,9 @@ final class MacBundledTincanServerController {
         }
     }
 
-    func startIfNeeded() async {
+    func startIfNeeded() async throws {
         prepareStartupLoggingIfNeeded()
-        guard !Task.isCancelled else { return }
+        guard !Task.isCancelled else { throw CancellationError() }
 
         do {
             let repairResult = try LocalAgentBackendConfigRepair.repairOpencodeBackendsForLocalServer(
@@ -293,11 +293,12 @@ final class MacBundledTincanServerController {
 
         if process?.isRunning == true {
             do {
-                try await waitUntilReachable(timeout: 10)
-                writeStartupLog("bundled tincan-server already running on port \(port)")
+                try await waitUntilReady(timeout: 10)
+                writeStartupLog("bundled tincan-server already running and ready on port \(port)")
             } catch {
-                writeStartupLog("bundled tincan-server is running but failed health check: \(error.localizedDescription)")
-                NSLog("Bundled tincan-server is running but not healthy: %@", error.localizedDescription)
+                writeStartupLog("bundled tincan-server is running but failed readiness check: \(error.localizedDescription)")
+                NSLog("Bundled tincan-server is running but not ready: %@", error.localizedDescription)
+                throw error
             }
             return
         }
@@ -334,25 +335,26 @@ final class MacBundledTincanServerController {
                 self.process = process
                 writeTrackedProcessID(process.processIdentifier)
                 writeStartupLog("bundled tincan-server started with pid \(process.processIdentifier)")
-                try await waitUntilReachable(timeout: 10)
-                writeStartupLog("bundled tincan-server became healthy on port \(port)")
+                try await waitUntilReady(timeout: 10)
+                writeStartupLog("bundled tincan-server became ready on port \(port)")
             }
         } catch is CancellationError {
             writeStartupLog("bundled tincan-server launch was cancelled")
+            throw CancellationError()
         } catch {
-            writeStartupLog("failed to launch bundled tincan-server: \(error.localizedDescription)")
+            writeStartupLog("failed to start bundled tincan-server: \(error.localizedDescription)")
             if process == nil {
                 finishProcessRun()
             }
-            NSLog("Failed to launch bundled tincan-server: %@", error.localizedDescription)
+            NSLog("Failed to start bundled tincan-server: %@", error.localizedDescription)
+            throw error
         }
     }
 
     func restart() async throws {
         prepareStartupLoggingIfNeeded()
         stop()
-        await startIfNeeded()
-        try await waitUntilReachable(timeout: 10)
+        try await startIfNeeded()
     }
 
     func sendSecretUpdates(_ updates: [String: String]) async throws {
@@ -529,6 +531,34 @@ final class MacBundledTincanServerController {
             try await Task.sleep(nanoseconds: 250_000_000)
         }
         throw LaunchError.serverDidNotBecomeHealthy(port)
+    }
+
+    private func waitUntilReady(timeout: TimeInterval) async throws {
+        try await waitUntilReachable(timeout: timeout)
+        try await waitUntilControlSocketAvailable(timeout: timeout)
+    }
+
+    private func waitUntilControlSocketAvailable(timeout: TimeInterval) async throws {
+        let socketURL = AppPaths.tincanServerSocketURL
+        let client = TincanServerControlSocketClient(socketURL: socketURL)
+        let deadline = Date().addingTimeInterval(timeout)
+        var lastError: Error?
+
+        while Date() < deadline {
+            do {
+                try await client.ping()
+                return
+            } catch {
+                lastError = error
+            }
+
+            try await Task.sleep(nanoseconds: 250_000_000)
+        }
+
+        throw LaunchError.controlSocketDidNotBecomeAvailable(
+            path: socketURL.path,
+            reason: lastError?.localizedDescription
+        )
     }
 
     private func waitForProcessToExit(_ pid: pid_t, timeout: TimeInterval) async {
@@ -787,6 +817,7 @@ extension MacBundledTincanServerController {
     enum LaunchError: LocalizedError {
         case missingBundledRuntime([String])
         case serverDidNotBecomeHealthy(Int)
+        case controlSocketDidNotBecomeAvailable(path: String, reason: String?)
         case logFileUnavailable(String)
         case failedToTerminatePortListener(port: Int, pid: pid_t, signal: Int32, message: String)
         case portListenerDidNotExit(port: Int, pid: pid_t)
@@ -798,6 +829,10 @@ extension MacBundledTincanServerController {
                 return "BundledRuntime/tincan-server was not found. Checked: \(candidatePaths.joined(separator: ", "))"
             case .serverDidNotBecomeHealthy(let port):
                 return "tincan-server did not become healthy on port \(port)"
+            case .controlSocketDidNotBecomeAvailable(let path, let reason):
+                let suffix = reason.map { " Last error: \($0)" } ?? ""
+                return "tincan-server control socket did not become available at \(path). " +
+                    "The bundled runtime may be stale; rebuild it with ./build-deps.sh --skip-model-downloads.\(suffix)"
             case .logFileUnavailable(let path):
                 return "tincan-server log file could not be opened at \(path)"
             case .failedToTerminatePortListener(let port, let pid, let signal, let message):

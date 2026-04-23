@@ -122,6 +122,8 @@ func (s *serverControlSocket) handleConnection(conn net.Conn) {
 
 func (s *serverControlSocket) applyRequest(request serverControlRequest) error {
 	switch strings.TrimSpace(request.Action) {
+	case "ping":
+		return nil
 	case "secrets":
 		if s.credentials == nil {
 			return errors.New("credential store is unavailable")

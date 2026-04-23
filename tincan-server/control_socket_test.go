@@ -7,6 +7,33 @@ import (
 	"testing"
 )
 
+func TestServerControlSocketPingActionSucceedsWithoutCredentialStore(t *testing.T) {
+	controlSocket := newServerControlSocket("/tmp/tincan-server.sock", nil)
+
+	serverConn, clientConn := net.Pipe()
+	defer clientConn.Close()
+
+	done := make(chan struct{})
+	go func() {
+		controlSocket.handleConnection(serverConn)
+		close(done)
+	}()
+
+	if err := json.NewEncoder(clientConn).Encode(serverControlRequest{Action: "ping"}); err != nil {
+		t.Fatalf("encode request: %v", err)
+	}
+
+	var response serverControlResponse
+	if err := json.NewDecoder(clientConn).Decode(&response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	<-done
+
+	if !response.OK {
+		t.Fatalf("expected success response, got %#v", response)
+	}
+}
+
 func TestServerControlSocketSecretsActionAppliesCredentialUpdate(t *testing.T) {
 	store := newServiceCredentialStore(nil)
 	controlSocket := newServerControlSocket("/tmp/tincan-server.sock", store)
