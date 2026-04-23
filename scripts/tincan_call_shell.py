@@ -30,6 +30,8 @@ TINCAN_CHANNEL_LABEL = "tincan"
 SEND_SAMPLE_RATE = 16_000
 PLAY_SAMPLE_RATE = 48_000
 HEARTBEAT_INTERVAL_SECONDS = 5.0
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_AUDIO_PATH = PROJECT_ROOT / "samples" / "ask-emma-hn-headline.wav"
 
 
 @dataclass(frozen=True)
@@ -57,7 +59,12 @@ def parse_args() -> argparse.Namespace:
         "send",
         help="Connect to tincan-server over WebRTC and send audio as utterances",
     )
-    send_parser.add_argument("audio", nargs="+", type=Path, help="Audio file(s) to send")
+    send_parser.add_argument(
+        "audio",
+        nargs="*",
+        type=Path,
+        help=f"Audio file(s) to send (default: {DEFAULT_AUDIO_PATH})",
+    )
     send_parser.add_argument(
         "--server",
         default=DEFAULT_SERVER_URL,
@@ -154,6 +161,12 @@ def parse_args() -> argparse.Namespace:
         help="Optional macOS say voice name for SAY commands",
     )
     interactive_parser.add_argument(
+        "--default-audio",
+        type=Path,
+        default=DEFAULT_AUDIO_PATH,
+        help=f"Audio file used by the DEFAULT command (default: {DEFAULT_AUDIO_PATH})",
+    )
+    interactive_parser.add_argument(
         "--verbose",
         action="store_true",
         help="Print connection state changes and raw non-result data channel traffic",
@@ -163,7 +176,12 @@ def parse_args() -> argparse.Namespace:
         "play",
         help="Play audio into a selected output device such as BlackHole",
     )
-    play_parser.add_argument("audio", nargs="+", type=Path, help="Audio file(s) to play")
+    play_parser.add_argument(
+        "audio",
+        nargs="*",
+        type=Path,
+        help=f"Audio file(s) to play (default: {DEFAULT_AUDIO_PATH})",
+    )
     play_parser.add_argument(
         "--device",
         help="Output device index or a case-insensitive substring of the output device name",
@@ -854,6 +872,8 @@ def parse_interactive_command(line: str) -> tuple[str, str | None]:
         return "say", payload
     if normalized == "file":
         return "file", payload
+    if normalized in {"default", "sample"}:
+        return "default", payload
     return "say", stripped
 
 
@@ -927,6 +947,7 @@ async def send_audio_path(
 
 
 async def run_interactive(args: argparse.Namespace) -> int:
+    default_audio_path = ensure_existing_file(args.default_audio)
     output_device = resolve_output_device(args.device)
     remote_audio_player = RemoteAudioPlayer(
         output_device=output_device,
@@ -945,7 +966,8 @@ async def run_interactive(args: argparse.Namespace) -> int:
     await client.connect()
     print(f"Connected to {args.server} with session {client.session_id}")
     print(f"Playback output: {device_label(output_device)}")
-    print("Commands: SAY <text>, FILE <path>, HELP, EXIT")
+    print("Commands: DEFAULT, SAY <text>, FILE <path>, HELP, EXIT")
+    print(f"Default audio: {default_audio_path}")
     print("Bare text is treated as SAY.")
 
     try:
@@ -964,7 +986,8 @@ async def run_interactive(args: argparse.Namespace) -> int:
                 if command == "empty":
                     continue
                 if command == "help":
-                    print("Commands: SAY <text>, FILE <path>, HELP, EXIT")
+                    print("Commands: DEFAULT, SAY <text>, FILE <path>, HELP, EXIT")
+                    print(f"DEFAULT sends: {default_audio_path}")
                     print("Bare text is treated as SAY.")
                     continue
                 if command == "exit":
@@ -977,6 +1000,10 @@ async def run_interactive(args: argparse.Namespace) -> int:
                         if not payload:
                             raise HarnessError("FILE requires a path")
                         audio_path = ensure_existing_file(Path(payload))
+                    elif command == "default":
+                        if payload:
+                            raise HarnessError("DEFAULT does not accept arguments")
+                        audio_path = default_audio_path
                     else:
                         raise HarnessError(f"unsupported interactive command: {command}")
 
@@ -1001,6 +1028,9 @@ async def run_interactive(args: argparse.Namespace) -> int:
 def build_audio_sequence(audio_args: list[Path], repeat: int) -> list[Path]:
     if repeat < 1:
         raise HarnessError("--repeat must be >= 1")
+
+    if not audio_args:
+        audio_args = [DEFAULT_AUDIO_PATH]
 
     sequence: list[Path] = []
     for _ in range(repeat):

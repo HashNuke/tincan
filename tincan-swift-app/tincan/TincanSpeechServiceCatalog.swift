@@ -34,10 +34,13 @@ struct TincanSpeechModelOption: Identifiable, Equatable {
     let id: String
     let title: String
     let value: String
+    let note: String
 }
 
 enum TincanSpeechServiceCatalog {
     static let defaultGrokBaseURL = "https://api.x.ai/v1"
+    static let macOSModelDependencyNote = "This model works only on macOS"
+    static let grokModelDependencyNote = "Please ensure to configure the Grok API credentials in the Services settings"
 
     static func defaultModel(for target: TincanSpeechModelTarget) -> String {
         switch target {
@@ -48,29 +51,21 @@ enum TincanSpeechServiceCatalog {
         }
     }
 
-    static func options(
-        for target: TincanSpeechModelTarget,
-        availableServices: Set<TincanSpeechServiceID>
-    ) -> [TincanSpeechModelOption] {
-        var result = [
+    static func options(for target: TincanSpeechModelTarget) -> [TincanSpeechModelOption] {
+        [
             TincanSpeechModelOption(
                 id: "\(target.rawValue)-default",
                 title: defaultOptionTitle(for: target),
-                value: defaultModel(for: target)
+                value: defaultModel(for: target),
+                note: macOSModelDependencyNote
+            ),
+            TincanSpeechModelOption(
+                id: "\(target.rawValue)-grok",
+                title: grokOptionTitle(for: target),
+                value: grokModel(for: target),
+                note: grokModelDependencyNote
             ),
         ]
-
-        if availableServices.contains(.grok) {
-            result.append(
-                TincanSpeechModelOption(
-                    id: "\(target.rawValue)-grok",
-                    title: grokOptionTitle(for: target),
-                    value: grokModel(for: target)
-                )
-            )
-        }
-
-        return result
     }
 
     static func normalizedModel(

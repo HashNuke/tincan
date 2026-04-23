@@ -34,6 +34,14 @@ final class TincanAppModel: ObservableObject {
             serverSettings: serverSettings,
             restartLocalServer: {
                 try await bundledServerController.restart()
+            },
+            syncLocalServerSecretUpdates: { updates in
+                await bundledServerController.startIfNeeded()
+                try await bundledServerController.sendSecretUpdates(updates)
+            },
+            syncLocalServerSecrets: {
+                await bundledServerController.startIfNeeded()
+                try await bundledServerController.syncStoredSecretsFromKeychain()
             }
         )
         connectionModeCancellable = serverSettings.$connectionMode
@@ -62,6 +70,11 @@ final class TincanAppModel: ObservableObject {
 
         let task = Task { @MainActor in
             await bundledServerController.startIfNeeded()
+            do {
+                try await bundledServerController.syncStoredSecretsFromKeychain()
+            } catch {
+                NSLog("Failed to sync bundled tincan-server secrets: %@", error.localizedDescription)
+            }
         }
         bundledServerStartupTask = task
         await task.value

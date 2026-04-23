@@ -32,8 +32,8 @@ import (
 )
 
 const (
-	inferenceSocketFileName       = "tincan-inference-macos.sock"
-	legacyInferenceSocketFileName = "inference.sock"
+	serverControlSocketFileName = "tincan-server.sock"
+	inferenceSocketFileName     = "tincan-inference-macos.sock"
 )
 
 type server struct {
@@ -43,7 +43,7 @@ type server struct {
 	speechRuntime       speechRuntime
 	stt                 speechToTextService
 	tts                 textToSpeechService
-	credentials         serviceCredentialReader
+	credentialStore     *serviceCredentialStore
 	appConfig           *tincanconfig.AppConfigStore
 	profiles            *tincanconfig.AgentProfileStore
 	backends            *tincanconfig.AgentBackendStore
@@ -55,6 +55,7 @@ type server struct {
 	hookController      *controllers.HookController
 	outputPublisher     *output.Publisher
 	liveHub             *liveHub
+	controlSocket       *serverControlSocket
 }
 
 type inferenceEnvelope struct {
@@ -155,6 +156,10 @@ func main() {
 			log.Printf("failed to close conversation store: %v", err)
 		}
 	}()
+	if err := srv.controlSocket.Start(ctx); err != nil {
+		log.Fatalf("failed to start control socket: %v", err)
+	}
+	defer srv.controlSocket.Shutdown()
 
 	if err := srv.speechRuntime.EnsureRunning(ctx); err != nil {
 		log.Fatalf("failed to start speech services: %v", err)
@@ -260,7 +265,7 @@ func newServer(dataDir string, port int, runtimeOutput io.Writer) (*server, erro
 		speechRuntime:       speechServices.runtime,
 		stt:                 speechServices.stt,
 		tts:                 speechServices.tts,
-		credentials:         credentials,
+		credentialStore:     credentials,
 		callManager:         callManager,
 		appConfig:           appConfig,
 		profiles:            profiles,
@@ -281,6 +286,7 @@ func newServer(dataDir string, port int, runtimeOutput io.Writer) (*server, erro
 			Sessions:        callManager,
 			UpdateProcessor: builtRouter,
 		},
+		controlSocket: newServerControlSocket(serverControlSocketPath(), credentials),
 	}
 	srv.webrtcTransport = newWebRTCTransport(srv)
 	srv.liveHub = newLiveHub(srv)
@@ -708,48 +714,27 @@ func readInferenceMessage(reader io.Reader) (inferenceMessage, error) {
 }
 
 func inferenceSocketPath() string {
-	runDir := inferenceRunDirectory()
+	runDir := runtimeRunDirectory()
 	if runDir == "" {
 		return ""
 	}
 	return filepath.Join(runDir, inferenceSocketFileName)
 }
 
-func legacyInferenceSocketPath() string {
-	runDir := inferenceRunDirectory()
+func serverControlSocketPath() string {
+	runDir := runtimeRunDirectory()
 	if runDir == "" {
 		return ""
 	}
-	return filepath.Join(runDir, legacyInferenceSocketFileName)
+	return filepath.Join(runDir, serverControlSocketFileName)
 }
 
-func inferenceRunDirectory() string {
+func runtimeRunDirectory() string {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return ""
 	}
 	return filepath.Join(homeDir, "Library", "Application Support", "tincan", "run")
-}
-
-func activeInferenceSocketPath() string {
-	return resolveActiveInferenceSocketPath(isSocketReady)
-}
-
-func resolveActiveInferenceSocketPath(socketReady func(string) bool) string {
-	preferredPath := inferenceSocketPath()
-	if preferredPath == "" {
-		return ""
-	}
-	if socketReady(preferredPath) {
-		return preferredPath
-	}
-
-	legacyPath := legacyInferenceSocketPath()
-	if legacyPath != "" && socketReady(legacyPath) {
-		return legacyPath
-	}
-
-	return preferredPath
 }
 
 func serverAudioDir(parts ...string) (string, error) {
@@ -791,13 +776,12 @@ func newInferenceSupervisor(socketPath string, appConfig *tincanconfig.AppConfig
 }
 
 func (s *inferenceSupervisor) EnsureRunning(ctx context.Context) error {
-	if isSocketReady(s.socketPath) {
-		log.Printf("using existing inference service at %s", s.socketPath)
-		return nil
-	}
-
 	if s.launchErr != nil {
 		return s.launchErr
+	}
+
+	if err := clearExistingInferenceProcesses(ctx, knownInferenceSocketPaths()); err != nil {
+		return fmt.Errorf("clear existing inference service: %w", err)
 	}
 
 	command := exec.CommandContext(ctx, s.launch.command, s.launch.args...)

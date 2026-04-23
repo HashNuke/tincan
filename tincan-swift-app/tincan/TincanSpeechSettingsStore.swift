@@ -62,6 +62,8 @@ final class TincanSpeechSettingsStore: ObservableObject {
     private let keychain: any TincanSpeechSettingsKeychainServicing
     private let fileManager: FileManager
     private let restartLocalServer: @Sendable () async throws -> Void
+    private let syncLocalServerSecretUpdates: @Sendable ([String: String]) async throws -> Void
+    private let syncLocalServerSecrets: @Sendable () async throws -> Void
     private var persistedConfigPayload: [String: Any] = [:]
     private var persistedServicesPayload: [String: Any] = [:]
     private var persistedGrokPayload: [String: Any] = [:]
@@ -75,29 +77,21 @@ final class TincanSpeechSettingsStore: ObservableObject {
         configURL: URL = AppPaths.generatedAppConfigURL,
         keychain: (any TincanSpeechSettingsKeychainServicing)? = nil,
         fileManager: FileManager = .default,
-        restartLocalServer: @escaping @Sendable () async throws -> Void = {}
+        restartLocalServer: @escaping @Sendable () async throws -> Void = {},
+        syncLocalServerSecretUpdates: @escaping @Sendable ([String: String]) async throws -> Void = { _ in },
+        syncLocalServerSecrets: @escaping @Sendable () async throws -> Void = {}
     ) {
         self.serverSettings = serverSettings
         self.configURL = configURL
         self.keychain = keychain ?? MacKeychainService()
         self.fileManager = fileManager
         self.restartLocalServer = restartLocalServer
+        self.syncLocalServerSecretUpdates = syncLocalServerSecretUpdates
+        self.syncLocalServerSecrets = syncLocalServerSecrets
     }
 
     var isRemoteServerSelected: Bool {
         serverSettings.connectionMode == .remote
-    }
-
-    var enabledServices: Set<TincanSpeechServiceID> {
-        grokEnabled ? [.grok] : []
-    }
-
-    var availableServices: Set<TincanSpeechServiceID> {
-        var result = enabledServices
-        if hasStoredGrokAPIKey || hasPendingGrokAPIKey || usesGrok {
-            result.insert(.grok)
-        }
-        return result
     }
 
     var grokBaseURLPlaceholder: String {
@@ -137,12 +131,18 @@ final class TincanSpeechSettingsStore: ObservableObject {
     }
 
     func modelOptions(for target: TincanSpeechModelTarget) -> [TincanSpeechModelOption] {
-        TincanSpeechServiceCatalog.options(for: target, availableServices: availableServices)
+        TincanSpeechServiceCatalog.options(for: target)
     }
 
-    func selectedModelTitle(for target: TincanSpeechModelTarget) -> String {
+    func selectedModelOption(for target: TincanSpeechModelTarget) -> TincanSpeechModelOption {
         let selectedModel = model(for: target)
-        return modelOptions(for: target).first(where: { $0.value == selectedModel })?.title ?? selectedModel
+        return modelOptions(for: target).first(where: { $0.value == selectedModel }) ??
+            TincanSpeechModelOption(
+                id: "\(target.rawValue)-custom",
+                title: selectedModel,
+                value: selectedModel,
+                note: ""
+            )
     }
 
     func setModel(_ value: String, for target: TincanSpeechModelTarget) {
@@ -230,12 +230,22 @@ final class TincanSpeechSettingsStore: ObservableObject {
         }
 
         if !hasPendingConfigChanges {
+            let secretUpdates = localServerSecretUpdates(for: keyUpdate)
             do {
+                if !isRemoteServerSelected, let secretUpdates {
+                    try await syncLocalServerSecretUpdates(secretUpdates)
+                }
                 try reloadGrokAPIKeyState()
                 errorMessage = nil
                 statusMessage = statusMessage(for: keyUpdate)
             } catch {
-                errorMessage = "Refreshing GROK_API_KEY state failed: \(error.localizedDescription)"
+                do {
+                    try reloadGrokAPIKeyState()
+                } catch {
+                    errorMessage = "Refreshing GROK_API_KEY state failed: \(error.localizedDescription)"
+                    return
+                }
+                errorMessage = "GROK_API_KEY was updated, but syncing bundled server failed: \(error.localizedDescription)"
             }
             return
         }
@@ -282,6 +292,13 @@ final class TincanSpeechSettingsStore: ObservableObject {
                     statusMessage = "Speech settings saved. Bundled server restarted."
                 } catch {
                     errorMessage = "Speech settings saved, but restarting bundled server failed: \(error.localizedDescription)"
+                    return
+                }
+
+                do {
+                    try await syncLocalServerSecrets()
+                } catch {
+                    errorMessage = "Speech settings saved and bundled server restarted, but syncing secrets failed: \(error.localizedDescription)"
                 }
             }
         } catch {
@@ -469,19 +486,15 @@ final class TincanSpeechSettingsStore: ObservableObject {
         }
     }
 
-    private func hasPendingGrokAPIKey(for update: PendingGrokAPIKeyUpdate) -> Bool {
+    private func localServerSecretUpdates(for update: PendingGrokAPIKeyUpdate) -> [String: String]? {
         switch update {
         case .unchanged:
-            return hasStoredGrokAPIKey
+            return nil
         case .store(let value):
-            return !value.isEmpty
+            return [Self.grokAPIKeyAccount: value]
         case .clear:
-            return false
+            return [Self.grokAPIKeyAccount: ""]
         }
-    }
-
-    private var hasPendingGrokAPIKey: Bool {
-        hasPendingGrokAPIKey(for: grokAPIKeyUpdate())
     }
 
     private func statusMessage(for update: PendingGrokAPIKeyUpdate) -> String {

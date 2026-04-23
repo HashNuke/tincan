@@ -65,39 +65,15 @@ func TestConfiguredInferenceModelsFallsBackToBundledDefaults(t *testing.T) {
 	}
 }
 
-func TestResolveActiveInferenceSocketPathPrefersRenamedSocket(t *testing.T) {
-	preferredPath := inferenceSocketPath()
-	legacyPath := legacyInferenceSocketPath()
-
-	got := resolveActiveInferenceSocketPath(func(path string) bool {
-		return path == preferredPath || path == legacyPath
-	})
-	if got != preferredPath {
-		t.Fatalf("expected preferred inference socket path %q, got %q", preferredPath, got)
-	}
-}
-
-func TestResolveActiveInferenceSocketPathFallsBackToLegacySocket(t *testing.T) {
-	preferredPath := inferenceSocketPath()
-	legacyPath := legacyInferenceSocketPath()
-
-	got := resolveActiveInferenceSocketPath(func(path string) bool {
-		return path == legacyPath
-	})
-	if got != legacyPath {
-		t.Fatalf("expected legacy inference socket path %q, got %q", legacyPath, got)
-	}
-	if got == preferredPath {
-		t.Fatalf("expected to fall back away from preferred path %q", preferredPath)
-	}
-}
-
-func TestResolveActiveInferenceSocketPathUsesRenamedSocketWhenNeitherExists(t *testing.T) {
+func TestKnownInferenceSocketPathsOnlyIncludesRenamedSocket(t *testing.T) {
 	preferredPath := inferenceSocketPath()
 
-	got := resolveActiveInferenceSocketPath(func(string) bool { return false })
-	if got != preferredPath {
-		t.Fatalf("expected renamed inference socket path %q, got %q", preferredPath, got)
+	got := knownInferenceSocketPaths()
+	if len(got) != 1 {
+		t.Fatalf("expected one known inference socket path, got %v", got)
+	}
+	if got[0] != preferredPath {
+		t.Fatalf("expected renamed inference socket path %q, got %q", preferredPath, got[0])
 	}
 }
 

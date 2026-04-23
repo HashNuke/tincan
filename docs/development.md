@@ -47,6 +47,7 @@ Use `scripts/tincan_call_shell.py` for prerecorded speech tests and interactive 
 Direct WebRTC send to `tincan-server`:
 
 ```bash
+uv run python scripts/tincan_call_shell.py send
 uv run python scripts/tincan_call_shell.py send /absolute/path/to/sample.wav
 uv run python scripts/tincan_call_shell.py send sample.m4a --server http://127.0.0.1:55055 --repeat 3
 ```
@@ -61,6 +62,7 @@ uv run python scripts/tincan_call_shell.py interactive --device "MacBook Pro Spe
 Interactive commands:
 
 ```text
+DEFAULT
 SAY Atlas, ask Emma to run the date command and tell me what day is today
 FILE /absolute/path/to/sample.wav
 HELP
@@ -71,12 +73,14 @@ Loopback playback into a virtual device such as BlackHole:
 
 ```bash
 uv run python scripts/tincan_call_shell.py devices
+uv run python scripts/tincan_call_shell.py play --device "BlackHole 2ch"
 uv run python scripts/tincan_call_shell.py play sample.wav --device "BlackHole 2ch"
 ```
 
 Notes:
 
+* `send` and `play` default to `samples/ask-emma-hn-headline.wav`, which says "Atlas, ask Emma to get the top item on Hacker News".
 * `send` matches the current app transport: it sends `audio/wav` utterances over the `tincan` WebRTC data channel.
 * `send` and `interactive` negotiate the server's WebRTC audio downlink and play the remote audio track directly; URL-based audio payloads are no longer used.
-* `interactive` keeps one WebRTC session open, treats bare text as `SAY`, and uses macOS `say` for `SAY <text>`.
+* `interactive` keeps one WebRTC session open, sends the same sample with `DEFAULT`, treats bare text as `SAY`, and uses macOS `say` only for `SAY <text>`.
 * `play` is for end-to-end app testing. Point the Swift app's input device at the same loopback device so the app treats the playback as microphone input.

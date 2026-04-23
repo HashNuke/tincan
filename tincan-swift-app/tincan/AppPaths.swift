@@ -67,6 +67,7 @@ enum AppPaths {
     nonisolated static let tincanServerLogURL = logsDirectory.appendingPathComponent("tincan-server.log")
     nonisolated static let tincanServerPIDURL = runDirectory.appendingPathComponent("tincan-server.pid")
     nonisolated static let tincanServerLaunchLockURL = runDirectory.appendingPathComponent("tincan-server.launch.lock")
+    nonisolated static let tincanServerSocketURL = runDirectory.appendingPathComponent("tincan-server.sock")
     nonisolated static let macCallLogURL = logsDirectory.appendingPathComponent("mac-call.log")
     nonisolated static let backendDirectory = projectRoot.appendingPathComponent("backend", isDirectory: true)
     nonisolated static let backendServerModule = "backend.server"

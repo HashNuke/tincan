@@ -69,7 +69,7 @@ func newSpeechServiceSetForGOOS(
 	var localInference *inferenceClient
 	if supportsLocalInference &&
 		(sttSelection.Provider == tincanconfig.SpeechProviderMacOS || ttsSelection.Provider == tincanconfig.SpeechProviderMacOS) {
-		socketPath := activeInferenceSocketPath()
+		socketPath := inferenceSocketPath()
 		localInference = &inferenceClient{
 			socketPath: socketPath,
 			sttModel:   inferenceModelForSelection(sttSelection, defaultBundledSTTModel),

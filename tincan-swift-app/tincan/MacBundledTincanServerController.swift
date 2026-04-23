@@ -355,6 +355,16 @@ final class MacBundledTincanServerController {
         try await waitUntilReachable(timeout: 10)
     }
 
+    func sendSecretUpdates(_ updates: [String: String]) async throws {
+        try await TincanServerControlSocketClient(socketURL: AppPaths.tincanServerSocketURL).sendSecrets(updates)
+    }
+
+    func syncStoredSecretsFromKeychain() async throws {
+        let updates = try storedSecretUpdatesFromKeychain()
+        guard !updates.isEmpty else { return }
+        try await sendSecretUpdates(updates)
+    }
+
     private func reclaimPortListenersIfNeeded(executableURL: URL) async throws {
         let listenerPIDs = try BundledServerPortListenerLookup.listeningPIDs(on: port)
         guard !listenerPIDs.isEmpty else { return }
@@ -658,6 +668,24 @@ final class MacBundledTincanServerController {
 
     private func prepareLogFile() throws -> BundledServerLogFilePreparationResult {
         try BundledServerLogFilePolicy.prepareLogFile(at: AppPaths.tincanServerLogURL)
+    }
+
+    private func storedSecretUpdatesFromKeychain() throws -> [String: String] {
+        let keychain = MacKeychainService()
+        let account = TincanSpeechSettingsStore.grokAPIKeyAccount
+        let hasStoredValue = try keychain.containsValue(account: account)
+        guard hasStoredValue else {
+            return [account: ""]
+        }
+
+        do {
+            let storedValue = try keychain.value(account: account)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return [account: storedValue ?? ""]
+        } catch let error as KeychainError where error.isNonFatalReadAuthorizationFailure {
+            writeStartupLog("skipping bundled server secret sync for \(account) because keychain denied secret bytes")
+            return [:]
+        }
     }
 
     private func writeStartupLog(_ message: String) {

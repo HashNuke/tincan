@@ -15,7 +15,7 @@ func TestNewSpeechServiceSetForNonDarwinDoesNotConfigureMacOSInference(t *testin
 	services, err := newSpeechServiceSetForGOOS(
 		appConfig,
 		io.Discard,
-		envCredentialReader{lookupEnv: func(string) (string, bool) { return "", false }},
+		newServiceCredentialStore(nil),
 		"linux",
 	)
 	if err != nil {
@@ -44,7 +44,7 @@ func TestNewSpeechServiceSetForDarwinConfiguresLocalInference(t *testing.T) {
 	services, err := newSpeechServiceSetForGOOS(
 		appConfig,
 		io.Discard,
-		envCredentialReader{lookupEnv: func(string) (string, bool) { return "", false }},
+		newServiceCredentialStore(nil),
 		"darwin",
 	)
 	if err != nil {
@@ -55,11 +55,19 @@ func TestNewSpeechServiceSetForDarwinConfiguresLocalInference(t *testing.T) {
 		t.Fatalf("expected local inference runtime on macOS host")
 	}
 
-	if _, ok := services.stt.(*inferenceClient); !ok {
+	sttClient, ok := services.stt.(*inferenceClient)
+	if !ok {
 		t.Fatalf("expected macOS stt service to use inference client, got %T", services.stt)
 	}
+	if sttClient.socketPath != inferenceSocketPath() {
+		t.Fatalf("expected macOS stt service to use renamed inference socket %q, got %q", inferenceSocketPath(), sttClient.socketPath)
+	}
 
-	if _, ok := services.tts.(*inferenceClient); !ok {
+	ttsClient, ok := services.tts.(*inferenceClient)
+	if !ok {
 		t.Fatalf("expected macOS tts service to use inference client, got %T", services.tts)
+	}
+	if ttsClient.socketPath != inferenceSocketPath() {
+		t.Fatalf("expected macOS tts service to use renamed inference socket %q, got %q", inferenceSocketPath(), ttsClient.socketPath)
 	}
 }

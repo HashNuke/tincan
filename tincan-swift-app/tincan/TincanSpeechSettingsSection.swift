@@ -63,7 +63,7 @@ private struct TincanSpeechModelsSettingsCard: View {
     var body: some View {
         TincanSettingsSection(
             title: showsPageCardTitle ? "Speech services" : nil,
-            subtitle: "Pick STT and TTS providers."
+            subtitle: "Pick STT and TTS models. Each option includes its dependency note."
         ) {
             VStack(alignment: .leading, spacing: 16) {
                 if speechSettings.isLoading {
@@ -74,7 +74,7 @@ private struct TincanSpeechModelsSettingsCard: View {
 
                 TincanSpeechModelDropdown(
                     label: TincanSpeechModelTarget.speechToText.label,
-                    selectedTitle: speechSettings.selectedModelTitle(for: .speechToText),
+                    selectedOption: speechSettings.selectedModelOption(for: .speechToText),
                     options: speechSettings.modelOptions(for: .speechToText)
                 ) { selectedValue in
                     speechSettings.setModel(selectedValue, for: .speechToText)
@@ -82,7 +82,7 @@ private struct TincanSpeechModelsSettingsCard: View {
 
                 TincanSpeechModelDropdown(
                     label: TincanSpeechModelTarget.textToSpeech.label,
-                    selectedTitle: speechSettings.selectedModelTitle(for: .textToSpeech),
+                    selectedOption: speechSettings.selectedModelOption(for: .textToSpeech),
                     options: speechSettings.modelOptions(for: .textToSpeech)
                 ) { selectedValue in
                     speechSettings.setModel(selectedValue, for: .textToSpeech)
@@ -206,7 +206,7 @@ struct TincanSpeechSettingsBottomBar: View {
 
 private struct TincanSpeechModelDropdown: View {
     let label: String
-    let selectedTitle: String
+    let selectedOption: TincanSpeechModelOption
     let options: [TincanSpeechModelOption]
     let onSelect: (String) -> Void
 
@@ -218,22 +218,40 @@ private struct TincanSpeechModelDropdown: View {
 
             Menu {
                 ForEach(options) { option in
-                    Button(option.title) {
+                    Button {
                         onSelect(option.value)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(option.title)
+                            Text(option.note)
+                                .font(TincanSettingsTypography.caption)
+                                .foregroundStyle(TincanPalette.textSecondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
                 }
             } label: {
-                HStack(spacing: 10) {
-                    Text(selectedTitle)
-                        .font(TincanSettingsTypography.body)
-                        .foregroundStyle(TincanPalette.textPrimary)
-                        .lineLimit(1)
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 10) {
+                        Text(selectedOption.title)
+                            .font(TincanSettingsTypography.body)
+                            .foregroundStyle(TincanPalette.textPrimary)
+                            .lineLimit(1)
 
-                    Spacer()
+                        Spacer()
 
-                    Image(systemName: "chevron.up.chevron.down")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(TincanPalette.textSecondary)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(TincanPalette.textSecondary)
+                    }
+
+                    if !selectedOption.note.isEmpty {
+                        Text(selectedOption.note)
+                            .font(TincanSettingsTypography.caption)
+                            .foregroundStyle(TincanPalette.textSecondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)

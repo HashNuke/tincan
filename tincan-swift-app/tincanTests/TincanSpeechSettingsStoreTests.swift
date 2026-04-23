@@ -6,21 +6,27 @@ import Testing
 
 @MainActor
 struct TincanSpeechSettingsStoreTests {
-    @Test func speechModelOptionsIncludeGrokWhenServiceEnabledOrKeyStored() async throws {
+    @Test func speechModelOptionsAlwaysListSupportedModelsWithDependencyNotes() async throws {
         let store = makeStore()
 
-        #expect(store.modelOptions(for: .speechToText).map(\.value) == [TincanSpeechSettingsStore.defaultSTTModel])
-        #expect(store.modelOptions(for: .textToSpeech).map(\.value) == [TincanSpeechSettingsStore.defaultTTSModel])
+        let sttOptions = store.modelOptions(for: .speechToText)
+        let ttsOptions = store.modelOptions(for: .textToSpeech)
 
-        store.setServiceEnabled(true, serviceID: .grok)
-
-        #expect(store.modelOptions(for: .speechToText).map(\.value) == [
+        #expect(sttOptions.map(\.value) == [
             TincanSpeechSettingsStore.defaultSTTModel,
             TincanSpeechSettingsStore.grokSTTModel,
         ])
-        #expect(store.modelOptions(for: .textToSpeech).map(\.value) == [
+        #expect(sttOptions.map(\.note) == [
+            TincanSpeechServiceCatalog.macOSModelDependencyNote,
+            TincanSpeechServiceCatalog.grokModelDependencyNote,
+        ])
+        #expect(ttsOptions.map(\.value) == [
             TincanSpeechSettingsStore.defaultTTSModel,
             TincanSpeechSettingsStore.grokTTSModel,
+        ])
+        #expect(ttsOptions.map(\.note) == [
+            TincanSpeechServiceCatalog.macOSModelDependencyNote,
+            TincanSpeechServiceCatalog.grokModelDependencyNote,
         ])
 
         let keychain = TestSpeechSettingsKeychain(initialValues: [
@@ -34,15 +40,24 @@ struct TincanSpeechSettingsStoreTests {
             TincanSpeechSettingsStore.defaultSTTModel,
             TincanSpeechSettingsStore.grokSTTModel,
         ])
+        #expect(storedKeyStore.modelOptions(for: .speechToText).map(\.note) == [
+            TincanSpeechServiceCatalog.macOSModelDependencyNote,
+            TincanSpeechServiceCatalog.grokModelDependencyNote,
+        ])
         #expect(storedKeyStore.modelOptions(for: .textToSpeech).map(\.value) == [
             TincanSpeechSettingsStore.defaultTTSModel,
             TincanSpeechSettingsStore.grokTTSModel,
+        ])
+        #expect(storedKeyStore.modelOptions(for: .textToSpeech).map(\.note) == [
+            TincanSpeechServiceCatalog.macOSModelDependencyNote,
+            TincanSpeechServiceCatalog.grokModelDependencyNote,
         ])
     }
 
     @Test func disablingGrokResetsDependentModelsAndRestartsBundledServer() async throws {
         let keychain = TestSpeechSettingsKeychain()
         let restartRecorder = TestRestartRecorder()
+        let secretSyncRecorder = TestSecretSyncRecorder()
         let configURL = makeConfigURL()
         try writeConfig(
             """
@@ -63,7 +78,8 @@ struct TincanSpeechSettingsStoreTests {
         let store = makeStore(
             configURL: configURL,
             keychain: keychain,
-            restartRecorder: restartRecorder
+            restartRecorder: restartRecorder,
+            secretSyncRecorder: secretSyncRecorder
         )
         await store.load()
 
@@ -83,6 +99,8 @@ struct TincanSpeechSettingsStoreTests {
         #expect(payload["stt_model"] as? String == TincanSpeechSettingsStore.defaultSTTModel)
         #expect(payload["tts_model"] as? String == TincanSpeechSettingsStore.defaultTTSModel)
         #expect(restartRecorder.restartCount == 1)
+        #expect(secretSyncRecorder.fullSyncCount == 1)
+        #expect(secretSyncRecorder.secretUpdates.isEmpty)
         #expect(store.statusMessage == "Speech settings saved. Bundled server restarted.")
     }
 
@@ -106,9 +124,11 @@ struct TincanSpeechSettingsStoreTests {
     @Test func savingGrokKeyUsesPageSaveAndSkipsRestartWhenConfigIsUnchanged() async throws {
         let keychain = TestSpeechSettingsKeychain()
         let restartRecorder = TestRestartRecorder()
+        let secretSyncRecorder = TestSecretSyncRecorder()
         let store = makeStore(
             keychain: keychain,
-            restartRecorder: restartRecorder
+            restartRecorder: restartRecorder,
+            secretSyncRecorder: secretSyncRecorder
         )
 
         store.updateGrokAPIKey("secret-key-1234")
@@ -116,6 +136,10 @@ struct TincanSpeechSettingsStoreTests {
         #expect(store.modelOptions(for: .speechToText).map(\.value) == [
             TincanSpeechSettingsStore.defaultSTTModel,
             TincanSpeechSettingsStore.grokSTTModel,
+        ])
+        #expect(store.modelOptions(for: .speechToText).map(\.note) == [
+            TincanSpeechServiceCatalog.macOSModelDependencyNote,
+            TincanSpeechServiceCatalog.grokModelDependencyNote,
         ])
 
         await store.saveConfig()
@@ -126,6 +150,10 @@ struct TincanSpeechSettingsStoreTests {
         #expect(store.showsStoredGrokAPIKeyIndicator)
         #expect(keychain.containsStoredValue(for: TincanSpeechSettingsStore.grokAPIKeyAccount))
         #expect(restartRecorder.restartCount == 0)
+        #expect(secretSyncRecorder.secretUpdates == [[
+            TincanSpeechSettingsStore.grokAPIKeyAccount: "secret-key-1234",
+        ]])
+        #expect(secretSyncRecorder.fullSyncCount == 0)
         #expect(store.statusMessage == "Grok API key saved.")
     }
 
@@ -134,9 +162,11 @@ struct TincanSpeechSettingsStoreTests {
             TincanSpeechSettingsStore.grokAPIKeyAccount: "secret-key-1234",
         ])
         let restartRecorder = TestRestartRecorder()
+        let secretSyncRecorder = TestSecretSyncRecorder()
         let store = makeStore(
             keychain: keychain,
-            restartRecorder: restartRecorder
+            restartRecorder: restartRecorder,
+            secretSyncRecorder: secretSyncRecorder
         )
 
         await store.load()
@@ -156,6 +186,10 @@ struct TincanSpeechSettingsStoreTests {
         #expect(!store.showsStoredGrokAPIKeyIndicator)
         #expect(!keychain.containsStoredValue(for: TincanSpeechSettingsStore.grokAPIKeyAccount))
         #expect(restartRecorder.restartCount == 0)
+        #expect(secretSyncRecorder.secretUpdates == [[
+            TincanSpeechSettingsStore.grokAPIKeyAccount: "",
+        ]])
+        #expect(secretSyncRecorder.fullSyncCount == 0)
         #expect(store.statusMessage == "Grok API key removed.")
     }
 
@@ -181,15 +215,19 @@ struct TincanSpeechSettingsStoreTests {
 
     @Test func savingConfigSkipsRestartWhenRemoteServerSelected() async throws {
         let restartRecorder = TestRestartRecorder()
+        let secretSyncRecorder = TestSecretSyncRecorder()
         let store = makeStore(
             connectionMode: .remote,
-            restartRecorder: restartRecorder
+            restartRecorder: restartRecorder,
+            secretSyncRecorder: secretSyncRecorder
         )
 
         store.setServiceEnabled(true, serviceID: .grok)
         await store.saveConfig()
 
         #expect(restartRecorder.restartCount == 0)
+        #expect(secretSyncRecorder.secretUpdates.isEmpty)
+        #expect(secretSyncRecorder.fullSyncCount == 0)
         #expect(store.statusMessage == "Speech settings saved. Changes apply when the local Mac server is used.")
     }
 
@@ -197,7 +235,8 @@ struct TincanSpeechSettingsStoreTests {
         connectionMode: ServerConnectionStore.ConnectionMode = .localMac,
         configURL: URL? = nil,
         keychain: TestSpeechSettingsKeychain = TestSpeechSettingsKeychain(),
-        restartRecorder: TestRestartRecorder = TestRestartRecorder()
+        restartRecorder: TestRestartRecorder = TestRestartRecorder(),
+        secretSyncRecorder: TestSecretSyncRecorder = TestSecretSyncRecorder()
     ) -> TincanSpeechSettingsStore {
         let defaultsName = "TincanSpeechSettingsStoreTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: defaultsName)!
@@ -214,6 +253,12 @@ struct TincanSpeechSettingsStoreTests {
             keychain: keychain,
             restartLocalServer: {
                 try await restartRecorder.restart()
+            },
+            syncLocalServerSecretUpdates: { updates in
+                try await secretSyncRecorder.syncSecretUpdates(updates)
+            },
+            syncLocalServerSecrets: {
+                try await secretSyncRecorder.syncAllSecrets()
             }
         )
     }
@@ -282,6 +327,19 @@ private final class TestRestartRecorder: @unchecked Sendable {
 
     func restart() async throws {
         restartCount += 1
+    }
+}
+
+private final class TestSecretSyncRecorder: @unchecked Sendable {
+    var secretUpdates: [[String: String]] = []
+    var fullSyncCount = 0
+
+    func syncSecretUpdates(_ updates: [String: String]) async throws {
+        secretUpdates.append(updates)
+    }
+
+    func syncAllSecrets() async throws {
+        fullSyncCount += 1
     }
 }
 #endif
