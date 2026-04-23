@@ -25,6 +25,7 @@ let package = Package(
                 .product(name: "MLXAudioTTS", package: "mlx-audio-swift"),
                 .product(name: "MLXNN", package: "mlx-swift"),
                 .product(name: "onnxruntime", package: "onnxruntime-swift-package-manager"),
+                .product(name: "MLXOptimizers", package: "mlx-swift"),
             ]
         ),
         .testTarget(
