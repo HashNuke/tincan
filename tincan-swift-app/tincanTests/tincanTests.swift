@@ -11,30 +11,22 @@ import Testing
 
 struct tincanTests {
 
-    @Test func notificationPlaybackUsesSummaryWhenIdle() {
-        let choice = BackendSessionClient.notificationPlaybackChoice(
+    @Test func notificationDisplayPrefersSummaryText() {
+        let text = BackendSessionClient.notificationDisplayText(
             text: "I have an update.",
-            audioURLPath: "/debug/audio/generated/short.wav",
-            summaryText: "I finished the build work and all tests passed.",
-            summaryAudioURLPath: "/debug/audio/generated/summary.wav",
-            isAudioPlaying: false
+            summaryText: "I finished the build work and all tests passed."
         )
 
-        #expect(choice.text == "I finished the build work and all tests passed.")
-        #expect(choice.audioURLPath == "/debug/audio/generated/summary.wav")
+        #expect(text == "I finished the build work and all tests passed.")
     }
 
-    @Test func notificationPlaybackKeepsShortPromptDuringActivePlayback() {
-        let choice = BackendSessionClient.notificationPlaybackChoice(
+    @Test func notificationDisplayFallsBackToPrimaryText() {
+        let text = BackendSessionClient.notificationDisplayText(
             text: "I have an update.",
-            audioURLPath: "/debug/audio/generated/short.wav",
-            summaryText: "I finished the build work and all tests passed.",
-            summaryAudioURLPath: "/debug/audio/generated/summary.wav",
-            isAudioPlaying: true
+            summaryText: "   "
         )
 
-        #expect(choice.text == "I have an update.")
-        #expect(choice.audioURLPath == "/debug/audio/generated/short.wav")
+        #expect(text == "I have an update.")
     }
 
     @Test func responseBodySummaryTrimsWhitespaceAndCollapsesLines() {
@@ -58,6 +50,46 @@ struct tincanTests {
         let validated = BackendSessionClient.validatedSessionDescriptionSDP(" \n\r\t ")
 
         #expect(validated == nil)
+    }
+
+    @Test func conversationAgentProcessStatusTreatsBusyLifecycleStatesAsRunning() {
+        let conversation = TincanConversationSummary(
+            id: "conv-1",
+            handle: "Emma#1",
+            agentProfileName: "Emma",
+            agentBackend: "opencode",
+            workingDirectory: "/Users/akash/code/apple/tincan",
+            status: "busy",
+            updatedAt: .now,
+            previewText: "",
+            hasPendingUpdate: false,
+            hasUnreadTextUpdate: false,
+            isCurrentCallConversation: false
+        )
+
+        #expect(conversation.agentProcessStatus == .running)
+        #expect(TincanAgentProcessStatus(conversationStatus: "starting") == .running)
+        #expect(TincanAgentProcessStatus(conversationStatus: "retry") == .running)
+    }
+
+    @Test func conversationAgentProcessStatusTreatsCompletedAndFailedStatesAsIdle() {
+        let conversation = TincanConversationSummary(
+            id: "conv-2",
+            handle: "Emma#2",
+            agentProfileName: "Emma",
+            agentBackend: "opencode",
+            workingDirectory: "/Users/akash/code/apple/tincan",
+            status: "running",
+            updatedAt: .now,
+            previewText: "",
+            hasPendingUpdate: false,
+            hasUnreadTextUpdate: false,
+            isCurrentCallConversation: false
+        )
+
+        #expect(conversation.agentProcessStatus == .idle)
+        #expect(TincanAgentProcessStatus(conversationStatus: "failed") == .idle)
+        #expect(TincanAgentProcessStatus(conversationStatus: "aborted") == .idle)
     }
 
 }

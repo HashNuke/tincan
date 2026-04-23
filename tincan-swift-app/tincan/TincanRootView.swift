@@ -1372,28 +1372,17 @@ private struct TincanTranscriptHeader: View {
     let callActions: TincanCallActions
     let onBack: () -> Void
 
-    private var tone: TincanTone {
-        tincanTone(for: conversation)
+    private var agentStatusAccent: Color {
+        switch conversation.agentProcessStatus {
+        case .running:
+            return TincanTone.mint.accent
+        case .idle:
+            return TincanPalette.textMuted
+        }
     }
 
-    private var callStatusAccent: Color {
-        if callState.isEndingTransition {
-            return TincanPalette.callRed
-        }
-        if callState.isStartingTransition {
-            return TincanTone.blue.accent
-        }
-        return callState.isCallActive ? TincanTone.mint.accent : TincanPalette.textMuted
-    }
-
-    private var callStatusLabel: String {
-        if callState.isEndingTransition {
-            return "ending"
-        }
-        if callState.isStartingTransition {
-            return callState.callStateDescription.lowercased()
-        }
-        return callState.isCallActive ? "on call" : "idle"
+    private var agentStatusAccessibilityLabel: String {
+        "Agent \(conversation.agentProcessStatus.rawValue)"
     }
 
     var body: some View {
@@ -1411,19 +1400,25 @@ private struct TincanTranscriptHeader: View {
                 }
                 .buttonStyle(.plain)
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(conversation.handle)
-                        .font(.system(size: 18, weight: .heavy, design: .rounded))
-                        .foregroundStyle(TincanPalette.textPrimary)
-
-                    HStack(spacing: 6) {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Circle()
-                            .fill(callStatusAccent)
-                            .frame(width: 6, height: 6)
-                        Text(callStatusLabel)
-                            .font(.system(size: 10, weight: .bold, design: .monospaced))
-                            .foregroundStyle(callStatusAccent)
+                            .fill(agentStatusAccent)
+                            .frame(width: 8, height: 8)
+                            .accessibilityHidden(true)
+
+                        Text(conversation.handle)
+                            .font(.system(size: 18, weight: .heavy, design: .rounded))
+                            .foregroundStyle(TincanPalette.textPrimary)
+                            .lineLimit(1)
                     }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("\(conversation.handle), \(agentStatusAccessibilityLabel)")
+
+                    Text(shortDirectoryName(conversation.workingDirectory))
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundStyle(TincanPalette.textSecondary)
+                        .lineLimit(1)
                 }
 
                 Spacer()
@@ -1460,15 +1455,6 @@ private struct TincanTranscriptHeader: View {
                     .disabled(callState.isTransitioning)
                 }
 #endif
-            }
-
-            HStack {
-                TincanCapsuleTag(text: conversation.agentProfileName, tone: tone.accent)
-                Text(shortDirectoryName(conversation.workingDirectory))
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundStyle(TincanPalette.textSecondary)
-                    .lineLimit(1)
-                Spacer()
             }
         }
         .padding(18)

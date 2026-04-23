@@ -52,7 +52,7 @@ func (c *grokSpeechClient) synthesize(text string) ([]byte, error) {
 		return nil, fmt.Errorf("unsupported Grok TTS model %q", c.ttsSelection.Canonical())
 	}
 
-	apiKey, err := c.credentialReader.APIKey(grokAPIKeyAccount)
+	apiKey, err := c.credentialReader.APIKey(grokAPIKeyEnvVar)
 	if err != nil {
 		return nil, fmt.Errorf("lookup GROK_API_KEY: %w", err)
 	}
@@ -96,7 +96,7 @@ func (c *grokSpeechClient) transcribe(audioData []byte, contentType string) (str
 		return "", fmt.Errorf("unsupported Grok STT model %q", c.sttSelection.Canonical())
 	}
 
-	apiKey, err := c.credentialReader.APIKey(grokAPIKeyAccount)
+	apiKey, err := c.credentialReader.APIKey(grokAPIKeyEnvVar)
 	if err != nil {
 		return "", fmt.Errorf("lookup GROK_API_KEY: %w", err)
 	}

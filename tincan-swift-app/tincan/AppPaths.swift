@@ -39,6 +39,16 @@ enum AppPaths {
         return directory
     }()
 
+    nonisolated static let runDirectory: URL = {
+        let directory = appSupportDirectory.appendingPathComponent("run", isDirectory: true)
+        try? FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true,
+            attributes: nil
+        )
+        return directory
+    }()
+
     nonisolated static let logsDirectory: URL = {
         let directory = appSupportDirectory.appendingPathComponent("logs", isDirectory: true)
         try? FileManager.default.createDirectory(
@@ -55,8 +65,8 @@ enum AppPaths {
     nonisolated static let speakerProfilesURL = appSupportDirectory.appendingPathComponent("speaker_profiles.json")
     nonisolated static let legacyOwnerProfileURL = appSupportDirectory.appendingPathComponent("owner-voice-profile.json")
     nonisolated static let tincanServerLogURL = logsDirectory.appendingPathComponent("tincan-server.log")
-    nonisolated static let tincanServerPIDURL = appSupportDirectory.appendingPathComponent("tincan-server.pid")
-    nonisolated static let tincanServerLaunchLockURL = appSupportDirectory.appendingPathComponent("tincan-server.launch.lock")
+    nonisolated static let tincanServerPIDURL = runDirectory.appendingPathComponent("tincan-server.pid")
+    nonisolated static let tincanServerLaunchLockURL = runDirectory.appendingPathComponent("tincan-server.launch.lock")
     nonisolated static let macCallLogURL = logsDirectory.appendingPathComponent("mac-call.log")
     nonisolated static let backendDirectory = projectRoot.appendingPathComponent("backend", isDirectory: true)
     nonisolated static let backendServerModule = "backend.server"
@@ -65,6 +75,7 @@ enum AppPaths {
         _ = appSupportDirectory
         _ = generatedConfigDirectory
         _ = temporaryDirectory
+        _ = runDirectory
         _ = logsDirectory
     }
 }

@@ -89,6 +89,11 @@ is_parakeet_model_ready() {
   [[ -f "$model_dir/parakeet_vocab.json" ]] || return 1
 }
 
+has_existing_stage_dir() {
+  local path="$1"
+  [[ -d "$path" ]]
+}
+
 is_kitten_model_ready() {
   local model_dir="$1"
   [[ -d "$model_dir" ]] || return 1
@@ -144,8 +149,8 @@ ensure_parakeet_model() {
     rm -rf "$destination_dir"
   fi
 
-  if is_parakeet_model_ready "$destination_dir"; then
-    log "Parakeet model already staged at $destination_dir"
+  if has_existing_stage_dir "$destination_dir"; then
+    log "Parakeet model directory already exists at $destination_dir; skipping download"
     return
   fi
 
@@ -168,8 +173,8 @@ ensure_kitten_model() {
     rm -rf "$destination_dir"
   fi
 
-  if is_kitten_model_ready "$destination_dir"; then
-    log "Kitten TTS model already staged at $destination_dir"
+  if has_existing_stage_dir "$destination_dir"; then
+    log "Kitten TTS model directory already exists at $destination_dir; skipping download"
     return
   fi
 
@@ -204,8 +209,8 @@ ensure_kitten_g2p_resources() {
     rm -rf "$destination_dir"
   fi
 
-  if is_kitten_g2p_ready "$destination_dir"; then
-    log "Kitten G2P resources already staged at $destination_dir"
+  if has_existing_stage_dir "$destination_dir"; then
+    log "Kitten G2P resources directory already exists at $destination_dir; skipping download"
     return
   fi
 

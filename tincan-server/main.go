@@ -31,6 +31,11 @@ import (
 	"tincan-server/output"
 )
 
+const (
+	inferenceSocketFileName       = "tincan-inference-macos.sock"
+	legacyInferenceSocketFileName = "inference.sock"
+)
+
 type server struct {
 	mu                  sync.Mutex
 	callManager         *calls.Manager
@@ -161,7 +166,6 @@ func main() {
 		apiAdapters[name] = adapter
 	}
 	mux.HandleFunc("/healthz", srv.handleHealth)
-	mux.HandleFunc("/debug/audio/generated/", srv.handleGeneratedAudio)
 	mux.HandleFunc("/hooks/opencode", srv.handleOpenCodeHook)
 	tincanapi.Routes{
 		AppConfig:     srv.appConfig,
@@ -344,37 +348,6 @@ func (s *server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-func (s *server) handleGeneratedAudio(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	name := strings.TrimPrefix(r.URL.Path, "/debug/audio/generated/")
-	if name == "" || strings.Contains(name, "/") || strings.Contains(name, "..") {
-		http.NotFound(w, r)
-		return
-	}
-
-	generatedDir, err := serverAudioDir("generated-audio")
-	if err != nil {
-		http.Error(w, "audio storage unavailable", http.StatusInternalServerError)
-		return
-	}
-
-	audioPath := filepath.Join(generatedDir, name)
-	audioData, err := os.ReadFile(audioPath)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-
-	w.Header().Set("Content-Type", "audio/wav")
-	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(audioData)))
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(audioData)
-}
-
 func (s *server) handleOpenCodeHook(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -552,30 +525,6 @@ func (s *server) processUtterance(sessionID string, audioData []byte, contentTyp
 	s.broadcastLiveUpdatesForHandleResult(handleResult.RouteResult, handleResult.ResponseBody)
 
 	return handleResult.ResponseBody, nil
-}
-
-func (s *server) writeGeneratedAudio(audioData []byte) (string, error) {
-	generatedDir, err := serverAudioDir("generated-audio")
-	if err != nil {
-		return "", err
-	}
-
-	fileName := uuid.NewString() + ".wav"
-	filePath := filepath.Join(generatedDir, fileName)
-	if err := os.WriteFile(filePath, audioData, 0o644); err != nil {
-		return "", err
-	}
-
-	return "/debug/audio/generated/" + fileName, nil
-}
-
-func (s *server) generateFeedbackAudio(text string) (string, error) {
-	audioData, err := s.tts.synthesize(text)
-	if err != nil {
-		return "", err
-	}
-
-	return s.writeGeneratedAudio(audioData)
 }
 
 func (s *server) sendSessionEvent(sessionID string, payload any) {
@@ -759,11 +708,48 @@ func readInferenceMessage(reader io.Reader) (inferenceMessage, error) {
 }
 
 func inferenceSocketPath() string {
+	runDir := inferenceRunDirectory()
+	if runDir == "" {
+		return ""
+	}
+	return filepath.Join(runDir, inferenceSocketFileName)
+}
+
+func legacyInferenceSocketPath() string {
+	runDir := inferenceRunDirectory()
+	if runDir == "" {
+		return ""
+	}
+	return filepath.Join(runDir, legacyInferenceSocketFileName)
+}
+
+func inferenceRunDirectory() string {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return ""
 	}
-	return homeDir + "/Library/Application Support/tincan/run/inference.sock"
+	return filepath.Join(homeDir, "Library", "Application Support", "tincan", "run")
+}
+
+func activeInferenceSocketPath() string {
+	return resolveActiveInferenceSocketPath(isSocketReady)
+}
+
+func resolveActiveInferenceSocketPath(socketReady func(string) bool) string {
+	preferredPath := inferenceSocketPath()
+	if preferredPath == "" {
+		return ""
+	}
+	if socketReady(preferredPath) {
+		return preferredPath
+	}
+
+	legacyPath := legacyInferenceSocketPath()
+	if legacyPath != "" && socketReady(legacyPath) {
+		return legacyPath
+	}
+
+	return preferredPath
 }
 
 func serverAudioDir(parts ...string) (string, error) {

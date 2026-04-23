@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"runtime"
 	"strings"
 
 	tincanconfig "tincan-server/config"
@@ -34,10 +35,12 @@ type noopSpeechRuntime struct{}
 
 type unsupportedSpeechToTextService struct {
 	selection tincanconfig.SpeechModelSelection
+	reason    string
 }
 
 type unsupportedTextToSpeechService struct {
 	selection tincanconfig.SpeechModelSelection
+	reason    string
 }
 
 func newSpeechServiceSet(
@@ -45,30 +48,42 @@ func newSpeechServiceSet(
 	output io.Writer,
 	credentials serviceCredentialReader,
 ) (speechServiceSet, error) {
+	return newSpeechServiceSetForGOOS(appConfig, output, credentials, runtime.GOOS)
+}
+
+func newSpeechServiceSetForGOOS(
+	appConfig *tincanconfig.AppConfigStore,
+	output io.Writer,
+	credentials serviceCredentialReader,
+	goos string,
+) (speechServiceSet, error) {
 	sttSelection := configuredSTTSelection(appConfig)
 	ttsSelection := configuredTTSSelection(appConfig)
 	services := appConfigServices(appConfig)
+	supportsLocalInference := hostSupportsMacOSSpeech(goos)
 
 	result := speechServiceSet{
 		runtime: noopSpeechRuntime{},
 	}
 
 	var localInference *inferenceClient
-	if sttSelection.Provider == tincanconfig.SpeechProviderMacOS || ttsSelection.Provider == tincanconfig.SpeechProviderMacOS {
+	if supportsLocalInference &&
+		(sttSelection.Provider == tincanconfig.SpeechProviderMacOS || ttsSelection.Provider == tincanconfig.SpeechProviderMacOS) {
+		socketPath := activeInferenceSocketPath()
 		localInference = &inferenceClient{
-			socketPath: inferenceSocketPath(),
+			socketPath: socketPath,
 			sttModel:   inferenceModelForSelection(sttSelection, defaultBundledSTTModel),
 			ttsModel:   inferenceModelForSelection(ttsSelection, defaultBundledTTSModel),
 			ttsVoice:   defaultMacOSTTSVoice,
 		}
-		result.runtime = newInferenceSupervisor(inferenceSocketPath(), appConfig, output)
+		result.runtime = newInferenceSupervisor(socketPath, appConfig, output)
 	}
 
-	sttService, err := buildSpeechToTextService(sttSelection, services, credentials, localInference)
+	sttService, err := buildSpeechToTextService(sttSelection, services, credentials, localInference, supportsLocalInference, goos)
 	if err != nil {
 		return speechServiceSet{}, err
 	}
-	ttsService, err := buildTextToSpeechService(ttsSelection, services, credentials, localInference)
+	ttsService, err := buildTextToSpeechService(ttsSelection, services, credentials, localInference, supportsLocalInference, goos)
 	if err != nil {
 		return speechServiceSet{}, err
 	}
@@ -82,10 +97,16 @@ func (noopSpeechRuntime) EnsureRunning(context.Context) error { return nil }
 func (noopSpeechRuntime) Shutdown()                           {}
 
 func (s unsupportedSpeechToTextService) transcribe(_ []byte, _ string) (string, error) {
+	if strings.TrimSpace(s.reason) != "" {
+		return "", fmt.Errorf("%s", s.reason)
+	}
 	return "", fmt.Errorf("stt provider %q is not implemented", s.selection.Canonical())
 }
 
 func (s unsupportedTextToSpeechService) synthesize(_ string) ([]byte, error) {
+	if strings.TrimSpace(s.reason) != "" {
+		return nil, fmt.Errorf("%s", s.reason)
+	}
 	return nil, fmt.Errorf("tts provider %q is not implemented", s.selection.Canonical())
 }
 
@@ -94,10 +115,18 @@ func buildSpeechToTextService(
 	services tincanconfig.AppServicesConfig,
 	credentials serviceCredentialReader,
 	localInference *inferenceClient,
+	supportsLocalInference bool,
+	goos string,
 ) (speechToTextService, error) {
 	switch selection.Provider {
 	case tincanconfig.SpeechProviderMacOS:
 		if localInference == nil {
+			if !supportsLocalInference {
+				return unsupportedSpeechToTextService{
+					selection: selection,
+					reason:    macOSSpeechUnsupportedReason("stt", selection, goos),
+				}, nil
+			}
 			return nil, fmt.Errorf("stt selection %q requires local inference", selection.Canonical())
 		}
 		return localInference, nil
@@ -115,10 +144,18 @@ func buildTextToSpeechService(
 	services tincanconfig.AppServicesConfig,
 	credentials serviceCredentialReader,
 	localInference *inferenceClient,
+	supportsLocalInference bool,
+	goos string,
 ) (textToSpeechService, error) {
 	switch selection.Provider {
 	case tincanconfig.SpeechProviderMacOS:
 		if localInference == nil {
+			if !supportsLocalInference {
+				return unsupportedTextToSpeechService{
+					selection: selection,
+					reason:    macOSSpeechUnsupportedReason("tts", selection, goos),
+				}, nil
+			}
 			return nil, fmt.Errorf("tts selection %q requires local inference", selection.Canonical())
 		}
 		return localInference, nil
@@ -165,4 +202,12 @@ func inferenceModelForSelection(selection tincanconfig.SpeechModelSelection, fal
 		return selection.Model
 	}
 	return fallback
+}
+
+func hostSupportsMacOSSpeech(goos string) bool {
+	return goos == "darwin"
+}
+
+func macOSSpeechUnsupportedReason(kind string, selection tincanconfig.SpeechModelSelection, goos string) string {
+	return fmt.Sprintf("%s selection %q requires macOS host; current host is %s", kind, selection.Canonical(), goos)
 }

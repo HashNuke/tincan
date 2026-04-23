@@ -16,31 +16,25 @@ type SessionState struct {
 type PlayAudioEvent struct {
 	Type string `json:"type"`
 	Text string `json:"text,omitempty"`
-	URL  string `json:"url,omitempty"`
 }
 
 type NotifyEvent struct {
-	Type            string `json:"type"`
-	Text            string `json:"text,omitempty"`
-	AudioURL        string `json:"audio_url,omitempty"`
-	SummaryText     string `json:"summary_text,omitempty"`
-	SummaryAudioURL string `json:"summary_audio_url,omitempty"`
+	Type        string `json:"type"`
+	Text        string `json:"text,omitempty"`
+	SummaryText string `json:"summary_text,omitempty"`
 }
 
-func NewPlayAudioEvent(text string, url string) PlayAudioEvent {
+func NewPlayAudioEvent(text string) PlayAudioEvent {
 	return PlayAudioEvent{
 		Type: "play_audio",
 		Text: text,
-		URL:  url,
 	}
 }
 
-func NewNotifyEvent(text string, audioURL string, summaryText string, summaryAudioURL string) NotifyEvent {
+func NewNotifyEvent(text string, summaryText string) NotifyEvent {
 	return NotifyEvent{
-		Type:            "notify",
-		Text:            text,
-		AudioURL:        audioURL,
-		SummaryText:     summaryText,
-		SummaryAudioURL: summaryAudioURL,
+		Type:        "notify",
+		Text:        text,
+		SummaryText: summaryText,
 	}
 }

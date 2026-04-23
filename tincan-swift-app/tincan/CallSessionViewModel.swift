@@ -127,9 +127,9 @@ final class CallSessionViewModel: ObservableObject {
 
     private func handleServerEvent(_ event: BackendSessionClient.ServerEvent) async {
         switch event {
-        case .playAudio(let text, _):
+        case .playAudio(let text):
             appendLog("Server: \(text)")
-        case .notify(let text, _, let summaryText, _):
+        case .notify(let text, let summaryText):
             appendLog("Notify: \(BackendSessionClient.notificationDisplayText(text: text, summaryText: summaryText))")
         case .transportStatus(let status):
             await handleTransportStatus(status)

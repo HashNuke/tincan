@@ -1,4 +1,5 @@
 import Foundation
+import Security
 import Testing
 #if os(macOS)
 @testable import tincan
@@ -158,6 +159,26 @@ struct TincanSpeechSettingsStoreTests {
         #expect(store.statusMessage == "Grok API key removed.")
     }
 
+    @Test func loadingWithUnreadableStoredGrokKeyKeepsSettingsAvailable() async throws {
+        let keychain = TestSpeechSettingsKeychain(
+            initialValues: [
+                TincanSpeechSettingsStore.grokAPIKeyAccount: "secret-key-1234",
+            ],
+            unreadableAccounts: [
+                TincanSpeechSettingsStore.grokAPIKeyAccount,
+            ]
+        )
+        let store = makeStore(keychain: keychain)
+
+        await store.load()
+
+        #expect(store.errorMessage == nil)
+        #expect(store.hasStoredGrokAPIKey)
+        #expect(store.maskedStoredGrokAPIKey.isEmpty)
+        #expect(!store.showsMaskedStoredGrokAPIKey)
+        #expect(store.showsStoredGrokAPIKeyIndicator)
+    }
+
     @Test func savingConfigSkipsRestartWhenRemoteServerSelected() async throws {
         let restartRecorder = TestRestartRecorder()
         let store = makeStore(
@@ -225,9 +246,11 @@ struct TincanSpeechSettingsStoreTests {
 
 private final class TestSpeechSettingsKeychain: TincanSpeechSettingsKeychainServicing {
     private var values: [String: String]
+    private let unreadableAccounts: Set<String>
 
-    init(initialValues: [String: String] = [:]) {
+    init(initialValues: [String: String] = [:], unreadableAccounts: Set<String> = []) {
         values = initialValues
+        self.unreadableAccounts = unreadableAccounts
     }
 
     func containsValue(account: String) throws -> Bool {
@@ -235,7 +258,10 @@ private final class TestSpeechSettingsKeychain: TincanSpeechSettingsKeychainServ
     }
 
     func value(account: String) throws -> String? {
-        values[account]
+        if unreadableAccounts.contains(account), values[account] != nil {
+            throw KeychainError(status: errSecAuthFailed)
+        }
+        return values[account]
     }
 
     func upsert(value: String, account: String) throws {

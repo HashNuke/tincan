@@ -20,6 +20,7 @@ import Testing
     #expect(configuration.sttModelDirectoryURL.lastPathComponent == "parakeet-tdt-0.6b-v3-coreml")
     #expect(configuration.ttsModelDirectoryURL.lastPathComponent == "kitten-tts-mini-0.8")
     #expect(configuration.kittenTTSG2PDirectoryURL.lastPathComponent == "kitten-tts-g2p")
+    #expect(AppRuntimePaths.inferenceSocketFilename == "tincan-inference-macos.sock")
     #expect(configuration.socketURL == AppRuntimePaths.inferenceSocketURL)
 
     switch try configuration.sttModelVersion {
@@ -65,7 +66,7 @@ import Testing
             modelsDirectoryURL: modelsDirectoryURL,
             sttModelDirectoryName: "parakeet-tdt-0.6b-v3-coreml",
             ttsModelDirectoryName: "kitten-tts-mini-0.8",
-            socketURL: temporaryDirectoryURL.appendingPathComponent("inference.sock")
+            socketURL: temporaryDirectoryURL.appendingPathComponent("tincan-inference-macos.sock")
         )
 
         try configuration.validateFileSystem()
@@ -104,7 +105,7 @@ import Testing
             modelsDirectoryURL: modelsDirectoryURL,
             sttModelDirectoryName: "parakeet-tdt-0.6b-v3-coreml",
             ttsModelDirectoryName: "kitten-tts-mini-0.8",
-            socketURL: temporaryDirectoryURL.appendingPathComponent("inference.sock")
+            socketURL: temporaryDirectoryURL.appendingPathComponent("tincan-inference-macos.sock")
         )
 
         do {

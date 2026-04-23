@@ -110,7 +110,7 @@ final class TincanSpeechSettingsStore: ObservableObject {
     }
 
     var showsMaskedStoredGrokAPIKey: Bool {
-        hasStoredGrokAPIKey && !hasEditedGrokAPIKey && grokAPIKey.isEmpty
+        hasStoredGrokAPIKey && !maskedStoredGrokAPIKey.isEmpty && !hasEditedGrokAPIKey && grokAPIKey.isEmpty
     }
 
     var showsStoredGrokAPIKeyIndicator: Bool {
@@ -428,10 +428,20 @@ final class TincanSpeechSettingsStore: ObservableObject {
     }
 
     private func reloadGrokAPIKeyState() throws {
-        let storedValue = try keychain.value(account: Self.grokAPIKeyAccount)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        hasStoredGrokAPIKey = !(storedValue?.isEmpty ?? true)
-        maskedStoredGrokAPIKey = Self.maskedAPIKey(storedValue)
+        hasStoredGrokAPIKey = try keychain.containsValue(account: Self.grokAPIKeyAccount)
+        maskedStoredGrokAPIKey = ""
+
+        if hasStoredGrokAPIKey {
+            do {
+                let storedValue = try keychain.value(account: Self.grokAPIKeyAccount)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                maskedStoredGrokAPIKey = Self.maskedAPIKey(storedValue)
+            } catch let error as KeychainError where error.isNonFatalReadAuthorizationFailure {
+                // Keychain may allow existence checks while still requiring user authorization for the secret bytes.
+                maskedStoredGrokAPIKey = ""
+            }
+        }
+
         grokAPIKey = ""
         hasEditedGrokAPIKey = false
     }

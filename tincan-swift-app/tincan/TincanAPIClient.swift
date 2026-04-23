@@ -1,5 +1,21 @@
 import Foundation
 
+enum TincanAgentProcessStatus: String, Equatable {
+    case running
+    case idle
+
+    init(conversationStatus: String) {
+        switch conversationStatus
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() {
+        case "starting", "busy", "retry":
+            self = .running
+        default:
+            self = .idle
+        }
+    }
+}
+
 struct TincanConversationSummary: Identifiable, Equatable {
     let id: String
     let handle: String
@@ -12,6 +28,12 @@ struct TincanConversationSummary: Identifiable, Equatable {
     var hasPendingUpdate: Bool
     var hasUnreadTextUpdate: Bool
     var isCurrentCallConversation: Bool
+}
+
+extension TincanConversationSummary {
+    var agentProcessStatus: TincanAgentProcessStatus {
+        TincanAgentProcessStatus(conversationStatus: status)
+    }
 }
 
 struct TincanConversationMessage: Identifiable, Equatable {

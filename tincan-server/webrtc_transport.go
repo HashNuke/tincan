@@ -58,11 +58,10 @@ type webrtcClientMessage struct {
 }
 
 type webrtcUtteranceResult struct {
-	Type             string `json:"type"`
-	RequestID        string `json:"request_id,omitempty"`
-	Text             string `json:"text"`
-	FeedbackAudioURL string `json:"feedback_audio_url,omitempty"`
-	Error            string `json:"error,omitempty"`
+	Type      string `json:"type"`
+	RequestID string `json:"request_id,omitempty"`
+	Text      string `json:"text"`
+	Error     string `json:"error,omitempty"`
 }
 
 type webrtcPongMessage struct {
@@ -366,9 +365,6 @@ func (t *webrtcTransport) handleClientMessage(sessionID string, sink *webrtcData
 		}
 		if text, ok := responseBody["text"].(string); ok {
 			result.Text = text
-		}
-		if feedbackAudioURL, ok := responseBody["feedback_audio_url"].(string); ok {
-			result.FeedbackAudioURL = feedbackAudioURL
 		}
 		t.sendUtteranceResult(sink, result)
 	default:

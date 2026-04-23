@@ -52,22 +52,11 @@ final class BackendSessionClient: NSObject {
 
     struct UtteranceResponse: Decodable {
         let text: String
-        let feedbackAudioURL: String?
-
-        enum CodingKeys: String, CodingKey {
-            case text
-            case feedbackAudioURL = "feedback_audio_url"
-        }
-    }
-
-    struct NotificationPlaybackChoice {
-        let text: String
-        let audioURLPath: String?
     }
 
     enum ServerEvent {
-        case playAudio(text: String, urlPath: String)
-        case notify(text: String, audioURLPath: String?, summaryText: String?, summaryAudioURLPath: String?)
+        case playAudio(text: String)
+        case notify(text: String, summaryText: String?)
         case transportStatus(TransportStatus)
     }
 
@@ -105,14 +94,12 @@ final class BackendSessionClient: NSObject {
         let type: String
         let requestId: String?
         let text: String
-        let feedbackAudioURL: String?
         let error: String?
 
         enum CodingKeys: String, CodingKey {
             case type
             case requestId = "request_id"
             case text
-            case feedbackAudioURL = "feedback_audio_url"
             case error
         }
     }
@@ -184,28 +171,6 @@ final class BackendSessionClient: NSObject {
         }
 
         return trimmedText
-    }
-
-    nonisolated static func notificationPlaybackChoice(
-        text: String,
-        audioURLPath: String?,
-        summaryText: String?,
-        summaryAudioURLPath: String?,
-        isAudioPlaying: Bool
-    ) -> NotificationPlaybackChoice {
-        let trimmedSummaryText = summaryText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-
-        if !isAudioPlaying, !trimmedSummaryText.isEmpty {
-            return NotificationPlaybackChoice(
-                text: trimmedSummaryText,
-                audioURLPath: summaryAudioURLPath ?? audioURLPath
-            )
-        }
-
-        return NotificationPlaybackChoice(
-            text: text.trimmingCharacters(in: .whitespacesAndNewlines),
-            audioURLPath: audioURLPath
-        )
     }
 
     nonisolated static func responseBodySummary(from data: Data) -> String? {
@@ -879,8 +844,7 @@ final class BackendSessionClient: NSObject {
 
         continuation.resume(
             returning: UtteranceResponse(
-                text: result.text,
-                feedbackAudioURL: result.feedbackAudioURL
+                text: result.text
             )
         )
     }
@@ -891,18 +855,13 @@ final class BackendSessionClient: NSObject {
         switch type {
         case "play_audio":
             let text = json["text"] as? String ?? ""
-            let urlPath = json["url"] as? String ?? ""
-            return .playAudio(text: text, urlPath: urlPath)
+            return .playAudio(text: text)
         case "notify":
             let text = json["text"] as? String ?? ""
-            let audioURLPath = json["audio_url"] as? String
             let summaryText = (json["summary_text"] as? String) ?? (json["detail_text"] as? String)
-            let summaryAudioURLPath = (json["summary_audio_url"] as? String) ?? (json["detail_audio_url"] as? String)
             return .notify(
                 text: text,
-                audioURLPath: audioURLPath,
-                summaryText: summaryText,
-                summaryAudioURLPath: summaryAudioURLPath
+                summaryText: summaryText
             )
         default:
             return nil

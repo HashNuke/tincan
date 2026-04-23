@@ -44,7 +44,7 @@ def main() -> int:
     parser.add_argument("--voice", default="alba", help="PocketTTS voice")
     parser.add_argument(
         "--socket",
-        default=str(Path.home() / "Library/Application Support/tincan/run/inference.sock"),
+        default=str(Path.home() / "Library/Application Support/tincan/run/tincan-inference-macos.sock"),
         help="Unix socket path for tincan-inference-macos",
     )
     args = parser.parse_args()

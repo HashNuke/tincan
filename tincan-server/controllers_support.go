@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log"
 	"strings"
 
 	"tincan-server/calls"
@@ -66,15 +67,11 @@ func (r callAudioRenderer) PlaySpeech(sessionID string, text string) error {
 		return err
 	}
 
-	audioURL := ""
 	if err := r.server.queueSessionAudio(sessionID, audioData); err != nil {
-		audioURL, err = r.server.writeGeneratedAudio(audioData)
-		if err != nil {
-			return err
-		}
+		log.Printf("peer %s failed to queue live audio for play event: %v", sessionID, err)
 	}
 
-	r.server.sendSessionEvent(sessionID, calls.NewPlayAudioEvent(text, audioURL))
+	r.server.sendSessionEvent(sessionID, calls.NewPlayAudioEvent(text))
 	return nil
 }
 
@@ -105,17 +102,11 @@ func (r callAudioRenderer) NotifySpeech(sessionID string, text string, summaryTe
 		spokenSummary = notificationText
 	}
 
-	audioURL := ""
-	summaryAudioURL := ""
 	if err := r.server.queueSessionAudio(sessionID, audioData); err != nil {
-		summaryAudioURL, err = r.server.writeGeneratedAudio(audioData)
-		if err != nil {
-			return err
-		}
-		audioURL = summaryAudioURL
+		log.Printf("peer %s failed to queue live audio for notify event: %v", sessionID, err)
 	}
 
-	r.server.sendSessionEvent(sessionID, calls.NewNotifyEvent(notificationText, audioURL, spokenSummary, summaryAudioURL))
+	r.server.sendSessionEvent(sessionID, calls.NewNotifyEvent(notificationText, spokenSummary))
 	return nil
 }
 

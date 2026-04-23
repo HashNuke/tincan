@@ -17,7 +17,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 from urllib import error as urlerror
-from urllib import parse as urlparse
 from urllib import request as urlrequest
 
 import av
@@ -39,18 +38,6 @@ class DecodedAudio:
     sample_rate: int
     channels: int
     duration_seconds: float
-
-
-@dataclass(frozen=True)
-class PlaybackJob:
-    url: str
-    description: str
-
-
-@dataclass(frozen=True)
-class NotificationPlaybackChoice:
-    text: str
-    audio_url: str | None
 
 
 class HarnessError(RuntimeError):
@@ -230,15 +217,6 @@ def decode_audio(path: Path, sample_rate: int, channels: int) -> DecodedAudio:
     return decode_audio_input(
         lambda: av.open(str(path)),
         source_label=str(path),
-        sample_rate=sample_rate,
-        channels=channels,
-    )
-
-
-def decode_audio_bytes(audio_bytes: bytes, source_label: str, sample_rate: int, channels: int) -> DecodedAudio:
-    return decode_audio_input(
-        lambda: av.open(io.BytesIO(audio_bytes)),
-        source_label=source_label,
         sample_rate=sample_rate,
         channels=channels,
     )
@@ -482,19 +460,6 @@ class RemoteAudioPlayer:
 
         if written < bytes_needed:
             output_view[written:bytes_needed] = b"\x00" * (bytes_needed - written)
-
-
-def http_bytes(url: str, timeout: float = 15.0) -> bytes:
-    request = urlrequest.Request(url, method="GET")
-    try:
-        with urlrequest.urlopen(request, timeout=timeout) as response:
-            return response.read()
-    except urlerror.HTTPError as exc:
-        response_body = exc.read().decode("utf-8", errors="replace").strip()
-        message = response_body or exc.reason
-        raise HarnessError(f"GET {url} failed with HTTP {exc.code}: {message}") from exc
-    except OSError as exc:
-        raise HarnessError(f"GET {url} failed: {exc}") from exc
 
 
 def http_json(method: str, url: str, payload: dict[str, Any] | None = None, timeout: float = 15.0) -> dict[str, Any]:
@@ -802,9 +767,6 @@ async def run_send(args: argparse.Namespace) -> int:
 
             transcript = text_value(response.get("text")).strip()
             print(f"Transcript: {transcript or '(empty)'}")
-            feedback_audio_url = response.get("feedback_audio_url")
-            if feedback_audio_url:
-                print(f"Feedback audio: {feedback_audio_url}")
 
             if index < len(audio_paths):
                 await asyncio.sleep(args.between)
@@ -868,88 +830,6 @@ async def run_play(args: argparse.Namespace) -> int:
     return 0
 
 
-def resolve_server_audio_url(server_url: str, audio_url: str) -> str:
-    return urlparse.urljoin(server_url.rstrip("/") + "/", audio_url)
-
-
-def notification_playback_choice(
-    text: str,
-    audio_url: str | None,
-    summary_text: str | None,
-    summary_audio_url: str | None,
-    *,
-    is_audio_playing: bool,
-) -> NotificationPlaybackChoice:
-    trimmed_text = text.strip()
-    trimmed_summary_text = (summary_text or "").strip()
-    normalized_audio_url = audio_url or None
-    normalized_summary_audio_url = summary_audio_url or None
-
-    if not is_audio_playing and trimmed_summary_text:
-        return NotificationPlaybackChoice(
-            text=trimmed_summary_text,
-            audio_url=normalized_summary_audio_url or normalized_audio_url,
-        )
-
-    return NotificationPlaybackChoice(
-        text=trimmed_text or trimmed_summary_text,
-        audio_url=normalized_audio_url,
-    )
-
-
-class AudioPlaybackCoordinator:
-    def __init__(
-        self,
-        *,
-        server_url: str,
-        output_device: int | None,
-        sample_rate: int,
-        channels: int,
-        volume: float,
-    ) -> None:
-        self.server_url = server_url
-        self.output_device = output_device
-        self.sample_rate = sample_rate
-        self.channels = channels
-        self.volume = volume
-        self.queue: asyncio.Queue[PlaybackJob] = asyncio.Queue()
-        self._is_playing = False
-
-    @property
-    def is_audio_playing(self) -> bool:
-        return self._is_playing or not self.queue.empty()
-
-    async def enqueue(self, audio_url: str, description: str) -> None:
-        absolute_url = resolve_server_audio_url(self.server_url, audio_url)
-        await self.queue.put(PlaybackJob(url=absolute_url, description=description))
-
-    async def run(self) -> None:
-        while True:
-            job = await self.queue.get()
-            try:
-                self._is_playing = True
-                print(f"[playback] {job.description}")
-                audio_bytes = await asyncio.to_thread(http_bytes, job.url)
-                decoded = await asyncio.to_thread(
-                    decode_audio_bytes,
-                    audio_bytes,
-                    job.url,
-                    self.sample_rate,
-                    self.channels,
-                )
-                await asyncio.to_thread(
-                    play_decoded_audio,
-                    decoded,
-                    self.output_device,
-                    self.volume,
-                )
-            except Exception as exc:
-                print(f"[playback] failed for {job.url}: {exc}", file=sys.stderr)
-            finally:
-                self._is_playing = False
-                self.queue.task_done()
-
-
 def interactive_prompt() -> str | None:
     try:
         return input("tincan> ")
@@ -1006,7 +886,6 @@ async def synthesize_say_audio(text: str, destination_dir: Path, voice: str | No
 
 async def consume_server_events(
     client: TincanWebRTCClient,
-    playback: AudioPlaybackCoordinator,
 ) -> None:
     while True:
         payload = await client.event_queue.get()
@@ -1015,27 +894,13 @@ async def consume_server_events(
 
             if message_type == "play_audio":
                 text = text_value(payload.get("text")).strip()
-                audio_url = text_value(payload.get("url")).strip()
-                print(f"[event] play_audio: {text or audio_url or '(empty)'}")
-                if audio_url:
-                    await playback.enqueue(audio_url, f"play_audio: {text or audio_url}")
+                print(f"[event] play_audio: {text or '(empty)'}")
                 continue
 
             if message_type == "notify":
                 text = text_value(payload.get("text")).strip()
-                audio_url = text_value(payload.get("audio_url")).strip()
                 summary_text = text_value(payload.get("summary_text")).strip()
-                summary_audio_url = text_value(payload.get("summary_audio_url")).strip()
-                choice = notification_playback_choice(
-                    text=text,
-                    audio_url=audio_url,
-                    summary_text=summary_text,
-                    summary_audio_url=summary_audio_url,
-                    is_audio_playing=playback.is_audio_playing,
-                )
-                print(f"[event] notify: {choice.text or text or '(empty)'}")
-                if choice.audio_url:
-                    await playback.enqueue(choice.audio_url, f"notify: {choice.text or choice.audio_url}")
+                print(f"[event] notify: {summary_text or text or '(empty)'}")
                 continue
 
             print(f"[event] {message_type}: {json.dumps(payload, ensure_ascii=False)}")
@@ -1045,7 +910,6 @@ async def consume_server_events(
 
 async def send_audio_path(
     client: TincanWebRTCClient,
-    playback: AudioPlaybackCoordinator,
     audio_path: Path,
     response_timeout: float,
 ) -> None:
@@ -1061,14 +925,6 @@ async def send_audio_path(
     transcript = text_value(response.get("text")).strip()
     print(f"Transcript: {transcript or '(empty)'}")
 
-    feedback_audio_url = text_value(response.get("feedback_audio_url")).strip()
-    if feedback_audio_url:
-        print(f"Feedback audio: {feedback_audio_url}")
-        await playback.enqueue(
-            feedback_audio_url,
-            f"feedback: {transcript or feedback_audio_url}",
-        )
-
 
 async def run_interactive(args: argparse.Namespace) -> int:
     output_device = resolve_output_device(args.device)
@@ -1083,15 +939,7 @@ async def run_interactive(args: argparse.Namespace) -> int:
         verbose=args.verbose,
         remote_audio_player=remote_audio_player,
     )
-    playback = AudioPlaybackCoordinator(
-        server_url=args.server,
-        output_device=output_device,
-        sample_rate=args.sample_rate,
-        channels=2 if args.stereo else 1,
-        volume=args.volume,
-    )
 
-    playback_task: asyncio.Task[None] | None = None
     event_task: asyncio.Task[None] | None = None
 
     await client.connect()
@@ -1101,8 +949,7 @@ async def run_interactive(args: argparse.Namespace) -> int:
     print("Bare text is treated as SAY.")
 
     try:
-        playback_task = asyncio.create_task(playback.run())
-        event_task = asyncio.create_task(consume_server_events(client, playback))
+        event_task = asyncio.create_task(consume_server_events(client))
 
         with tempfile.TemporaryDirectory(prefix="tincan-audio-harness-") as temp_dir:
             temp_dir_path = Path(temp_dir)
@@ -1135,7 +982,6 @@ async def run_interactive(args: argparse.Namespace) -> int:
 
                     await send_audio_path(
                         client=client,
-                        playback=playback,
                         audio_path=audio_path,
                         response_timeout=args.response_timeout,
                     )
@@ -1146,10 +992,6 @@ async def run_interactive(args: argparse.Namespace) -> int:
             event_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await event_task
-        if playback_task is not None:
-            playback_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await playback_task
         await client.close()
         remote_audio_player.stop()
 

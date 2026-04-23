@@ -512,6 +512,8 @@ actor KittenTTSService {
 }
 
 enum AppRuntimePaths {
+    static let inferenceSocketFilename = "tincan-inference-macos.sock"
+
     static let runDirectoryURL: URL = {
         let homeDirectory = FileManager.default.homeDirectoryForCurrentUser
         return homeDirectory
@@ -521,7 +523,7 @@ enum AppRuntimePaths {
             .appendingPathComponent("run", isDirectory: true)
     }()
 
-    static let inferenceSocketURL = runDirectoryURL.appendingPathComponent("inference.sock", isDirectory: false)
+    static let inferenceSocketURL = runDirectoryURL.appendingPathComponent(inferenceSocketFilename, isDirectory: false)
 
     static func prepareSocketDirectory(for socketURL: URL) throws {
         let directoryURL = socketURL.deletingLastPathComponent()

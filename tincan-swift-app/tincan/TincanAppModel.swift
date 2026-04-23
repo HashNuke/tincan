@@ -16,6 +16,7 @@ final class TincanAppModel: ObservableObject {
     let macSpeechSettings: TincanSpeechSettingsStore
     private let bundledServerController: MacBundledTincanServerController
     private var bundledServerStartupTask: Task<Void, Never>?
+    private var connectionModeCancellable: AnyCancellable?
 #endif
 
     init() {
@@ -35,11 +36,25 @@ final class TincanAppModel: ObservableObject {
                 try await bundledServerController.restart()
             }
         )
+        connectionModeCancellable = serverSettings.$connectionMode
+            .dropFirst()
+            .sink { [weak self] mode in
+                Task { @MainActor [weak self] in
+                    await self?.handleConnectionModeChange(mode)
+                }
+            }
 #endif
     }
 
 #if os(macOS)
     func ensureMacServerStarted() async {
+        guard serverSettings.connectionMode == .localMac else {
+            bundledServerStartupTask?.cancel()
+            bundledServerStartupTask = nil
+            bundledServerController.stop()
+            return
+        }
+
         if let bundledServerStartupTask {
             await bundledServerStartupTask.value
             return
@@ -51,6 +66,17 @@ final class TincanAppModel: ObservableObject {
         bundledServerStartupTask = task
         await task.value
         bundledServerStartupTask = nil
+    }
+
+    private func handleConnectionModeChange(_ mode: ServerConnectionStore.ConnectionMode) async {
+        switch mode {
+        case .localMac:
+            await ensureMacServerStarted()
+        case .remote:
+            bundledServerStartupTask?.cancel()
+            bundledServerStartupTask = nil
+            bundledServerController.stop()
+        }
     }
 #endif
 }
