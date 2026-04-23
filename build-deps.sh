@@ -302,12 +302,38 @@ EOF
 
 build_inference() {
   local destination_bin="$1"
+  local destination_dir
+  local derived_data_dir
+  local build_products_dir
+  local source_bin
+  local source_metallib
 
-  require_command swift
+  require_command xcodebuild
+
+  destination_dir="$(dirname "$destination_bin")"
+  derived_data_dir="$INFERENCE_DIR/.build/xcode-derived-data"
+  build_products_dir="$derived_data_dir/Build/Products/Release"
+  source_bin="$build_products_dir/tincan-inference-macos"
+  source_metallib="$build_products_dir/mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib"
 
   log "Building tincan-inference-macos"
-  swift build --package-path "$INFERENCE_DIR" -c release --product tincan-inference-macos
-  install -m 0755 "$INFERENCE_DIR/.build/release/tincan-inference-macos" "$destination_bin"
+  (
+    cd "$INFERENCE_DIR"
+    xcodebuild build \
+      -scheme tincan-inference-macos \
+      -configuration Release \
+      -destination 'platform=macOS,arch=arm64' \
+      -derivedDataPath "$derived_data_dir" \
+      -skipMacroValidation \
+      -skipPackagePluginValidation
+  )
+
+  [[ -x "$source_bin" ]] || fail "built inference binary not found: $source_bin"
+  [[ -f "$source_metallib" ]] || fail "built MLX metallib not found: $source_metallib"
+
+  mkdir -p "$destination_dir"
+  install -m 0755 "$source_bin" "$destination_bin"
+  install -m 0644 "$source_metallib" "$destination_dir/mlx.metallib"
 }
 
 build_server() {
