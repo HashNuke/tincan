@@ -266,19 +266,42 @@ final class AudioTurnPipeline {
         installEngineConfigurationObserver()
 
         let inputNode = audioEngine.inputNode
-        let inputFormat = inputNode.outputFormat(forBus: 0)
-        guard inputFormat.channelCount > 0 else {
+        let hardwareInputFormat = inputNode.inputFormat(forBus: 0)
+        let nodeOutputFormat = inputNode.outputFormat(forBus: 0)
+        guard hardwareInputFormat.channelCount > 0, hardwareInputFormat.sampleRate > 0 else {
             throw AudioTurnPipelineError.noInputChannels
         }
+        let tapFormatOverride = AudioInputFormatResolver.tapFormatOverride(
+            hardwareInputFormat: hardwareInputFormat,
+            outputFormat: nodeOutputFormat
+        )
+        if tapFormatOverride != nil {
+            await sink.emitLog(
+                "Microphone format drift detected. Hardware input: \(AudioTapSamples.describe(bufferFormat: hardwareInputFormat)). Node output: \(AudioTapSamples.describe(bufferFormat: nodeOutputFormat)). Reinstalling tap with the hardware input format."
+            )
+        }
 
-        inputNode.removeTap(onBus: 0)
-        inputNode.installTap(onBus: 0, bufferSize: 2_048, format: inputFormat) { [weak self] buffer, _ in
-            guard let self else { return }
-            self.handleTapBuffer(buffer)
+        _ = removeTapSafely(from: inputNode)
+        do {
+            try AudioTapInstaller.install(
+                on: inputNode,
+                bus: 0,
+                bufferSize: 2_048,
+                format: tapFormatOverride,
+                block: { [weak self] buffer, _ in
+                    guard let self else { return }
+                    self.handleTapBuffer(buffer)
+                },
+                error: ()
+            )
+        } catch {
+            throw AudioTurnPipelineError.tapInstallationFailed(
+                error.localizedDescription
+            )
         }
 
         guard isRunning else {
-            inputNode.removeTap(onBus: 0)
+            _ = removeTapSafely(from: inputNode)
             return
         }
 
@@ -291,7 +314,9 @@ final class AudioTurnPipeline {
         }
 
         let currentGeneration = tapState.incrementEngineGeneration()
-        let tapFormatDescription = AudioTapSamples.describe(bufferFormat: inputFormat)
+        let tapFormatDescription = AudioTapSamples.describe(
+            bufferFormat: tapFormatOverride ?? hardwareInputFormat
+        )
 
         await sink.resetInputLevel()
         if let recoveryReason {
@@ -305,11 +330,22 @@ final class AudioTurnPipeline {
         scheduleTapWatchdog(engineGeneration: currentGeneration, tapFormatDescription: tapFormatDescription)
     }
 
-    private func stopAudioEngine() {
+    @discardableResult
+    private func stopAudioEngine() -> Error? {
         removeEngineConfigurationObserver()
-        audioEngine.inputNode.removeTap(onBus: 0)
+        let tapRemovalError = removeTapSafely(from: audioEngine.inputNode)
         audioEngine.stop()
         audioEngine.reset()
+        return tapRemovalError
+    }
+
+    private func removeTapSafely(from node: AVAudioNode) -> Error? {
+        do {
+            try AudioTapInstaller.removeTap(on: node, bus: 0, error: ())
+            return nil
+        } catch {
+            return error
+        }
     }
 
     private func scheduleTapWatchdog(engineGeneration: UInt64, tapFormatDescription: String) {
@@ -354,7 +390,9 @@ final class AudioTurnPipeline {
 
         guard isRunning, !Task.isCancelled else { return }
 
-        stopAudioEngine()
+        if let tapRemovalError = stopAudioEngine() {
+            await sink.emitLog("Ignored microphone tap removal failure during recovery: \(tapRemovalError.localizedDescription)")
+        }
 
         try? await Task.sleep(nanoseconds: engineRecoveryRestartDelayNanoseconds)
 
@@ -434,6 +472,22 @@ final class AudioTurnPipeline {
         }
     }
 #endif
+}
+
+enum AudioInputFormatResolver {
+    static func tapFormatOverride(
+        hardwareInputFormat: AVAudioFormat,
+        outputFormat: AVAudioFormat
+    ) -> AVAudioFormat? {
+        formatsMatch(hardwareInputFormat, outputFormat) ? nil : hardwareInputFormat
+    }
+
+    static func formatsMatch(_ lhs: AVAudioFormat, _ rhs: AVAudioFormat) -> Bool {
+        abs(lhs.sampleRate - rhs.sampleRate) < 0.5 &&
+        lhs.channelCount == rhs.channelCount &&
+        lhs.commonFormat == rhs.commonFormat &&
+        lhs.isInterleaved == rhs.isInterleaved
+    }
 }
 
 private final class AudioTurnPipelineTapState: @unchecked Sendable {
@@ -853,11 +907,14 @@ enum AudioTapSamples {
 
 private enum AudioTurnPipelineError: LocalizedError {
     case noInputChannels
+    case tapInstallationFailed(String)
 
     var errorDescription: String? {
         switch self {
         case .noInputChannels:
             "No microphone input channels are available."
+        case .tapInstallationFailed(let description):
+            description
         }
     }
 }
