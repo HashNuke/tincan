@@ -118,6 +118,9 @@ func TestBuildConversationCommandForNewConversation(t *testing.T) {
 	if !strings.Contains(strings.Join(command.Args, " "), "--dir /tmp/project") {
 		t.Fatalf("expected dir args, got %v", command.Args)
 	}
+	if !strings.Contains(strings.Join(command.Args, " "), "--dangerously-skip-permissions") {
+		t.Fatalf("expected skip permissions flag, got %v", command.Args)
+	}
 	if strings.TrimSpace(command.Stdin) != "Fix the failing build." {
 		t.Fatalf("unexpected stdin: %q", command.Stdin)
 	}

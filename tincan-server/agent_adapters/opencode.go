@@ -136,7 +136,7 @@ func (a *OpencodeAdapter) RunConversationUpdatePrompt(profile tincanconfig.Agent
 }
 
 func (a *OpencodeAdapter) baseRunArgs(backend tincanconfig.AgentBackendDefinition, workingDirectory string) []string {
-	args := []string{"run", "--format", "json"}
+	args := []string{"run", "--format", "json", "--dangerously-skip-permissions"}
 	if strings.TrimSpace(workingDirectory) != "" {
 		args = append(args, "--dir", workingDirectory)
 	}
