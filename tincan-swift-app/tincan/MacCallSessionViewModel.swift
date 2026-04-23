@@ -103,14 +103,15 @@ final class MacCallSessionViewModel: ObservableObject {
             do {
                 callStateDescription = "Preparing wake word"
                 appendLog("Preparing wake-word speaker gating")
-                let identityStatus = try await identityManager.prepare()
-                applyIdentityStatus(identityStatus)
+                async let identityStatus = identityManager.prepare()
 
                 startupPhase = "microphone capture"
-                callStateDescription = "Starting mic"
-                appendLog("Starting microphone capture")
                 try await audioPipeline.start()
                 await audioPipeline.setCaptureEnabled(!isMuted)
+
+                startupPhase = "wake-word setup"
+                callStateDescription = "Preparing wake word"
+                applyIdentityStatus(try await identityStatus)
 
                 startupPhase = "session registration"
                 callStateDescription = "Connecting"

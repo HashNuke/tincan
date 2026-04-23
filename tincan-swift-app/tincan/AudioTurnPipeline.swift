@@ -55,13 +55,29 @@ final class AudioTurnPipeline {
     func start() async throws {
         guard !isRunning else { return }
 
-        try await turnDetector.prepare()
         captureState.setEnabled(true)
         tapTimeoutRecoveryAttempts = 0
         tapState.resetDigitalSilenceRecovery()
 
-        let stream = AsyncStream<[Float]> { continuation in
+        let stream = AsyncStream<[Float]>(bufferingPolicy: .unbounded) { continuation in
             audioStreamContinuation = continuation
+        }
+
+        isRunning = true
+        installObservers()
+        do {
+            try await startAudioEngine(recoveryReason: nil)
+            try await turnDetector.prepare()
+            await sink.emitLog("Microphone capture started")
+        } catch {
+            removeObservers()
+            stopAudioEngine()
+            audioStreamContinuation?.finish()
+            audioStreamContinuation = nil
+            processingTask?.cancel()
+            processingTask = nil
+            isRunning = false
+            throw error
         }
 
         processingTask = Task { [turnDetector, sink] in
@@ -72,21 +88,6 @@ final class AudioTurnPipeline {
                     await sink.emitLog("VAD pipeline failed: \(error.localizedDescription)")
                 }
             }
-        }
-
-        isRunning = true
-        installObservers()
-        do {
-            try await startAudioEngine(recoveryReason: nil)
-        } catch {
-            removeObservers()
-            stopAudioEngine()
-            audioStreamContinuation?.finish()
-            audioStreamContinuation = nil
-            processingTask?.cancel()
-            processingTask = nil
-            isRunning = false
-            throw error
         }
     }
 
@@ -106,7 +107,6 @@ final class AudioTurnPipeline {
         processingTask?.cancel()
         processingTask = nil
         isRunning = false
-        audioEngine = AVAudioEngine()
         captureState.setEnabled(true)
         await turnDetector.reset()
         await sink.resetInputLevel()
@@ -261,7 +261,6 @@ final class AudioTurnPipeline {
     private func startAudioEngine(recoveryReason: String?) async throws {
         guard isRunning else { return }
 
-        audioEngine = AVAudioEngine()
         let deviceName = AVCaptureDevice.default(for: .audio)?.localizedName ?? "Unknown input device"
         tapState.resetDiagnostics(deviceName: deviceName)
         installEngineConfigurationObserver()
@@ -300,7 +299,9 @@ final class AudioTurnPipeline {
         }
         await sink.emitLog("Using microphone: \(deviceName)")
         await sink.emitLog("Microphone tap format: \(tapFormatDescription)")
-        await sink.emitLog(recoveryReason == nil ? "Microphone capture started" : "Microphone capture resumed")
+        if recoveryReason != nil {
+            await sink.emitLog("Microphone capture resumed")
+        }
         scheduleTapWatchdog(engineGeneration: currentGeneration, tapFormatDescription: tapFormatDescription)
     }
 
@@ -354,7 +355,6 @@ final class AudioTurnPipeline {
         guard isRunning, !Task.isCancelled else { return }
 
         stopAudioEngine()
-        audioEngine = AVAudioEngine()
 
         try? await Task.sleep(nanoseconds: engineRecoveryRestartDelayNanoseconds)
 
