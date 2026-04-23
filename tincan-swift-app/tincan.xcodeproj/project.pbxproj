@@ -39,6 +39,7 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
+				VAD/ten_vad.framework,
 			);
 			target = 389AF12D2F95073C0031FFE3 /* tincan */;
 		};
@@ -341,6 +342,10 @@
 				ENABLE_RESOURCE_ACCESS_PRINTING = NO;
 				ENABLE_RESOURCE_ACCESS_USB = NO;
 				ENABLE_USER_SELECTED_FILES = readwrite;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/tincan/VAD",
+				);
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = tincan/Info.plist;
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "tincan connects to your Mac-hosted coding backend over the local network.";
@@ -397,6 +402,10 @@
 				ENABLE_RESOURCE_ACCESS_PRINTING = NO;
 				ENABLE_RESOURCE_ACCESS_USB = NO;
 				ENABLE_USER_SELECTED_FILES = readwrite;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/tincan/VAD",
+				);
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = tincan/Info.plist;
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "tincan connects to your Mac-hosted coding backend over the local network.";
