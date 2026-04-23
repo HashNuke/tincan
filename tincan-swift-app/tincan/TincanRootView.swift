@@ -23,6 +23,7 @@ struct TincanCallPresentationState {
     let inputLevelHistory: [Double]
     let lastLocalTranscript: String
     let lastServerTranscript: String
+    let recentTranscripts: [TincanTranscriptDisplayItem]
     let logLines: [String]
     let speakerIdentity: TincanSpeakerIdentityPresentation?
 
@@ -77,6 +78,7 @@ struct TincanIOSRootView: View {
                 inputLevelHistory: callSession.inputLevelHistory,
                 lastLocalTranscript: "",
                 lastServerTranscript: callSession.lastServerTranscript,
+                recentTranscripts: [],
                 logLines: callSession.logLines,
                 speakerIdentity: nil
             ),
@@ -134,6 +136,7 @@ struct TincanMacRootView: View {
                 inputLevelHistory: callSession.inputLevelHistory,
                 lastLocalTranscript: callSession.lastLocalTranscript,
                 lastServerTranscript: callSession.lastServerTranscript,
+                recentTranscripts: callSession.recentTranscripts,
                 logLines: callSession.logLines,
                 speakerIdentity: TincanSpeakerIdentityPresentation(
                     phase: callSession.speakerIdentityPhase,
@@ -515,7 +518,6 @@ private struct TincanHomeHeader: View {
 private struct TincanMacCallTranscriptCard: View {
     let callState: TincanCallPresentationState
     let callActions: TincanCallActions
-    @State private var visibleTranscript = ""
 
     private var statusTone: Color {
         callState.isCallActive ? TincanTone.mint.accent : TincanTone.blue.accent
@@ -529,22 +531,6 @@ private struct TincanMacCallTranscriptCard: View {
         callState.isTransitioning && !callState.isCallActive
     }
 
-    private var normalizedLocalTranscript: String {
-        callState.lastLocalTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private var transcriptText: String {
-        if visibleTranscript.isEmpty {
-            return #"Say "Atlas, get me top 3 headlines from Hacker News""#
-        }
-
-        return #""\#(visibleTranscript)""#
-    }
-
-    private var isShowingPlaceholder: Bool {
-        visibleTranscript.isEmpty
-    }
-
     var body: some View {
         HStack(alignment: .center, spacing: 28) {
             HStack(alignment: .center, spacing: 24) {
@@ -555,35 +541,10 @@ private struct TincanMacCallTranscriptCard: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            Text(transcriptText)
-                .font(.system(size: 14, weight: .regular, design: .default))
-                .italic()
-                .foregroundStyle(isShowingPlaceholder ? TincanPalette.textMuted : TincanPalette.textPrimary)
+            TincanTranscriptTicker(transcripts: callState.recentTranscripts)
                 .frame(maxWidth: .infinity, alignment: .trailing)
-                .lineLimit(1)
-                .truncationMode(.head)
-                .multilineTextAlignment(.trailing)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .onAppear {
-            showTranscriptIfNeeded(normalizedLocalTranscript)
-        }
-        .onChange(of: normalizedLocalTranscript) { _, newValue in
-            showTranscriptIfNeeded(newValue)
-        }
-        .task(id: visibleTranscript) {
-            guard !visibleTranscript.isEmpty else { return }
-
-            try? await Task.sleep(nanoseconds: 5_000_000_000)
-            guard !Task.isCancelled else { return }
-
-            visibleTranscript = ""
-        }
-    }
-
-    private func showTranscriptIfNeeded(_ transcript: String) {
-        guard !transcript.isEmpty else { return }
-        visibleTranscript = transcript
     }
 
     private var logoColumn: some View {
@@ -631,6 +592,94 @@ private struct TincanMacCallTranscriptCard: View {
             }
             .frame(maxWidth: .infinity)
         }
+    }
+}
+
+private struct TincanTranscriptTicker: View {
+    let transcripts: [TincanTranscriptDisplayItem]
+
+    private let visibleRowCount = 3
+    private let rowHeight: CGFloat = 17
+    private let rowSpacing: CGFloat = 3
+
+    private var visibleTranscripts: [TincanTranscriptDisplayItem] {
+        Array(transcripts.prefix(visibleRowCount))
+    }
+
+    private var tickerHeight: CGFloat {
+        CGFloat(visibleRowCount) * rowHeight + CGFloat(visibleRowCount - 1) * rowSpacing
+    }
+
+    var body: some View {
+        ZStack(alignment: .trailing) {
+            if visibleTranscripts.isEmpty {
+                Text(#"Say "Atlas, get me top 3 headlines from Hacker News""#)
+                    .font(.system(size: 14, weight: .regular, design: .default))
+                    .italic()
+                    .foregroundStyle(TincanPalette.textMuted)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .multilineTextAlignment(.trailing)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .transition(.opacity)
+            } else {
+                VStack(alignment: .trailing, spacing: rowSpacing) {
+                    ForEach(Array(visibleTranscripts.enumerated()), id: \.element.id) { index, transcript in
+                        TincanTranscriptTickerRow(
+                            transcript: transcript,
+                            prominence: index == 0 ? .primary : .secondary
+                        )
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .transition(.opacity)
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: tickerHeight, alignment: .center)
+        .animation(.spring(response: 0.34, dampingFraction: 0.88, blendDuration: 0.08), value: visibleTranscripts)
+    }
+}
+
+private struct TincanTranscriptTickerRow: View {
+    enum Prominence {
+        case primary
+        case secondary
+    }
+
+    let transcript: TincanTranscriptDisplayItem
+    let prominence: Prominence
+
+    private var foregroundColor: Color {
+        if transcript.state == .approvedForUpload {
+            return TincanPalette.emerald500
+        }
+        switch prominence {
+        case .primary:
+            return TincanPalette.textPrimary
+        case .secondary:
+            return TincanPalette.textSecondary
+        }
+    }
+
+    private var fontSize: CGFloat {
+        prominence == .primary ? 14 : 11
+    }
+
+    var body: some View {
+        Text(#""\#(transcript.text)""#)
+            .font(.system(size: fontSize, weight: prominence == .primary ? .regular : .medium, design: .default))
+            .italic()
+            .foregroundStyle(foregroundColor)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .multilineTextAlignment(.trailing)
+            .frame(maxWidth: .infinity, minHeight: 17, alignment: .trailing)
+            .transition(
+                .asymmetric(
+                    insertion: .move(edge: .top).combined(with: .opacity),
+                    removal: .opacity
+                )
+            )
     }
 }
 
@@ -1688,6 +1737,7 @@ struct TincanMacSettingsWindow: View {
             inputLevelHistory: callSession.inputLevelHistory,
             lastLocalTranscript: callSession.lastLocalTranscript,
             lastServerTranscript: callSession.lastServerTranscript,
+            recentTranscripts: callSession.recentTranscripts,
             logLines: callSession.logLines,
             speakerIdentity: TincanSpeakerIdentityPresentation(
                 phase: callSession.speakerIdentityPhase,

@@ -2,11 +2,6 @@
 import FluidAudio
 import Foundation
 
-nonisolated struct SpeakerTranscript: Sendable, Equatable {
-    let speakerId: String
-    let transcript: String
-}
-
 nonisolated struct SpeakerSegmentSpan: Sendable, Equatable {
     let speakerId: String
     let startSample: Int
@@ -286,7 +281,9 @@ actor SpeakerIdentityManager {
                         phase: .ownerVerified,
                         description: "Wake word heard. Only audio from the speaker who said “\(resolvedWakeWord)” is being sent."
                     ),
-                    logMessage: "Matched wake word “\(resolvedWakeWord)” to one diarized speaker clip and filtered the rest."
+                    logMessage: "Matched wake word “\(resolvedWakeWord)” to one diarized speaker clip and filtered the rest.",
+                    recognizedTranscripts: transcripts,
+                    approvedSpeakerIDs: [matchedSpeakerID]
                 )
             }
 
@@ -294,7 +291,8 @@ actor SpeakerIdentityManager {
                 return blockedOutcome(
                     "Multiple diarized speakers said the wake word “\(resolvedWakeWord)”.",
                     phase: .awaitingChallengeResponse,
-                    description: "Multiple speakers said “\(resolvedWakeWord)”. Say it again so tincan can isolate one speaker."
+                    description: "Multiple speakers said “\(resolvedWakeWord)”. Say it again so tincan can isolate one speaker.",
+                    recognizedTranscripts: transcripts
                 )
             }
 
@@ -303,7 +301,8 @@ actor SpeakerIdentityManager {
                     ? "No diarized speaker clip produced a usable transcript for the wake word “\(resolvedWakeWord)”."
                     : "No diarized speaker said the wake word “\(resolvedWakeWord)”. Heard \(heardTranscriptSummary ?? "no transcript").",
                 phase: .identificationRequired,
-                description: "Say “\(resolvedWakeWord)” and tincan will send only that speaker’s audio."
+                description: "Say “\(resolvedWakeWord)” and tincan will send only that speaker’s audio.",
+                recognizedTranscripts: transcripts
             )
         } catch {
             return blockedOutcome(
@@ -499,12 +498,14 @@ actor SpeakerIdentityManager {
     private func blockedOutcome(
         _ logMessage: String,
         phase: SpeakerIdentityPhase? = nil,
-        description: String? = nil
+        description: String? = nil,
+        recognizedTranscripts: [SpeakerTranscript] = []
     ) -> SpeakerIdentityOutcome {
         SpeakerIdentityOutcome(
             segmentApprovedForUpload: nil,
             status: makeStatus(phase: phase, description: description),
-            logMessage: logMessage
+            logMessage: logMessage,
+            recognizedTranscripts: recognizedTranscripts
         )
     }
 

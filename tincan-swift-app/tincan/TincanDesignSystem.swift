@@ -44,6 +44,7 @@ enum TincanPalette {
     static let textOnAccent = Color.black.opacity(0.84)
     static let divider = Color.white.opacity(0.08)
     static let callRed = Color(red: 0.77, green: 0.23, blue: 0.28)
+    static let emerald500 = Color(red: 0.06, green: 0.73, blue: 0.51)
 }
 
 struct TincanCanvas<Content: View>: View {

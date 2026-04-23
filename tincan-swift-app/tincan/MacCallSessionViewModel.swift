@@ -7,11 +7,9 @@ import Speech
 @MainActor
 final class MacCallSessionViewModel: ObservableObject {
     private static let inputLevelHistoryLength = 14
-    fileprivate static let logTimestampFormatter: ISO8601DateFormatter = {
-        let formatter = ISO8601DateFormatter()
-        formatter.timeZone = .current
-        return formatter
-    }()
+    private static let transcriptSilenceClearDelay: UInt64 = 10_000_000_000
+    private static let transcriptActivityLevelThreshold: Float = 0.03
+    private static let maximumVisibleTranscriptCount = 3
 
     @Published private(set) var callStateDescription = "Idle"
     @Published private(set) var identityStatusDescription = "Identity not ready"
@@ -19,6 +17,7 @@ final class MacCallSessionViewModel: ObservableObject {
     @Published private(set) var speakerIdentityPhase: SpeakerIdentityPhase = .unavailable
     @Published private(set) var lastLocalTranscript = ""
     @Published private(set) var lastServerTranscript = ""
+    @Published private(set) var recentTranscripts: [TincanTranscriptDisplayItem] = []
     @Published private(set) var logLines: [String] = []
     @Published private(set) var isCallActive = false
     @Published private(set) var isTransitioningCallState = false
@@ -36,6 +35,7 @@ final class MacCallSessionViewModel: ObservableObject {
     private var sessionClient: BackendSessionClient?
     private var sessionID: String?
     private var eventTask: Task<Void, Never>?
+    private var transcriptSilenceTask: Task<Void, Never>?
     private var muteGeneration: UInt64 = 0
     private var isTransportRecovering = false
 
@@ -59,6 +59,7 @@ final class MacCallSessionViewModel: ObservableObject {
         }
 
         isTransitioningCallState = true
+        clearRecentTranscripts()
         tonePlayer.startOutgoingRing()
         callStateDescription = "Starting"
         Task {
@@ -167,6 +168,7 @@ final class MacCallSessionViewModel: ObservableObject {
             isCallActive = false
             callStartedAt = nil
             resetInputLevels()
+            clearRecentTranscripts()
             tonePlayer.playDisconnectTone()
             isTransitioningCallState = false
         }
@@ -233,6 +235,7 @@ final class MacCallSessionViewModel: ObservableObject {
         isTransitioningCallState = false
         callStartedAt = nil
         resetInputLevels()
+        clearRecentTranscripts()
     }
 
     private func requestMicrophonePermission() async -> Bool {
@@ -272,10 +275,56 @@ final class MacCallSessionViewModel: ObservableObject {
             inputLevelHistory.removeFirst()
         }
         inputLevelHistory.append(clampedLevel)
+
+        if level >= Self.transcriptActivityLevelThreshold {
+            scheduleTranscriptClearAfterSilence()
+        }
     }
 
     private func resetInputLevels() {
         inputLevelHistory = Array(repeating: 0.0, count: Self.inputLevelHistoryLength)
+    }
+
+    private func prependRecentTranscripts(
+        _ transcripts: [SpeakerTranscript],
+        approvedSpeakerIDs: [String]
+    ) {
+        let approvedSpeakerIDSet = Set(approvedSpeakerIDs)
+        let items = transcripts
+            .map { transcript in
+                TincanTranscriptDisplayItem(
+                    id: transcript.id,
+                    text: transcript.transcript.trimmingCharacters(in: .whitespacesAndNewlines),
+                    state: approvedSpeakerIDSet.contains(transcript.speakerId) ? .approvedForUpload : .heard
+                )
+            }
+            .filter { !$0.text.isEmpty }
+
+        guard !items.isEmpty else { return }
+
+        recentTranscripts.insert(contentsOf: items.reversed(), at: 0)
+        if recentTranscripts.count > Self.maximumVisibleTranscriptCount {
+            recentTranscripts.removeLast(recentTranscripts.count - Self.maximumVisibleTranscriptCount)
+        }
+        scheduleTranscriptClearAfterSilence()
+    }
+
+    private func scheduleTranscriptClearAfterSilence() {
+        guard !recentTranscripts.isEmpty else { return }
+
+        transcriptSilenceTask?.cancel()
+        transcriptSilenceTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: Self.transcriptSilenceClearDelay)
+            guard !Task.isCancelled else { return }
+            self?.recentTranscripts.removeAll()
+            self?.transcriptSilenceTask = nil
+        }
+    }
+
+    private func clearRecentTranscripts() {
+        transcriptSilenceTask?.cancel()
+        transcriptSilenceTask = nil
+        recentTranscripts.removeAll()
     }
 
     private func appendLog(_ message: String) {
@@ -346,6 +395,10 @@ extension MacCallSessionViewModel: AudioTurnPipelineOutput {
         Task(priority: .userInitiated) {
             let outcome = await identityManager.processSegment(segment)
             self.applyIdentityStatus(outcome.status)
+            self.prependRecentTranscripts(
+                outcome.recognizedTranscripts,
+                approvedSpeakerIDs: outcome.approvedSpeakerIDs
+            )
             self.appendLog(outcome.logMessage)
 
             guard let approvedSegment = outcome.segmentApprovedForUpload else {
@@ -384,14 +437,20 @@ private extension MacCallSessionViewModel {
 }
 
 private actor MacCallFileLogger {
+    private let timestampFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.timeZone = .current
+        return formatter
+    }()
+
     func markSessionBoundary() {
         appendRawLine(
-            "\n[\(MacCallSessionViewModel.logTimestampFormatter.string(from: Date()))] ----- mac call session -----"
+            "\n[\(timestampFormatter.string(from: Date()))] ----- mac call session -----"
         )
     }
 
     func append(_ line: String) {
-        appendRawLine("[\(MacCallSessionViewModel.logTimestampFormatter.string(from: Date()))] \(line)")
+        appendRawLine("[\(timestampFormatter.string(from: Date()))] \(line)")
     }
 
     private func appendRawLine(_ line: String) {
