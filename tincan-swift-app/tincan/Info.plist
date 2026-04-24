@@ -9,6 +9,8 @@
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>tincan connects to your Mac-hosted coding backend over the local network.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>tincan uses the camera to scan QR codes for connecting to your Mac-hosted server.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>tincan uses the microphone to capture voice instructions for coding agents.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
