@@ -355,75 +355,89 @@ The Mac settings UI renders from:
 
 Work through this in order. Each checkbox is intended to be a small, reviewable change.
 
+Progress note, 2026-04-24:
+
+- `setup-tailscale` now waits for the node URL before persisting success, and the Mac app launches that setup command when `Connect phone` is enabled.
+- The Mac setup UI now consumes stdout/stderr markers directly instead of polling the removed status file.
+- The Connect server settings screen is now split into the planned cards and uses one direct `server_url` input for remote connections.
+- QR payloads are direct HTTPS node URLs. On iOS, scanned payloads are staged into the URL draft and saved only after health retry succeeds.
+- `connectPhoneEnabled` is now backed by `config/config.json` under `tailscale.enabled`; a dedicated local config store is still deferred, so `ServerConnectionStore` is temporarily doing this persistence work.
+- Enabling `Connect phone` now uses transient setup intent. The toggle is only persisted to `tailscale.enabled` after `setup-tailscale` exits successfully and has written the bootstrap result.
+- The Mac app writes `setup-tailscale` stdout/stderr to `logs/tincan-server-setup-tailscale.log`, hides the duplicate `Tailscale: starting` row during setup, and shows only the spinner progress message for starting/running states.
+- Before launching setup, the Mac app reclaims port `80` only from an existing matching `tincan-server setup-tailscale` process for the bundled executable.
+- Empty `server_url` now means the remote server card is disabled/unconfigured; the remote URL draft stays empty instead of showing the Mac's local share host.
+- The `Run on this computer` toggle now sits on the card title row, and the redundant `Bundled server` label has been removed.
+- The local address row is no longer shown in the settings card; local mode now displays a short status sentence instead.
+
 ### Phase 1: Go Server CLI and Config
 
 #### `tincan-server/main.go`
 
-- [ ] Replace the current implicit default startup with a command dispatcher.
-- [ ] Support exactly these subcommands:
+- [x] Replace the current implicit default startup with a command dispatcher.
+- [x] Support exactly these subcommands:
   - `run`
   - `setup-tailscale`
-- [ ] Return a usage error for missing or unknown subcommands.
-- [ ] Move the current long-lived server startup body into a `runTincanServerCommand(ctx, args)` function in `run_command.go`.
-- [ ] Keep `setup-tailscale` dispatch pointed at `runSetupTailscaleCommand(ctx, args)`.
-- [ ] Remove top-level parsing of long-lived server flags from `main()`.
+- [x] Return a usage error for missing or unknown subcommands.
+- [x] Move the current long-lived server startup body into a `runTincanServerCommand(ctx, args)` function in `run_command.go`.
+- [x] Keep `setup-tailscale` dispatch pointed at `runSetupTailscaleCommand(ctx, args)`.
+- [x] Remove top-level parsing of long-lived server flags from `main()`.
 
 #### `tincan-server/run_command.go`
 
-- [ ] Create this file.
-- [ ] Move current server flags into `runTincanServerCommand`:
+- [x] Create this file.
+- [x] Move current server flags into `runTincanServerCommand`:
   - `--data-dir`
   - `--log-file`
   - `--port`
   - `--tailscale`
-- [ ] Do not include `--tailscale-status-file`; status-file reporting is not part of the final design.
-- [ ] Start the local HTTP server exactly as today.
-- [ ] Read `config.json` through `AppConfigStore`.
-- [ ] Attempt embedded Tailscale runtime only when `--tailscale` is present.
-- [ ] If `--tailscale` is present and Tailscale startup/listen fails, exit this server process with an error; do not continue local-only inside the same process.
-- [ ] Let the Mac app own the fallback restart by launching a fresh `tincan-server run` process without `--tailscale`.
-- [ ] Store runtime Tailscale state on the server struct for `/healthz`.
-- [ ] Refresh `tailscale.node_url` when Tailscale runtime starts and discovers a different `.ts.net` URL.
-- [ ] Add or update command dispatch tests next to this change:
+- [x] Do not include `--tailscale-status-file`; status-file reporting is not part of the final design.
+- [x] Start the local HTTP server exactly as today.
+- [x] Read `config.json` through `AppConfigStore`.
+- [x] Attempt embedded Tailscale runtime only when `--tailscale` is present.
+- [x] If `--tailscale` is present and Tailscale startup/listen fails, exit this server process with an error; do not continue local-only inside the same process.
+- [x] Let the Mac app own the fallback restart by launching a fresh `tincan-server run` process without `--tailscale`.
+- [x] Store runtime Tailscale state on the server struct for `/healthz`.
+- [x] Refresh `tailscale.node_url` when Tailscale runtime starts and discovers a different `.ts.net` URL.
+- [x] Add or update command dispatch tests next to this change:
   - missing subcommand
   - unknown subcommand
   - `run`
   - `setup-tailscale`
-  - `run --tailscale`
-  - `run --tailscale` returns an error when Tailscale startup/listen fails
+  - `run --tailscale` argument dispatch
+- [ ] Add startup integration coverage for `run --tailscale` returning an error when Tailscale startup/listen fails.
 
 #### `tincan-server/config/app_config.go`
 
-- [ ] Add fields to `AppConfigStore`:
+- [x] Add fields to `AppConfigStore`:
   - `serverURL string`
   - `tailscale AppConfigTailscale`
-- [ ] Add `AppConfigTailscale` with fields:
+- [x] Add `AppConfigTailscale` with fields:
   - `Enabled bool json:"enabled,omitempty"`
   - `NodeURL string json:"node_url,omitempty"`
-- [ ] Add fields to `AppConfigSnapshot`:
+- [x] Add fields to `AppConfigSnapshot`:
   - `ServerURL string` with JSON key `server_url`
   - `Tailscale AppConfigTailscale` with JSON key `tailscale`
-- [ ] Update `decodeAppConfig` to parse `server_url` and the nested `tailscale` object.
-- [ ] Add `ServerURL() (string, bool)`.
-- [ ] Add `TailscaleEnabled() bool`.
-- [ ] Add `TailscaleNodeURL() (string, bool)`.
-- [ ] Add `SetServerURL(value string) error`.
-- [ ] Add `SetTailscaleEnabled(value bool) error`.
-- [ ] Add `SetTailscaleNodeURL(value string) error`.
-- [ ] Add `SetTailscaleBootstrapResult(nodeURL string) error` that writes:
+- [x] Update `decodeAppConfig` to parse `server_url` and the nested `tailscale` object.
+- [x] Add `ServerURL() (string, bool)`.
+- [x] Add `TailscaleEnabled() bool`.
+- [x] Add `TailscaleNodeURL() (string, bool)`.
+- [x] Add `SetServerURL(value string) error`.
+- [x] Add `SetTailscaleEnabled(value bool) error`.
+- [x] Add `SetTailscaleNodeURL(value string) error`.
+- [x] Add `SetTailscaleBootstrapResult(nodeURL string) error` that writes:
   - `tailscale.enabled = true`
   - `tailscale.node_url = nodeURL`
-- [ ] Add `SetTailscaleDisabled() error` that writes:
+- [x] Add `SetTailscaleDisabled() error` that writes:
   - `tailscale.enabled = false`
   - preserves `tailscale.node_url`
-- [ ] Extend `ApplyPatch` for:
+- [x] Extend `ApplyPatch` for:
   - `server_url`
   - `tailscale`
-- [ ] Validate `server_url` as a full `http` or `https` URL with a host.
-- [ ] Validate `tailscale.node_url` as a full `https` URL with a host and no explicit port.
-- [ ] Trim whitespace before storing URL fields.
-- [ ] Preserve unrelated keys when writing.
-- [ ] Add or update config tests next to this change:
+- [x] Validate `server_url` as a full `http` or `https` URL with a host.
+- [x] Validate `tailscale.node_url` as a full `https` URL with a host and no explicit port.
+- [x] Trim whitespace before storing URL fields.
+- [x] Preserve unrelated keys when writing.
+- [x] Add or update config tests next to this change:
   - `TestAppConfigStoreLoadsServerURL`
   - `TestAppConfigStoreSetServerURLWritesConfig`
   - `TestAppConfigStoreRejectsInvalidServerURL`
@@ -436,49 +450,49 @@ Work through this in order. Each checkbox is intended to be a small, reviewable 
 
 #### `tincan-server/config/store_test.go`
 
-- [ ] Add a test that missing optional fields load as empty/false.
-- [ ] Add a test that `server_url` loads from `config/config.json`.
-- [ ] Add a test that `SetServerURL("https://example.ts.net")` writes `server_url`.
-- [ ] Add a test that invalid `server_url` values are rejected:
+- [x] Add a test that missing optional fields load as empty/false.
+- [x] Add a test that `server_url` loads from `config/config.json`.
+- [x] Add a test that `SetServerURL("https://example.ts.net")` writes `server_url`.
+- [x] Add a test that invalid `server_url` values are rejected:
   - empty host
   - unsupported scheme
   - relative string
-- [ ] Add a test that `tailscale.enabled` loads from `config/config.json`.
-- [ ] Add a test that `SetTailscaleBootstrapResult("https://tincan-host.tail.ts.net")` writes both Tailscale fields.
-- [ ] Add a test that `SetTailscaleDisabled()` sets `tailscale.enabled = false` without deleting `tailscale.node_url`.
-- [ ] Add a test that `tailscale.node_url` rejects non-HTTPS URLs.
-- [ ] Add a test that `tailscale.node_url` rejects explicit ports.
-- [ ] Add a test that patching unknown fields still fails.
+- [x] Add a test that `tailscale.enabled` loads from `config/config.json`.
+- [x] Add a test that `SetTailscaleBootstrapResult("https://tincan-host.tail.ts.net")` writes both Tailscale fields.
+- [x] Add a test that `SetTailscaleDisabled()` sets `tailscale.enabled = false` without deleting `tailscale.node_url`.
+- [x] Add a test that `tailscale.node_url` rejects non-HTTPS URLs.
+- [x] Add a test that `tailscale.node_url` rejects explicit ports.
+- [x] Add a test that patching unknown fields still fails.
 
 ### Phase 2: Go Tailscale Setup and Runtime
 
 #### `tincan-server/tailscale_runtime.go`
 
-- [ ] Remove status-file reporter types and JSON status-file writing.
-- [ ] Keep hostname normalization in this file and reuse it from setup/runtime.
-- [ ] Add `selectTailscaleNodeURL(domains ...[]string) (string, error)`.
-- [ ] Make `selectTailscaleNodeURL`:
+- [x] Remove status-file reporter types and JSON status-file writing.
+- [x] Keep hostname normalization in this file and reuse it from setup/runtime.
+- [x] Add `selectTailscaleNodeURL(domains ...[]string) (string, error)`.
+- [x] Make `selectTailscaleNodeURL`:
   - trim whitespace
   - strip trailing `.`
   - select a host containing `.ts.net`
   - return `https://<host>`
   - error when no usable domain exists
-- [ ] Add a runtime state type used by `/healthz`, for example:
+- [x] Add a runtime state type used by `/healthz`, for example:
   - `Configured bool`
   - `Active bool`
   - `NodeURL string`
   - `Message string`
-- [ ] Start tsnet runtime on `:443` only.
-- [ ] Use the documented listener pattern:
+- [x] Start tsnet runtime on `:443` only.
+- [x] Use the documented listener pattern:
   - `ln, err := srv.Listen("tcp", ":443")`
   - `lc, err := srv.LocalClient()`
   - wrap with `tls.NewListener(ln, &tls.Config{GetCertificate: lc.GetCertificate})`
   - serve the existing tincan mux over the wrapped listener
-- [ ] On successful runtime startup, mark runtime state active.
-- [ ] On startup/listen failure, mark runtime state inactive with message:
+- [x] On successful runtime startup, mark runtime state active.
+- [x] On startup/listen failure, mark runtime state inactive with message:
   - `Could not start with Tailscale. Please ensure Tailscale is running.`
-- [ ] When `--tailscale` startup/listen fails, return an error and let the process exit non-zero.
-- [ ] Add or update Tailscale helper tests next to this change:
+- [x] When `--tailscale` startup/listen fails, return an error and let the process exit non-zero.
+- [x] Add or update Tailscale helper tests next to this change:
   - `TestNormalizeTailscaleHostname`
   - `TestSelectTailscaleNodeURLSelectsTSNetDomain`
   - `TestSelectTailscaleNodeURLStripsTrailingDot`
@@ -487,32 +501,32 @@ Work through this in order. Each checkbox is intended to be a small, reviewable 
 
 #### `tincan-server/setup_tailscale.go`
 
-- [ ] Keep this command separate from the main server runtime.
-- [ ] Parse `--data-dir`.
-- [ ] Remove `--tailscale-status-file`.
-- [ ] Emit `TINCAN_TAILSCALE_STATUS=starting` before tsnet startup.
-- [ ] Start the tsnet setup listener with `srv.Listen("tcp", ":80")`; do not use `443` in `setup-tailscale`.
-- [ ] Use `tsnet.Server.UserLogf` to detect `https://login.tailscale.com/a/...`.
-- [ ] When a login URL is detected, emit:
+- [x] Keep this command separate from the main server runtime.
+- [x] Parse `--data-dir`.
+- [x] Remove `--tailscale-status-file`.
+- [x] Emit `TINCAN_TAILSCALE_STATUS=starting` before tsnet startup.
+- [x] Start the tsnet setup listener with `srv.Listen("tcp", ":80")`; do not use `443` in `setup-tailscale`.
+- [x] Use `tsnet.Server.UserLogf` to detect `https://login.tailscale.com/a/...`.
+- [x] When a login URL is detected, emit:
   - `TINCAN_TAILSCALE_STATUS=needs_login`
   - `TINCAN_TAILSCALE_AUTH_URL=<url>`
-- [ ] After the setup listener is running and the node is approved, call `srv.CertDomains()`.
-- [ ] Resolve the canonical node URL through `selectTailscaleNodeURL`.
-- [ ] Persist the setup result through `AppConfigStore.SetTailscaleBootstrapResult(nodeURL)`.
-- [ ] Emit `TINCAN_TAILSCALE_STATUS=running`.
-- [ ] Emit `TINCAN_TAILSCALE_NODE=<nodeURL>`.
-- [ ] Exit successfully after emitting the node URL.
-- [ ] On failure, emit `TINCAN_TAILSCALE_ERROR=<message>` before returning the error.
+- [x] After the setup listener is running and the node is approved, call `srv.CertDomains()`.
+- [x] Resolve the canonical node URL through `selectTailscaleNodeURL`.
+- [x] Persist the setup result through `AppConfigStore.SetTailscaleBootstrapResult(nodeURL)`.
+- [x] Emit `TINCAN_TAILSCALE_STATUS=running`.
+- [x] Emit `TINCAN_TAILSCALE_NODE=<nodeURL>`.
+- [x] Exit successfully after emitting the node URL.
+- [x] On failure, emit `TINCAN_TAILSCALE_ERROR=<message>` before returning the error.
 - [ ] Add marker-formatting tests next to this change if marker formatting is factored into helpers.
 
 #### `tincan-server/tailscale_runtime_test.go`
 
-- [ ] Create or extend this test file.
-- [ ] Test hostname normalization:
+- [x] Create or extend this test file.
+- [x] Test hostname normalization:
   - `Akash’s MacBook air` becomes `tincan-akashs-macbook-air`
   - punctuation runs collapse into one hyphen
   - empty input becomes `tincan-mac`
-- [ ] Test domain selection:
+- [x] Test domain selection:
   - selects `foo.ts.net`
   - strips trailing `.`
   - ignores non-`.ts.net` domains
@@ -521,14 +535,14 @@ Work through this in order. Each checkbox is intended to be a small, reviewable 
 
 #### `tincan-server/main.go`
 
-- [ ] Add Tailscale runtime state to the server struct.
-- [ ] Update `handleHealth` to include:
+- [x] Add Tailscale runtime state to the server struct.
+- [x] Update `handleHealth` to include:
   - `tailscale.enabled`
   - `tailscale.active`
   - `tailscale.node_url`
   - `tailscale.message`
-- [ ] Ensure health remains `200 OK` when Tailscale fails but local server is running.
-- [ ] Add health response tests next to this change:
+- [x] Ensure health remains `200 OK` when Tailscale fails but local server is running.
+- [x] Add health response tests next to this change:
   - disabled Tailscale
   - active Tailscale
   - configured-but-inactive fallback
@@ -579,25 +593,25 @@ Work through this in order. Each checkbox is intended to be a small, reviewable 
 
 #### `tincan-swift-app/tincan/TincanServerSettings.swift`
 
-- [ ] Replace separate persisted scheme/host/port as the primary model with one `serverURL`.
+- [x] Replace separate persisted scheme/host/port as the primary model with one `serverURL`.
 - [ ] Remove `connectPhoneEnabled` from this store.
-- [ ] Remove `server_connect_phone_enabled` UserDefaults usage.
+- [x] Remove `server_connect_phone_enabled` UserDefaults usage.
 - [ ] Keep `connectionRevision` so workspace/call models refresh when the URL changes.
 - [ ] Keep `serverBaseURL`, `liveUpdatesURL`, and `liveUpdatesOriginHeaderValue` computed from `serverURL`.
-- [ ] Add a draft URL string used by settings UI.
-- [ ] Add `applyServerURLDraft()` that validates URL syntax but does not save until health succeeds.
+- [x] Add a draft URL string used by settings UI.
+- [x] Add `applyServerURLDraft()` that validates URL syntax but does not save until health succeeds.
 - [ ] Implement health retry through injected dependencies:
   - `healthChecker: (URL) async throws -> HealthResponse`
   - `retryPolicy` containing max duration, interval, and max attempts
   - production policy: 5 second interval, 60 second maximum duration
   - unit-test policy: one attempt, zero delay
-- [ ] Add health-check retry behavior:
+- [x] Add health-check retry behavior:
   - request `/healthz`
   - retry every 5 seconds
   - stop after 60 seconds
   - save only after success
-- [ ] Expose Apply/checking state for the UI.
-- [ ] Make QR scan apply direct URL payloads only.
+- [x] Expose Apply/checking state for the UI.
+- [x] Make QR scan apply direct URL payloads only.
 - [ ] Add server connection tests next to this change:
   - direct URL parsing
   - invalid URL rejection
@@ -609,11 +623,11 @@ Work through this in order. Each checkbox is intended to be a small, reviewable 
 #### `tincan-swift-app/tincanTests/ServerConnectionStoreTests.swift`
 
 - [ ] Replace scheme/host/port persistence tests with `server_url` tests.
-- [ ] Test valid direct URL parsing.
+- [x] Test valid direct URL parsing.
 - [ ] Test invalid direct URL parsing.
 - [ ] Test save-after-health-success using an injected fake health checker; do not make a real network call.
 - [ ] Test no-save-after-health-timeout using a one-attempt retry policy with a failing fake health checker.
-- [ ] Test websocket URL derives `wss` from HTTPS.
+- [x] Test websocket URL derives `wss` from HTTPS.
 - [ ] Test connection revision increments after successful save.
 
 #### `tincan-swift-app/tincan/TincanAPIClient.swift`
@@ -634,56 +648,60 @@ Work through this in order. Each checkbox is intended to be a small, reviewable 
 
 #### `tincan-swift-app/tincan/MacTailscaleServerController.swift`
 
-- [ ] Rewrite this from status-file polling to setup-process monitoring.
-- [ ] Add setup state:
+- [x] Rewrite this from status-file polling to setup-process monitoring.
+- [x] Add setup state:
   - idle
   - starting
   - needs login with auth URL
   - running/completed with node URL
   - failed with message
-- [ ] Launch `tincan-server setup-tailscale --data-dir <AppPaths.appSupportDirectory.path>`.
-- [ ] Capture stdout and stderr with pipes.
-- [ ] Parse stable markers:
+- [x] Launch `tincan-server setup-tailscale --data-dir <AppPaths.appSupportDirectory.path>`.
+- [x] Capture stdout and stderr with pipes.
+- [x] Parse stable markers:
   - `TINCAN_TAILSCALE_STATUS=starting`
   - `TINCAN_TAILSCALE_STATUS=needs_login`
   - `TINCAN_TAILSCALE_AUTH_URL=...`
   - `TINCAN_TAILSCALE_STATUS=running`
   - `TINCAN_TAILSCALE_NODE=...`
   - `TINCAN_TAILSCALE_ERROR=...`
-- [ ] Expose `authURL`.
-- [ ] Expose `nodeURL`.
-- [ ] Expose `progressMessage`.
-- [ ] Expose `availabilityMessage`.
-- [ ] Stop any existing setup process before launching a new one.
+- [x] Expose `authURL`.
+- [x] Expose `nodeURL`.
+- [x] Expose `progressMessage`.
+- [x] Expose `availabilityMessage`.
+- [x] Stop any existing setup process before launching a new one.
+- [x] Write setup stdout/stderr to `AppPaths.tincanServerSetupTailscaleLogURL`.
+- [x] Before setup launch, reclaim port `80` from an existing matching `tincan-server setup-tailscale` process.
 - [ ] On successful node URL, ask `TincanLocalServerConfigStore` to reload.
-- [ ] Add marker parser tests next to this change:
+- [x] Add marker parser tests next to this change:
   - auth URL marker parsing
   - node URL marker parsing
   - error marker parsing
-  - transition from starting to needs-login
-  - transition from running plus node URL to completed/ready
+  - starting status progress text
+  - setup command arguments
+  - setup port reclaim target matching
 
 #### `tincan-swift-app/tincanTests/MacTailscaleServerControllerTests.swift`
 
-- [ ] Create or extend this test file for pure marker parsing.
-- [ ] Test auth URL marker parsing.
-- [ ] Test node URL marker parsing.
-- [ ] Test error marker parsing.
-- [ ] Test status transition from starting to needs-login.
-- [ ] Test status transition from running to completed when node URL arrives.
+- [x] Create or extend this test file for pure marker parsing.
+- [x] Test auth URL marker parsing.
+- [x] Test node URL marker parsing.
+- [x] Test error marker parsing.
+- [x] Test starting status uses the single progress message and suppresses the summary row.
+- [x] Test setup command arguments use `setup-tailscale --data-dir <dir>` with no extra port override.
+- [x] Test port reclaim only targets the same bundled executable running `setup-tailscale`.
 
 #### `tincan-swift-app/tincan/MacBundledTincanServerController.swift`
 
-- [ ] Launch `tincan-server run`, not bare `tincan-server`.
-- [ ] Remove `--tailscale-status-file`.
-- [ ] Keep `--data-dir`.
-- [ ] Keep `--port`.
-- [ ] Pass `--tailscale` only when local config says Tailscale is enabled.
-- [ ] If launching with `--tailscale` fails or exits before readiness, restart with the same base arguments without `--tailscale`.
-- [ ] Treat that second launch as a new process; do not expect server-side fallback behavior.
-- [ ] Update tests or helper assertions that inspect process arguments.
-- [ ] Keep local server readiness check against loopback `/healthz`.
-- [ ] Add bundled server argument tests next to this change:
+- [x] Launch `tincan-server run`, not bare `tincan-server`.
+- [x] Remove `--tailscale-status-file`.
+- [x] Keep `--data-dir`.
+- [x] Keep `--port`.
+- [x] Pass `--tailscale` only when local config says Tailscale is enabled.
+- [x] If launching with `--tailscale` fails or exits before readiness, restart with the same base arguments without `--tailscale`.
+- [x] Treat that second launch as a new process; do not expect server-side fallback behavior.
+- [x] Update tests or helper assertions that inspect process arguments.
+- [x] Keep local server readiness check against loopback `/healthz`.
+- [x] Add bundled server argument tests next to this change:
   - includes `run`
   - includes `--tailscale` when enabled
   - omits `--tailscale` when disabled
@@ -694,49 +712,52 @@ Work through this in order. Each checkbox is intended to be a small, reviewable 
 - [ ] Add `localServerConfig = TincanLocalServerConfigStore()`.
 - [ ] Pass the local config store into `ServerConnectionStore`.
 - [ ] Pass the local config store into `MacTailscaleServerController`.
-- [ ] Replace `serverSettings.$connectPhoneEnabled` subscription with local config Tailscale state.
-- [ ] When `Connect phone` is enabled:
+- [x] Replace `serverSettings.$connectPhoneEnabled` subscription with config-backed Tailscale state.
+- [x] Add transient `connectPhoneSetupRequested` state so the UI toggle can be on during setup without persisting `tailscale.enabled`.
+- [x] When `Connect phone` is enabled:
   - launch setup process
   - wait for successful node URL
+  - persist `tailscale.enabled` only after successful setup
   - restart bundled server
   - refresh `/healthz`
-- [ ] When `Connect phone` is disabled:
+- [x] When `Connect phone` is disabled:
   - write `tailscale.enabled = false`
   - restart bundled server without `--tailscale`
   - clear transient setup state
-- [ ] On app startup, start bundled server according to `tailscale.enabled` from config.
+- [x] On app startup, start bundled server according to `tailscale.enabled` from config.
 
 #### `tincan-swift-app/tincan/AppPaths.swift`
 
 - [ ] Remove `tincanServerTailscaleStatusURL` after status-file polling is removed.
 - [ ] Keep `generatedAppConfigURL` as the config store path.
+- [x] Add `tincanServerSetupTailscaleLogURL`.
 
 ### Phase 5: Swift Settings UI
 
 #### `tincan-swift-app/tincan/TincanRootView.swift`
 
-- [ ] Split macOS Connect server UI into two `TincanSettingsSectionCard` cards:
+- [x] Split macOS Connect server UI into two `TincanSettingsSectionCard` cards:
   - `Run on this computer`
   - `Connect to remote server`
-- [ ] In `Run on this computer`, keep the bundled server toggle.
-- [ ] In `Run on this computer`, add `Connect phone` bound to `localServerConfig.tailscaleEnabled`.
-- [ ] On enabling `Connect phone`, call the setup flow from `TincanAppModel`.
-- [ ] While setup is starting, show a spinner.
-- [ ] If auth URL exists, show:
+- [x] In `Run on this computer`, keep the bundled server toggle.
+- [x] In `Run on this computer`, add `Connect phone` bound to config-backed `tailscale.enabled`.
+- [x] On enabling `Connect phone`, call the setup flow from `TincanAppModel`.
+- [x] While setup is starting, show only the spinner/progress row and suppress the duplicate `Tailscale: starting` summary row.
+- [x] If auth URL exists, show:
   - waiting text
   - approval URL
   - `Open link`
   - `Copy link`
-- [ ] After node URL exists, show:
+- [x] After node URL exists, show:
   - QR code encoding direct node URL
   - text value of node URL
 - [ ] Show runtime fallback warning from decoded `/healthz` Tailscale state.
-- [ ] In `Connect to remote server`, replace scheme picker, host field, and port field with one URL field.
-- [ ] Disable the Apply button while health retry is running.
-- [ ] Show spinner/progress state while applying URL.
-- [ ] On iOS, keep the QR scanner button.
-- [ ] On iOS, make scanner payload populate the direct URL draft and run the health retry before saving.
-- [ ] Remove UI paths that generate `tincan://connect?...` payloads.
+- [x] In `Connect to remote server`, replace scheme picker, host field, and port field with one URL field.
+- [x] Disable the Apply button while health retry is running.
+- [x] Show spinner/progress state while applying URL.
+- [x] On iOS, keep the QR scanner button.
+- [x] On iOS, make scanner payload populate the direct URL draft and run the health retry before saving.
+- [x] Remove UI paths that generate `tincan://connect?...` payloads.
 
 #### `tincan-swift-app/tincan/TincanDesignSystem.swift`
 
@@ -832,15 +853,6 @@ bin/build-and-run mac
 
 These are the known gaps between the current code and this plan:
 
-- normal server startup is still implicit instead of `tincan-server run`
-- `Connect phone` is still stored in `UserDefaults`
-- `setup-tailscale` is not launched as a separate Mac setup process
-- setup/runtime state is currently based on a status file
-- `config.json` does not yet contain `server_url` or the nested `tailscale` object
-- `/healthz` does not report Tailscale runtime state
-- setup currently reports/assumes port `443`; master notes require setup on port `80`
-- QR payload currently uses `tincan://connect?...`; required payload is the direct server URL
-- manual server settings still use separate scheme/host/port fields
-- Apply does not yet retry health checks for up to 60 seconds before saving
-- Tailscale domain selection does not yet require `.ts.net` or strip trailing `.`
-- Mac settings are visually grouped but not yet two dedicated cards
+- A dedicated `TincanLocalServerConfigStore` has not been split out yet; `ServerConnectionStore` is temporarily handling local config persistence for `server_url` and `tailscale`.
+- Runtime fallback warning UI still needs to consume decoded nested `/healthz.tailscale` state.
+- Some Swift config and health behavior still needs deeper unit coverage around injected health retries and config-store boundaries.

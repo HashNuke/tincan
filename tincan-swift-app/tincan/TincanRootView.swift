@@ -1,5 +1,10 @@
 import SwiftUI
 
+#if os(iOS)
+import AVFoundation
+import UIKit
+#endif
+
 #if os(macOS)
 import AppKit
 import CoreImage
@@ -1792,12 +1797,10 @@ private struct TincanSettingsDestinationContent: View {
             TincanServerSettingsSection(
                 title: showsPageCardTitle ? "Connect to server" : nil,
                 serverSettings: serverSettings,
-                onApplyConnection: {
-                    let changed = serverSettings.applyRemoteDraft()
-                    if changed {
-                        Task {
-                            await workspace.refreshAll()
-                        }
+                onConnectionUpdated: {
+                    Task {
+                        await serverSettings.refreshHealth()
+                        await workspace.refreshAll()
                     }
                 }
             )
@@ -1987,23 +1990,34 @@ private struct TincanSettingsUnavailableCard: View {
 }
 
 private struct TincanServerSettingsSection: View {
+    @EnvironmentObject private var appModel: TincanAppModel
     var title: String? = nil
     var subtitle: String? = nil
     @ObservedObject var serverSettings: ServerConnectionStore
-    let onApplyConnection: () -> Void
+    let onConnectionUpdated: () -> Void
+
+    #if os(iOS)
+    @State private var isScannerPresented = false
+    @State private var scanErrorMessage: String?
+    #endif
+    @FocusState private var isRemoteServerURLFocused: Bool
 
     private var usesLocalServer: Bool {
         serverSettings.connectionMode == .localMac
+    }
+
+    private var usesRemoteServer: Bool {
+        serverSettings.connectionMode == .remote
     }
 
     var body: some View {
         TincanSettingsSection(title: title, subtitle: subtitle) {
             VStack(alignment: .leading, spacing: 16) {
 #if os(macOS)
-                VStack(alignment: .leading, spacing: 12) {
+                TincanSettingsSectionCard {
                     HStack(spacing: 12) {
                         Text("Run on this computer")
-                            .font(TincanSettingsTypography.emphasis)
+                            .font(.system(size: 17, weight: .bold, design: .rounded))
                             .foregroundStyle(TincanPalette.textPrimary)
 
                         Spacer()
@@ -2012,60 +2026,270 @@ private struct TincanServerSettingsSection: View {
                             "",
                             isOn: Binding(
                                 get: { usesLocalServer },
-                                set: { serverSettings.setConnectionMode($0 ? .localMac : .remote) }
+                                set: { shouldUseLocal in
+                                    if shouldUseLocal {
+                                        serverSettings.useBundledServer()
+                                        onConnectionUpdated()
+                                    }
+                                }
                             )
                         )
                         .labelsHidden()
                         .toggleStyle(.switch)
                     }
 
-                    Text("Use the bundled server running on this Mac.")
-                        .font(TincanSettingsTypography.body)
-                        .foregroundStyle(TincanPalette.textSecondary)
-
                     if usesLocalServer {
-                        TincanQRCodeCard(payload: serverSettings.qrPayload)
-                        TincanSettingsValueRow(label: "Current", value: serverSettings.shareableConnectionLabel)
+                        Text("Running on this computer, and accessible locally")
+                            .font(TincanSettingsTypography.body)
+                            .foregroundStyle(TincanPalette.textSecondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+
+                        HStack(spacing: 12) {
+                            Text("Connect phone")
+                                .font(TincanSettingsTypography.emphasis)
+                                .foregroundStyle(TincanPalette.textPrimary)
+
+                            Spacer()
+
+                            Toggle(
+                                "",
+                                isOn: Binding(
+                                    get: { appModel.connectPhoneToggleIsOn },
+                                    set: { appModel.setConnectPhoneToggle($0) }
+                                )
+                            )
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                        }
+
+                        if appModel.connectPhoneToggleIsOn || appModel.tailscaleController.availabilityMessage != nil {
+                            if appModel.tailscaleController.pairingPayload == nil,
+                               appModel.tailscaleController.runtimeStatus.shouldShowSummaryRow {
+                                TincanSettingsValueRow(label: "Tailscale", value: appModel.tailscaleController.statusSummary)
+                            }
+
+                            if let hostname = appModel.tailscaleController.runtimeStatus.hostname, !hostname.isEmpty {
+                                TincanSettingsValueRow(label: "Hostname", value: hostname)
+                            }
+
+                            if let progressMessage = appModel.tailscaleController.progressMessage {
+                                HStack(spacing: 10) {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                    Text(progressMessage)
+                                        .font(TincanSettingsTypography.body)
+                                        .foregroundStyle(TincanPalette.textSecondary)
+                                }
+                            }
+
+                            if let authURL = appModel.tailscaleController.authURL {
+                                HStack(spacing: 12) {
+                                    Text(authURL.absoluteString)
+                                        .font(TincanSettingsTypography.emphasis)
+                                        .foregroundStyle(TincanPalette.textPrimary)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                        .textSelection(.enabled)
+
+                                    Spacer(minLength: 12)
+
+                                    Button("Open link") {
+                                        NSWorkspace.shared.open(authURL)
+                                    }
+                                    .buttonStyle(.borderedProminent)
+
+                                    Button("Copy link") {
+                                        NSPasteboard.general.clearContents()
+                                        NSPasteboard.general.setString(authURL.absoluteString, forType: .string)
+                                    }
+                                    .buttonStyle(.bordered)
+                                }
+                            }
+
+                            if let payload = appModel.tailscaleController.pairingPayload {
+                                TincanQRCodeCard(
+                                    payload: payload,
+                                    endpoint: appModel.tailscaleController.displayEndpoint
+                                )
+                            }
+
+                            if let availabilityMessage = appModel.tailscaleController.availabilityMessage,
+                               !availabilityMessage.isEmpty {
+                                Text(availabilityMessage)
+                                    .font(TincanSettingsTypography.body)
+                                    .foregroundStyle(TincanTone.coral.accent)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        } else {
+                            Text("Use Tailscale pairing to connect the phone to this Mac.")
+                                .font(TincanSettingsTypography.body)
+                                .foregroundStyle(TincanPalette.textSecondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
                     }
                 }
 
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Connect to server")
+                TincanSettingsSectionCard {
+                    HStack(spacing: 12) {
+                        Text("Connect to remote server")
                             .font(TincanSettingsTypography.emphasis)
                             .foregroundStyle(TincanPalette.textPrimary)
 
-                        if usesLocalServer {
-                            Text("Turn off \"Run on this computer\" to connect to another tincan server.")
-                                .font(TincanSettingsTypography.body)
-                                .foregroundStyle(TincanPalette.textSecondary)
-                        } else {
+                        Spacer()
+
+                        Toggle(
+                            "",
+                            isOn: Binding(
+                                get: { usesRemoteServer },
+                                set: { shouldUseRemote in
+                                    if shouldUseRemote {
+                                        if serverSettings.setRemoteServerEnabled(true) {
+                                            onConnectionUpdated()
+                                        }
+                                    } else {
+                                        serverSettings.useBundledServer()
+                                        onConnectionUpdated()
+                                    }
+                                }
+                            )
+                        )
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .disabled(!usesRemoteServer && !serverSettings.hasExplicitEndpointConfiguration)
+                    }
+
+                    VStack(alignment: .leading, spacing: 16) {
+                        if usesRemoteServer {
                             TincanSettingsValueRow(label: "Current", value: serverSettings.shareableConnectionLabel)
-                            TincanSchemePicker(selection: $serverSettings.draftScheme)
-                            TincanLabeledField(label: "Host", text: $serverSettings.draftHost)
-                            TincanLabeledField(label: "Port", text: $serverSettings.draftPort)
-
-                            Button("Apply", action: onApplyConnection)
-                                .buttonStyle(.borderedProminent)
-                                .controlSize(.large)
                         }
-                }
-#else
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Connect to server")
-                        .font(TincanSettingsTypography.emphasis)
-                        .foregroundStyle(TincanPalette.textPrimary)
 
-                    TincanSchemePicker(selection: $serverSettings.draftScheme)
-                    TincanLabeledField(label: "Host", text: $serverSettings.draftHost)
-                    TincanLabeledField(label: "Port", text: $serverSettings.draftPort)
+                        TincanLabeledField(label: "Server URL", text: $serverSettings.draftServerURL)
+                            .focused($isRemoteServerURLFocused)
+                            .onAppear {
+                                if usesLocalServer {
+                                    isRemoteServerURLFocused = false
+                                    Task { @MainActor in
+                                        await Task.yield()
+                                        if usesLocalServer {
+                                            isRemoteServerURLFocused = false
+                                        }
+                                    }
+                                }
+                            }
+                            .onChange(of: usesLocalServer) { _, isLocal in
+                                if isLocal {
+                                    isRemoteServerURLFocused = false
+                                }
+                            }
 
-                    Button("Apply", action: onApplyConnection)
+                        Button {
+                            Task { @MainActor in
+                                let didApply = await serverSettings.applyServerURLDraftWithHealthRetry()
+                                if didApply {
+                                    onConnectionUpdated()
+                                }
+                            }
+                        } label: {
+                            if serverSettings.isApplyingServerURL {
+                                ProgressView()
+                                    .controlSize(.small)
+                            } else {
+                                Text("Apply")
+                            }
+                        }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.large)
+                        .disabled(
+                            serverSettings.isApplyingServerURL ||
+                                serverSettings.draftServerURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        )
+
+                        if let message = serverSettings.serverURLApplyMessage, !message.isEmpty {
+                            Text(message)
+                                .font(TincanSettingsTypography.body)
+                                .foregroundStyle(TincanPalette.textSecondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                    .disabled(!usesRemoteServer)
+                }
+#else
+                TincanSettingsSectionCard(title: "Connect to remote server") {
+                    Button("Scan QR code") {
+                        scanErrorMessage = nil
+                        isScannerPresented = true
+                    }
+                    .buttonStyle(.borderedProminent)
+
+                    if let scanErrorMessage, !scanErrorMessage.isEmpty {
+                        Text(scanErrorMessage)
+                            .font(TincanSettingsTypography.body)
+                            .foregroundStyle(TincanTone.coral.accent)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
+                    TincanLabeledField(label: "Server URL", text: $serverSettings.draftServerURL)
+
+                    Button {
+                        Task { @MainActor in
+                            let didApply = await serverSettings.applyServerURLDraftWithHealthRetry()
+                            if didApply {
+                                onConnectionUpdated()
+                            }
+                        }
+                    } label: {
+                        if serverSettings.isApplyingServerURL {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Text("Apply")
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .disabled(
+                        serverSettings.isApplyingServerURL ||
+                            serverSettings.draftServerURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    )
+
+                    if let message = serverSettings.serverURLApplyMessage, !message.isEmpty {
+                        Text(message)
+                            .font(TincanSettingsTypography.body)
+                            .foregroundStyle(TincanPalette.textSecondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                .sheet(isPresented: $isScannerPresented) {
+                    TincanQRCodeScannerSheet(
+                        onCancel: {
+                            isScannerPresented = false
+                        },
+                        onCodeScanned: { payload in
+                            do {
+                                try serverSettings.stageConnectionPayload(payload)
+                                isScannerPresented = false
+                                scanErrorMessage = nil
+                                Task { @MainActor in
+                                    let didApply = await serverSettings.applyServerURLDraftWithHealthRetry()
+                                    if didApply {
+                                        onConnectionUpdated()
+                                    }
+                                }
+                            } catch {
+                                isScannerPresented = false
+                                scanErrorMessage = error.localizedDescription
+                            }
+                        }
+                    )
                 }
 #endif
             }
         }
+#if os(macOS)
+        .onDisappear {
+            appModel.stopConnectPhoneSetupIfPending()
+        }
+#endif
     }
 }
 
@@ -2194,9 +2418,118 @@ private struct TincanSchemePicker: View {
     }
 }
 
+#if os(iOS)
+private struct TincanQRCodeScannerSheet: View {
+    let onCancel: () -> Void
+    let onCodeScanned: (String) -> Void
+
+    var body: some View {
+        NavigationStack {
+            TincanQRCodeScannerView(onCodeScanned: onCodeScanned)
+                .ignoresSafeArea(edges: .bottom)
+                .navigationTitle("Scan QR code")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Close", action: onCancel)
+                    }
+                }
+        }
+    }
+}
+
+private struct TincanQRCodeScannerView: UIViewControllerRepresentable {
+    let onCodeScanned: (String) -> Void
+
+    func makeUIViewController(context: Context) -> TincanQRCodeScannerViewController {
+        let controller = TincanQRCodeScannerViewController()
+        controller.onCodeScanned = onCodeScanned
+        return controller
+    }
+
+    func updateUIViewController(_ uiViewController: TincanQRCodeScannerViewController, context: Context) {}
+}
+
+private final class TincanQRCodeScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsDelegate {
+    var onCodeScanned: ((String) -> Void)?
+
+    private let session = AVCaptureSession()
+    private var previewLayer: AVCaptureVideoPreviewLayer?
+    private var hasScannedCode = false
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .black
+        configureSession()
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        if !session.isRunning {
+            session.startRunning()
+        }
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        if session.isRunning {
+            session.stopRunning()
+        }
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        previewLayer?.frame = view.bounds
+    }
+
+    private func configureSession() {
+        guard let videoDevice = AVCaptureDevice.default(for: .video),
+              let videoInput = try? AVCaptureDeviceInput(device: videoDevice),
+              session.canAddInput(videoInput) else {
+            return
+        }
+        session.addInput(videoInput)
+
+        let metadataOutput = AVCaptureMetadataOutput()
+        guard session.canAddOutput(metadataOutput) else { return }
+        session.addOutput(metadataOutput)
+        metadataOutput.setMetadataObjectsDelegate(self, queue: .main)
+        metadataOutput.metadataObjectTypes = [.qr]
+
+        let previewLayer = AVCaptureVideoPreviewLayer(session: session)
+        previewLayer.videoGravity = .resizeAspectFill
+        previewLayer.frame = view.bounds
+        view.layer.addSublayer(previewLayer)
+        self.previewLayer = previewLayer
+    }
+
+    func metadataOutput(
+        _ output: AVCaptureMetadataOutput,
+        didOutput metadataObjects: [AVMetadataObject],
+        from connection: AVCaptureConnection
+    ) {
+        _ = output
+        _ = connection
+
+        guard !hasScannedCode,
+              let metadataObject = metadataObjects.first as? AVMetadataMachineReadableCodeObject,
+              metadataObject.type == .qr,
+              let payload = metadataObject.stringValue,
+              !payload.isEmpty else {
+            return
+        }
+
+        hasScannedCode = true
+        session.stopRunning()
+        onCodeScanned?(payload)
+    }
+}
+#endif
+
 #if os(macOS)
 private struct TincanQRCodeCard: View {
     let payload: String
+    let endpoint: String?
 
     var body: some View {
         VStack(spacing: 10) {
@@ -2223,10 +2556,16 @@ private struct TincanQRCodeCard: View {
                     .fill(Color.white)
             )
 
-            Text("scan")
-                .font(TincanSettingsTypography.body)
-                .foregroundStyle(TincanPalette.textSecondary)
+            if let endpoint, !endpoint.isEmpty {
+                Text(endpoint)
+                    .font(TincanSettingsTypography.emphasis)
+                    .foregroundStyle(TincanPalette.textPrimary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .textSelection(.enabled)
+            }
         }
+        .frame(maxWidth: .infinity, alignment: .center)
     }
 
     private func makeQRCode(payload: String) -> NSImage? {

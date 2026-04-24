@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		2E856D979950465E82EC6019 /* MarkdownView in Frameworks */ = {isa = PBXBuildFile; productRef = 92170BFD01AD465DBA561763 /* MarkdownView */; };
 		389AF1652F954C930031FFE3 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = 389AF1642F954C930031FFE3 /* FluidAudio */; };
 		5A7B8C9D0E1F223344556677 /* WebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = 5A7B8C9D0E1F223344556678 /* WebRTC */; };
 /* End PBXBuildFile section */
@@ -73,6 +74,7 @@
 			files = (
 				389AF1652F954C930031FFE3 /* FluidAudio in Frameworks */,
 				5A7B8C9D0E1F223344556677 /* WebRTC in Frameworks */,
+				2E856D979950465E82EC6019 /* MarkdownView in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -136,6 +138,7 @@
 			packageProductDependencies = (
 				389AF1642F954C930031FFE3 /* FluidAudio */,
 				5A7B8C9D0E1F223344556678 /* WebRTC */,
+				92170BFD01AD465DBA561763 /* MarkdownView */,
 			);
 			productName = tincan;
 			productReference = 389AF12E2F95073C0031FFE3 /* tincan.app */;
@@ -221,6 +224,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				389AF1632F954C930031FFE3 /* XCRemoteSwiftPackageReference "FluidAudio" */,
+				E6380A5736DA4B2E855C06E5 /* XCRemoteSwiftPackageReference "MarkdownView" */,
 				5A7B8C9D0E1F223344556679 /* XCLocalSwiftPackageReference "../webrtc-multiplatform" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -374,7 +378,7 @@
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_OBJC_BRIDGING_HEADER = tincan/tincan-Bridging-Header.h;
+				SWIFT_OBJC_BRIDGING_HEADER = "tincan/tincan-Bridging-Header.h";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -435,7 +439,7 @@
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_OBJC_BRIDGING_HEADER = tincan/tincan-Bridging-Header.h;
+				SWIFT_OBJC_BRIDGING_HEADER = "tincan/tincan-Bridging-Header.h";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -713,6 +717,14 @@
 				version = 0.13.6;
 			};
 		};
+		E6380A5736DA4B2E855C06E5 /* XCRemoteSwiftPackageReference "MarkdownView" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/LiYanan2004/MarkdownView.git";
+			requirement = {
+				branch = main;
+				kind = branch;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -725,6 +737,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 5A7B8C9D0E1F223344556679 /* XCLocalSwiftPackageReference "../webrtc-multiplatform" */;
 			productName = WebRTC;
+		};
+		92170BFD01AD465DBA561763 /* MarkdownView */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = E6380A5736DA4B2E855C06E5 /* XCRemoteSwiftPackageReference "MarkdownView" */;
+			productName = MarkdownView;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

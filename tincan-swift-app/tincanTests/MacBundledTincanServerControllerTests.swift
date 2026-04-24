@@ -68,5 +68,44 @@ struct MacBundledTincanServerControllerTests {
 
         #expect(MacBundledTincanServerController.sameBundledExecutablePath(lhs, rhs))
     }
+
+    @Test func bundledServerArgumentsIncludeRunSubcommand() {
+        let arguments = MacBundledTincanServerController.bundledServerArguments(
+            dataDir: "/tmp/tincan",
+            port: 4490,
+            enableTailscale: false
+        )
+
+        #expect(arguments == ["run", "--data-dir", "/tmp/tincan", "--port", "4490"])
+    }
+
+    @Test func bundledServerArgumentsIncludeTailscaleOnlyWhenEnabled() {
+        let enabledArguments = MacBundledTincanServerController.bundledServerArguments(
+            dataDir: "/tmp/tincan",
+            port: 4490,
+            enableTailscale: true
+        )
+        let disabledArguments = MacBundledTincanServerController.bundledServerArguments(
+            dataDir: "/tmp/tincan",
+            port: 4490,
+            enableTailscale: false
+        )
+
+        #expect(enabledArguments.contains("--tailscale"))
+        #expect(!disabledArguments.contains("--tailscale"))
+        #expect(!enabledArguments.contains("--tailscale-status-file"))
+        #expect(!disabledArguments.contains("--no-tailscale"))
+    }
+
+    @Test func staleTerminationHandlerDoesNotFinishReplacementProcess() {
+        #expect(MacBundledTincanServerController.shouldFinishProcessRun(
+            currentProcessIdentifier: 200,
+            terminatedProcessIdentifier: 200
+        ))
+        #expect(!MacBundledTincanServerController.shouldFinishProcessRun(
+            currentProcessIdentifier: 201,
+            terminatedProcessIdentifier: 200
+        ))
+    }
 }
 #endif

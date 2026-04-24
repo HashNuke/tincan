@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -22,7 +21,6 @@ import (
 
 	"github.com/google/uuid"
 	"tincan-server/agent_adapters"
-	tincanapi "tincan-server/api"
 	"tincan-server/calls"
 	tincanconfig "tincan-server/config"
 	"tincan-server/controllers"
@@ -58,6 +56,7 @@ type server struct {
 	outputPublisher     *output.Publisher
 	liveHub             *liveHub
 	controlSocket       *serverControlSocket
+	tailscale           tailscaleRuntimeState
 }
 
 type inferenceEnvelope struct {
@@ -120,84 +119,8 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	dataDirFlag := flag.String("data-dir", "", "directory for tincan-server runtime data")
-	logFileFlag := flag.String("log-file", "", "file path for tincan-server logs")
-	portFlag := flag.Int("port", defaultServerPort, "HTTP port for tincan-server")
-	flag.Parse()
-
-	logFile, resolvedLogFilePath, err := openLogFile(*logFileFlag)
-	if err != nil {
-		log.Fatalf("failed to open log file: %v", err)
-	}
-
-	var runtimeOutput io.Writer
-	if logFile != nil {
-		defer func() {
-			_ = logFile.Close()
-		}()
-		log.SetOutput(logFile)
-		runtimeOutput = logFile
-		log.Printf("tincan-server logging to %s", resolvedLogFilePath)
-	}
-
-	if *portFlag <= 0 || *portFlag > 65535 {
-		log.Fatalf("invalid --port: %d", *portFlag)
-	}
-
-	dataDir, err := resolveDataDir(*dataDirFlag)
-	if err != nil {
-		log.Fatalf("failed to resolve data dir: %v", err)
-	}
-
-	srv, err := newServer(dataDir, *portFlag, runtimeOutput)
-	if err != nil {
-		log.Fatalf("failed to initialize server: %v", err)
-	}
-	defer func() {
-		if err := srv.conversations.Close(); err != nil {
-			log.Printf("failed to close conversation store: %v", err)
-		}
-	}()
-	if err := srv.controlSocket.Start(ctx); err != nil {
-		log.Fatalf("failed to start control socket: %v", err)
-	}
-	defer srv.controlSocket.Shutdown()
-
-	if err := srv.speechRuntime.EnsureRunning(ctx); err != nil {
-		log.Fatalf("failed to start speech services: %v", err)
-	}
-	defer srv.speechRuntime.Shutdown()
-	mux := http.NewServeMux()
-	apiAdapters := make(map[string]tincanapi.ModelDiscoveringAdapter, len(srv.agentAdapters))
-	for name, adapter := range srv.agentAdapters {
-		apiAdapters[name] = adapter
-	}
-	mux.HandleFunc("/healthz", srv.handleHealth)
-	mux.HandleFunc("/hooks/opencode", srv.handleOpenCodeHook)
-	tincanapi.Routes{
-		AppConfig:     srv.appConfig,
-		Profiles:      srv.profiles,
-		Backends:      srv.backends,
-		Conversations: srv.conversations,
-		Adapters:      apiAdapters,
-	}.Register(mux)
-	mux.Handle("/api/v1/live", srv.liveHub.handler())
-	mux.HandleFunc("/session/", srv.handleSessionControl)
-	srv.webrtcTransport.RegisterRoutes(mux)
-
-	addr := fmt.Sprintf("0.0.0.0:%d", *portFlag)
-	log.Printf("tincan-server %s listening on %s", buildVersion, addr)
-	httpServer := &http.Server{Addr: addr, Handler: mux}
-
-	go func() {
-		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = httpServer.Shutdown(shutdownCtx)
-	}()
-
-	if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Fatalf("server failed: %v", err)
+	if err := runMainCommand(ctx, os.Args[1:], commandHandlers{}); err != nil {
+		log.Fatal(err)
 	}
 }
 
@@ -353,7 +276,38 @@ func (s *server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":              "ok",
 		"agent_profile_count": len(s.profiles.List()),
+		"tailscale":           s.tailscaleHealth(),
 	})
+}
+
+func (s *server) setTailscaleRuntimeState(state tailscaleRuntimeState) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tailscale = state
+}
+
+func (s *server) tailscaleHealth() map[string]any {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	enabled := false
+	nodeURL := ""
+	if s.appConfig != nil {
+		enabled = s.appConfig.TailscaleEnabled()
+		if configuredNodeURL, ok := s.appConfig.TailscaleNodeURL(); ok {
+			nodeURL = configuredNodeURL
+		}
+	}
+	if strings.TrimSpace(s.tailscale.NodeURL) != "" {
+		nodeURL = s.tailscale.NodeURL
+	}
+
+	return map[string]any{
+		"enabled":  enabled,
+		"active":   s.tailscale.Active,
+		"node_url": nodeURL,
+		"message":  s.tailscale.Message,
+	}
 }
 
 func (s *server) handleOpenCodeHook(w http.ResponseWriter, r *http.Request) {

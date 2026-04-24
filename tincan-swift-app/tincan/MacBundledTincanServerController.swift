@@ -254,6 +254,19 @@ final class MacBundledTincanServerController {
     private var process: Process?
     private var logHandle: FileHandle?
     private var terminationObserver: NSObjectProtocol?
+    private var launchedWithTailscale = false
+
+    nonisolated static func bundledServerArguments(dataDir: String, port: Int, enableTailscale: Bool) -> [String] {
+        var arguments = [
+            "run",
+            "--data-dir", dataDir,
+            "--port", String(port),
+        ]
+        if enableTailscale {
+            arguments.append("--tailscale")
+        }
+        return arguments
+    }
 
     init(port: Int) {
         self.port = port
@@ -274,7 +287,7 @@ final class MacBundledTincanServerController {
         }
     }
 
-    func startIfNeeded() async throws {
+    func startIfNeeded(enableTailscale: Bool) async throws {
         prepareStartupLoggingIfNeeded()
         guard !Task.isCancelled else { throw CancellationError() }
 
@@ -292,6 +305,10 @@ final class MacBundledTincanServerController {
         }
 
         if process?.isRunning == true {
+            guard launchedWithTailscale == enableTailscale else {
+                stop()
+                return try await startIfNeeded(enableTailscale: enableTailscale)
+            }
             do {
                 try await waitUntilReady(timeout: 10)
                 writeStartupLog("bundled tincan-server already running and ready on port \(port)")
@@ -317,22 +334,25 @@ final class MacBundledTincanServerController {
                 let process = Process()
                 process.executableURL = executableURL
                 process.currentDirectoryURL = executableURL.deletingLastPathComponent()
-                process.arguments = [
-                    "--data-dir", AppPaths.appSupportDirectory.path,
-                    "--port", String(port),
-                ]
+                let arguments = Self.bundledServerArguments(
+                    dataDir: AppPaths.appSupportDirectory.path,
+                    port: port,
+                    enableTailscale: enableTailscale
+                )
+                process.arguments = arguments
                 guard let logHandle else {
                     throw LaunchError.logFileUnavailable(AppPaths.tincanServerLogURL.path)
                 }
                 process.standardOutput = logHandle
                 process.standardError = logHandle
-                process.terminationHandler = { [weak self] _ in
+                process.terminationHandler = { [weak self] terminatedProcess in
                     Task { @MainActor [weak self] in
-                        self?.finishProcessRun()
+                        self?.finishProcessRun(for: terminatedProcess)
                     }
                 }
                 try process.run()
                 self.process = process
+                launchedWithTailscale = enableTailscale
                 writeTrackedProcessID(process.processIdentifier)
                 writeStartupLog("bundled tincan-server started with pid \(process.processIdentifier)")
                 try await waitUntilReady(timeout: 10)
@@ -344,17 +364,23 @@ final class MacBundledTincanServerController {
         } catch {
             writeStartupLog("failed to start bundled tincan-server: \(error.localizedDescription)")
             if process == nil {
-                finishProcessRun()
+                finishProcessRun(for: nil)
             }
             NSLog("Failed to start bundled tincan-server: %@", error.localizedDescription)
+            if enableTailscale {
+                writeStartupLog("falling back to bundled tincan-server without Tailscale")
+                stop()
+                try await startIfNeeded(enableTailscale: false)
+                return
+            }
             throw error
         }
     }
 
-    func restart() async throws {
+    func restart(enableTailscale: Bool) async throws {
         prepareStartupLoggingIfNeeded()
         stop()
-        try await startIfNeeded()
+        try await startIfNeeded(enableTailscale: enableTailscale)
     }
 
     func sendSecretUpdates(_ updates: [String: String]) async throws {
@@ -403,13 +429,13 @@ final class MacBundledTincanServerController {
             } catch {
                 writeStartupLog("failed to resolve bundled tincan-server during stop: \(error.localizedDescription)")
             }
-            finishProcessRun()
+            finishProcessRun(for: nil)
             return
         }
 
         process.terminate()
         process.waitUntilExit()
-        finishProcessRun()
+        finishProcessRun(for: process)
     }
 
     private func reclaimTrackedBundledServerIfNeeded(executableURL: URL) async -> pid_t? {
@@ -838,12 +864,39 @@ final class MacBundledTincanServerController {
         return executablePath
     }
 
-    private func finishProcessRun() {
-        if let process {
-            writeStartupLog("bundled tincan-server exited with status \(process.terminationStatus)")
-            clearTrackedProcessIDIfMatches(process.processIdentifier)
+    nonisolated static func shouldFinishProcessRun(
+        currentProcessIdentifier: pid_t?,
+        terminatedProcessIdentifier: pid_t?
+    ) -> Bool {
+        currentProcessIdentifier == terminatedProcessIdentifier
+    }
+
+    private func finishProcessRun(for terminatedProcess: Process?) {
+        if let process, let terminatedProcess {
+            guard Self.shouldFinishProcessRun(
+                currentProcessIdentifier: process.processIdentifier,
+                terminatedProcessIdentifier: terminatedProcess.processIdentifier
+            ) else {
+                writeStartupLog(
+                    "ignoring stale bundled tincan-server termination for pid \(terminatedProcess.processIdentifier); current pid is \(process.processIdentifier)"
+                )
+                return
+            }
+        }
+
+        if let finishedProcess = terminatedProcess ?? process {
+            if finishedProcess.isRunning {
+                writeStartupLog(
+                    "ignoring bundled tincan-server finish for still-running pid \(finishedProcess.processIdentifier)"
+                )
+                return
+            }
+
+            writeStartupLog("bundled tincan-server exited with status \(finishedProcess.terminationStatus)")
+            clearTrackedProcessIDIfMatches(finishedProcess.processIdentifier)
         }
         process = nil
+        launchedWithTailscale = false
         try? logHandle?.close()
         logHandle = nil
     }

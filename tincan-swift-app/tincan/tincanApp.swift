@@ -30,6 +30,7 @@ struct tincanApp: App {
                 workspace: appModel.workspace,
                 serverSettings: appModel.serverSettings
             )
+            .environmentObject(appModel)
         }
 #endif
     }

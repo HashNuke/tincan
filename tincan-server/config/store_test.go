@@ -251,6 +251,248 @@ func TestNewAppConfigStoreCreatesEmptyFileWhenMissing(t *testing.T) {
 	}
 }
 
+func TestAppConfigStoreLoadsOptionalServerAndTailscaleFieldsAsEmpty(t *testing.T) {
+	tempDir := t.TempDir()
+
+	store, err := NewAppConfigStore(tempDir)
+	if err != nil {
+		t.Fatalf("NewAppConfigStore returned error: %v", err)
+	}
+
+	if serverURL, ok := store.ServerURL(); ok || serverURL != "" {
+		t.Fatalf("expected server_url to be unset, got %q ok=%v", serverURL, ok)
+	}
+	if store.TailscaleEnabled() {
+		t.Fatalf("expected tailscale.enabled to default false")
+	}
+	if nodeURL, ok := store.TailscaleNodeURL(); ok || nodeURL != "" {
+		t.Fatalf("expected tailscale.node_url to be unset, got %q ok=%v", nodeURL, ok)
+	}
+	if snapshot := store.Snapshot(); snapshot.ConnectTo != "local" {
+		t.Fatalf("expected connect_to to default local, got %q", snapshot.ConnectTo)
+	}
+}
+
+func TestAppConfigStoreLoadsConnectToServerURLAndTailscaleFields(t *testing.T) {
+	tempDir := t.TempDir()
+	configDir := filepath.Join(tempDir, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("create config dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "config.json"), []byte(`{
+  "connect_to": " remote ",
+  "server_url": " https://phone.example.ts.net ",
+  "tailscale": {
+    "enabled": true,
+    "node_url": " https://tincan-host.tail.ts.net "
+  }
+}
+`), 0o644); err != nil {
+		t.Fatalf("write config.json: %v", err)
+	}
+
+	store, err := NewAppConfigStore(tempDir)
+	if err != nil {
+		t.Fatalf("NewAppConfigStore returned error: %v", err)
+	}
+
+	if serverURL, ok := store.ServerURL(); !ok || serverURL != "https://phone.example.ts.net" {
+		t.Fatalf("expected server_url to load trimmed value, got %q ok=%v", serverURL, ok)
+	}
+	if snapshot := store.Snapshot(); snapshot.ConnectTo != "remote" {
+		t.Fatalf("expected connect_to to load trimmed value, got %q", snapshot.ConnectTo)
+	}
+	if !store.TailscaleEnabled() {
+		t.Fatalf("expected tailscale.enabled to load true")
+	}
+	if nodeURL, ok := store.TailscaleNodeURL(); !ok || nodeURL != "https://tincan-host.tail.ts.net" {
+		t.Fatalf("expected tailscale.node_url to load trimmed value, got %q ok=%v", nodeURL, ok)
+	}
+}
+
+func TestAppConfigStoreSetServerURLWritesConfig(t *testing.T) {
+	tempDir := t.TempDir()
+
+	store, err := NewAppConfigStore(tempDir)
+	if err != nil {
+		t.Fatalf("NewAppConfigStore returned error: %v", err)
+	}
+	if err := store.SetServerURL(" https://example.ts.net "); err != nil {
+		t.Fatalf("SetServerURL returned error: %v", err)
+	}
+
+	if serverURL, ok := store.ServerURL(); !ok || serverURL != "https://example.ts.net" {
+		t.Fatalf("expected trimmed server_url, got %q ok=%v", serverURL, ok)
+	}
+	data, err := os.ReadFile(filepath.Join(tempDir, "config", "config.json"))
+	if err != nil {
+		t.Fatalf("read config.json: %v", err)
+	}
+	if !bytes.Contains(data, []byte(`"server_url": "https://example.ts.net"`)) {
+		t.Fatalf("expected server_url in config, got %s", string(data))
+	}
+}
+
+func TestAppConfigStoreApplyPatchUpdatesConnectTo(t *testing.T) {
+	tempDir := t.TempDir()
+	store, err := NewAppConfigStore(tempDir)
+	if err != nil {
+		t.Fatalf("NewAppConfigStore returned error: %v", err)
+	}
+
+	err = store.ApplyPatch(map[string]json.RawMessage{
+		"connect_to": json.RawMessage(`"remote"`),
+		"server_url": json.RawMessage(`"https://phone.example.ts.net"`),
+	})
+	if err != nil {
+		t.Fatalf("ApplyPatch returned error: %v", err)
+	}
+
+	if snapshot := store.Snapshot(); snapshot.ConnectTo != "remote" {
+		t.Fatalf("expected connect_to from patch, got %q", snapshot.ConnectTo)
+	}
+}
+
+func TestAppConfigStoreRejectsInvalidConnectTo(t *testing.T) {
+	tempDir := t.TempDir()
+	store, err := NewAppConfigStore(tempDir)
+	if err != nil {
+		t.Fatalf("NewAppConfigStore returned error: %v", err)
+	}
+
+	if err := store.ApplyPatch(map[string]json.RawMessage{
+		"connect_to": json.RawMessage(`"elsewhere"`),
+	}); err == nil {
+		t.Fatalf("expected invalid connect_to patch to fail")
+	}
+}
+
+func TestAppConfigStoreRejectsRemoteConnectToWithoutServerURL(t *testing.T) {
+	tempDir := t.TempDir()
+	store, err := NewAppConfigStore(tempDir)
+	if err != nil {
+		t.Fatalf("NewAppConfigStore returned error: %v", err)
+	}
+
+	if err := store.ApplyPatch(map[string]json.RawMessage{
+		"connect_to": json.RawMessage(`"remote"`),
+	}); err == nil {
+		t.Fatalf("expected remote connect_to without server_url to fail")
+	}
+}
+
+func TestAppConfigStoreRejectsInvalidServerURL(t *testing.T) {
+	tempDir := t.TempDir()
+	store, err := NewAppConfigStore(tempDir)
+	if err != nil {
+		t.Fatalf("NewAppConfigStore returned error: %v", err)
+	}
+
+	for _, value := range []string{"https:///missing-host", "ftp://example.com", "/relative"} {
+		t.Run(value, func(t *testing.T) {
+			if err := store.SetServerURL(value); err == nil {
+				t.Fatalf("expected SetServerURL(%q) to fail", value)
+			}
+		})
+	}
+}
+
+func TestAppConfigStoreSetTailscaleBootstrapResult(t *testing.T) {
+	tempDir := t.TempDir()
+	store, err := NewAppConfigStore(tempDir)
+	if err != nil {
+		t.Fatalf("NewAppConfigStore returned error: %v", err)
+	}
+
+	if err := store.SetTailscaleBootstrapResult(" https://tincan-host.tail.ts.net "); err != nil {
+		t.Fatalf("SetTailscaleBootstrapResult returned error: %v", err)
+	}
+
+	if !store.TailscaleEnabled() {
+		t.Fatalf("expected tailscale.enabled true")
+	}
+	if nodeURL, ok := store.TailscaleNodeURL(); !ok || nodeURL != "https://tincan-host.tail.ts.net" {
+		t.Fatalf("expected tailscale.node_url to be stored, got %q ok=%v", nodeURL, ok)
+	}
+}
+
+func TestAppConfigStoreSetTailscaleDisabledKeepsNodeURL(t *testing.T) {
+	tempDir := t.TempDir()
+	store, err := NewAppConfigStore(tempDir)
+	if err != nil {
+		t.Fatalf("NewAppConfigStore returned error: %v", err)
+	}
+	if err := store.SetTailscaleBootstrapResult("https://tincan-host.tail.ts.net"); err != nil {
+		t.Fatalf("SetTailscaleBootstrapResult returned error: %v", err)
+	}
+	if err := store.SetTailscaleDisabled(); err != nil {
+		t.Fatalf("SetTailscaleDisabled returned error: %v", err)
+	}
+
+	if store.TailscaleEnabled() {
+		t.Fatalf("expected tailscale.enabled false")
+	}
+	if nodeURL, ok := store.TailscaleNodeURL(); !ok || nodeURL != "https://tincan-host.tail.ts.net" {
+		t.Fatalf("expected tailscale.node_url to be preserved, got %q ok=%v", nodeURL, ok)
+	}
+}
+
+func TestAppConfigStoreRejectsInvalidTailscaleNodeURL(t *testing.T) {
+	tempDir := t.TempDir()
+	store, err := NewAppConfigStore(tempDir)
+	if err != nil {
+		t.Fatalf("NewAppConfigStore returned error: %v", err)
+	}
+
+	for _, value := range []string{"http://tincan-host.tail.ts.net", "https://tincan-host.tail.ts.net:443", "https:///missing-host"} {
+		t.Run(value, func(t *testing.T) {
+			if err := store.SetTailscaleNodeURL(value); err == nil {
+				t.Fatalf("expected SetTailscaleNodeURL(%q) to fail", value)
+			}
+		})
+	}
+}
+
+func TestAppConfigStoreApplyPatchUpdatesTailscaleFields(t *testing.T) {
+	tempDir := t.TempDir()
+	store, err := NewAppConfigStore(tempDir)
+	if err != nil {
+		t.Fatalf("NewAppConfigStore returned error: %v", err)
+	}
+
+	err = store.ApplyPatch(map[string]json.RawMessage{
+		"server_url": json.RawMessage(`"https://phone.example.ts.net"`),
+		"tailscale":  json.RawMessage(`{"enabled":true,"node_url":"https://tincan-host.tail.ts.net"}`),
+	})
+	if err != nil {
+		t.Fatalf("ApplyPatch returned error: %v", err)
+	}
+
+	if serverURL, ok := store.ServerURL(); !ok || serverURL != "https://phone.example.ts.net" {
+		t.Fatalf("expected server_url from patch, got %q ok=%v", serverURL, ok)
+	}
+	if !store.TailscaleEnabled() {
+		t.Fatalf("expected tailscale.enabled true from patch")
+	}
+	if nodeURL, ok := store.TailscaleNodeURL(); !ok || nodeURL != "https://tincan-host.tail.ts.net" {
+		t.Fatalf("expected tailscale.node_url from patch, got %q ok=%v", nodeURL, ok)
+	}
+}
+
+func TestAppConfigStoreApplyPatchRejectsUnknownTailscaleRelatedFields(t *testing.T) {
+	tempDir := t.TempDir()
+	store, err := NewAppConfigStore(tempDir)
+	if err != nil {
+		t.Fatalf("NewAppConfigStore returned error: %v", err)
+	}
+
+	if err := store.ApplyPatch(map[string]json.RawMessage{
+		"tailscale_node_url": json.RawMessage(`"https://tincan-host.tail.ts.net"`),
+	}); err == nil {
+		t.Fatalf("expected unknown tailscale field patch to fail")
+	}
+}
+
 func TestAppConfigStoreLoadsAndUpdatesRouterProfile(t *testing.T) {
 	tempDir := t.TempDir()
 	configDir := filepath.Join(tempDir, "config")
