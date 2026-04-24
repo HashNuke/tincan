@@ -139,28 +139,30 @@ Required fields:
 ```json
 {
   "server_url": "https://remote-tincan-server.example.com",
-  "tailscale_enabled": true,
-  "tailscale_node_url": "https://tincan-akashs-macbook-air.tailnet-name.ts.net"
+  "tailscale": {
+    "enabled": true,
+    "node_url": "https://tincan-akashs-macbook-air.tailnet-name.ts.net"
+  }
 }
 ```
 
 Field meanings:
 
 - `server_url`: server this app instance should connect to on startup. This is used by iOS and by the Mac `Connect to remote server` card. It is not the URL where the Mac-hosted bundled server advertises itself.
-- `tailscale_enabled`: user intent for Mac-hosted phone connectivity
-- `tailscale_node_url`: last known Tailscale HTTPS URL where this Mac-hosted bundled server is reachable
+- `tailscale.enabled`: user intent for Mac-hosted phone connectivity
+- `tailscale.node_url`: last known Tailscale HTTPS URL where this Mac-hosted bundled server is reachable
 
 Validation:
 
 - `server_url` must be a full `http` or `https` URL
-- `tailscale_node_url` must be a full `https` URL
-- `tailscale_node_url` should not include an explicit port
+- `tailscale.node_url` must be a full `https` URL
+- `tailscale.node_url` should not include an explicit port
 - trim whitespace before storing
 
 When disabling `Connect phone`:
 
-- set `tailscale_enabled = false`
-- keep `tailscale_node_url` as the last known value
+- set `tailscale.enabled = false`
+- keep `tailscale.node_url` as the last known value
 - restart `tincan-server run`
 
 No legacy or fallback config implementations should be kept as parallel behavior.
@@ -181,8 +183,8 @@ No legacy or fallback config implementations should be kept as parallel behavior
 10. strip a trailing `.` before using it
 11. construct `https://<fqdn>`
 12. persist:
-    - `tailscale_enabled = true`
-    - `tailscale_node_url = "https://<fqdn>"`
+    - `tailscale.enabled = true`
+    - `tailscale.node_url = "https://<fqdn>"`
 13. emit stable machine-readable output
 14. exit successfully
 
@@ -221,7 +223,7 @@ The setup command should still allow Tailscale's own logs to appear, because tho
    - fetch `srv.CertDomains()`
    - pick the `.ts.net` domain
    - strip a trailing `.`
-   - refresh `tailscale_node_url` in `config.json` if it changed
+   - refresh `tailscale.node_url` in `config.json` if it changed
 6. if Tailscale runtime fails:
    - return startup failure to the Mac app
    - the Mac app restarts `tincan-server run` without `--tailscale`
@@ -246,7 +248,7 @@ Health response shape:
   "status": "ok",
   "agent_profile_count": 3,
   "tailscale": {
-    "configured": true,
+    "enabled": true,
     "active": false,
     "node_url": "https://tincan-akashs-macbook-air.tailnet-name.ts.net",
     "message": "Could not start with Tailscale. Please ensure Tailscale is running."
@@ -266,7 +268,7 @@ https://tincan-akashs-macbook-air.tailnet-name.ts.net
 
 The scanned QR payload must be saved as `server_url` only after the health-check retry succeeds.
 
-For the Mac `Run on this computer` card, the QR payload comes from `tailscale_node_url`.
+For the Mac `Run on this computer` card, the QR payload comes from `tailscale.node_url`.
 
 ## Swift Ownership
 
@@ -293,8 +295,8 @@ Add a dedicated Swift local config store for `config.json`.
 It owns:
 
 - `server_url`
-- `tailscale_enabled`
-- `tailscale_node_url`
+- `tailscale.enabled`
+- `tailscale.node_url`
 
 Follow the load/save style used by `TincanSpeechSettingsStore.swift`, but keep this store separate from speech settings.
 
@@ -354,7 +356,7 @@ Work through this in order. Each checkbox is intended to be a small, reviewable 
 - [ ] Attempt embedded Tailscale runtime only when `--tailscale` is present.
 - [ ] Return startup failure if `--tailscale` is present and Tailscale startup fails; the Mac app owns the fallback restart without `--tailscale`.
 - [ ] Store runtime Tailscale state on the server struct for `/healthz`.
-- [ ] Refresh `tailscale_node_url` when Tailscale runtime starts and discovers a different `.ts.net` URL.
+- [ ] Refresh `tailscale.node_url` when Tailscale runtime starts and discovers a different `.ts.net` URL.
 - [ ] Add or update command dispatch tests next to this change:
   - missing subcommand
   - unknown subcommand
@@ -366,13 +368,14 @@ Work through this in order. Each checkbox is intended to be a small, reviewable 
 
 - [ ] Add fields to `AppConfigStore`:
   - `serverURL string`
-  - `tailscaleEnabled bool`
-  - `tailscaleNodeURL string`
+  - `tailscale AppConfigTailscale`
+- [ ] Add `AppConfigTailscale` with fields:
+  - `Enabled bool json:"enabled,omitempty"`
+  - `NodeURL string json:"node_url,omitempty"`
 - [ ] Add fields to `AppConfigSnapshot`:
-  - `ServerURL string json:"server_url,omitempty"`
-  - `TailscaleEnabled bool json:"tailscale_enabled,omitempty"`
-  - `TailscaleNodeURL string json:"tailscale_node_url,omitempty"`
-- [ ] Update `decodeAppConfig` to parse the three fields.
+  - `ServerURL string` with JSON key `server_url`
+  - `Tailscale AppConfigTailscale` with JSON key `tailscale`
+- [ ] Update `decodeAppConfig` to parse `server_url` and the nested `tailscale` object.
 - [ ] Add `ServerURL() (string, bool)`.
 - [ ] Add `TailscaleEnabled() bool`.
 - [ ] Add `TailscaleNodeURL() (string, bool)`.
@@ -380,17 +383,16 @@ Work through this in order. Each checkbox is intended to be a small, reviewable 
 - [ ] Add `SetTailscaleEnabled(value bool) error`.
 - [ ] Add `SetTailscaleNodeURL(value string) error`.
 - [ ] Add `SetTailscaleBootstrapResult(nodeURL string) error` that writes:
-  - `tailscale_enabled = true`
-  - `tailscale_node_url = nodeURL`
+  - `tailscale.enabled = true`
+  - `tailscale.node_url = nodeURL`
 - [ ] Add `SetTailscaleDisabled() error` that writes:
-  - `tailscale_enabled = false`
-  - preserves `tailscale_node_url`
+  - `tailscale.enabled = false`
+  - preserves `tailscale.node_url`
 - [ ] Extend `ApplyPatch` for:
   - `server_url`
-  - `tailscale_enabled`
-  - `tailscale_node_url`
+  - `tailscale`
 - [ ] Validate `server_url` as a full `http` or `https` URL with a host.
-- [ ] Validate `tailscale_node_url` as a full `https` URL with a host and no explicit port.
+- [ ] Validate `tailscale.node_url` as a full `https` URL with a host and no explicit port.
 - [ ] Trim whitespace before storing URL fields.
 - [ ] Preserve unrelated keys when writing.
 - [ ] Add or update config tests next to this change:
@@ -413,11 +415,11 @@ Work through this in order. Each checkbox is intended to be a small, reviewable 
   - empty host
   - unsupported scheme
   - relative string
-- [ ] Add a test that `tailscale_enabled` loads from `config/config.json`.
+- [ ] Add a test that `tailscale.enabled` loads from `config/config.json`.
 - [ ] Add a test that `SetTailscaleBootstrapResult("https://tincan-host.tail.ts.net")` writes both Tailscale fields.
-- [ ] Add a test that `SetTailscaleDisabled()` sets `tailscale_enabled = false` without deleting `tailscale_node_url`.
-- [ ] Add a test that `tailscale_node_url` rejects non-HTTPS URLs.
-- [ ] Add a test that `tailscale_node_url` rejects explicit ports.
+- [ ] Add a test that `SetTailscaleDisabled()` sets `tailscale.enabled = false` without deleting `tailscale.node_url`.
+- [ ] Add a test that `tailscale.node_url` rejects non-HTTPS URLs.
+- [ ] Add a test that `tailscale.node_url` rejects explicit ports.
 - [ ] Add a test that patching unknown fields still fails.
 
 ### Phase 2: Go Tailscale Setup and Runtime
@@ -489,7 +491,7 @@ Work through this in order. Each checkbox is intended to be a small, reviewable 
 
 - [ ] Add Tailscale runtime state to the server struct.
 - [ ] Update `handleHealth` to include:
-  - `tailscale.configured`
+  - `tailscale.enabled`
   - `tailscale.active`
   - `tailscale.node_url`
   - `tailscale.message`
@@ -508,8 +510,8 @@ Work through this in order. Each checkbox is intended to be a small, reviewable 
 - [ ] Preserve unrelated JSON keys when saving.
 - [ ] Expose published state:
   - `serverURL: URL?`
-  - `tailscaleEnabled: Bool`
-  - `tailscaleNodeURL: URL?`
+  - `tailscaleEnabled: Bool` mapped to `tailscale.enabled`
+  - `tailscaleNodeURL: URL?` mapped to `tailscale.node_url`
 - [ ] Add `reload()`.
 - [ ] Add `setServerURL(_ url: URL) throws`.
 - [ ] Add `setTailscaleEnabled(_ enabled: Bool) throws`.
@@ -535,13 +537,13 @@ Work through this in order. Each checkbox is intended to be a small, reviewable 
 - [ ] Test loading empty config.
 - [ ] Test loading existing `server_url`.
 - [ ] Test saving `server_url`.
-- [ ] Test saving `tailscale_enabled`.
-- [ ] Test saving `tailscale_node_url`.
-- [ ] Test bootstrap result writes `tailscale_enabled = true` and `tailscale_node_url`.
-- [ ] Test disabling keeps `tailscale_node_url`.
+- [ ] Test saving `tailscale.enabled`.
+- [ ] Test saving `tailscale.node_url`.
+- [ ] Test bootstrap result writes `tailscale.enabled = true` and `tailscale.node_url`.
+- [ ] Test disabling keeps `tailscale.node_url`.
 - [ ] Test unrelated config keys are preserved.
 - [ ] Test invalid `server_url` is rejected.
-- [ ] Test invalid `tailscale_node_url` is rejected.
+- [ ] Test invalid `tailscale.node_url` is rejected.
 
 #### `tincan-swift-app/tincan/TincanServerSettings.swift`
 
@@ -581,13 +583,13 @@ Work through this in order. Each checkbox is intended to be a small, reviewable 
 
 - [ ] Extend `HealthResponse` with nested `TailscaleHealth`.
 - [ ] Decode:
-  - `configured`
-  - `active`
-  - `node_url`
-  - `message`
-- [ ] Require the final health response to include `tailscale`.
+  - `tailscale.enabled`
+  - `tailscale.active`
+  - `tailscale.node_url`
+  - `tailscale.message`
+- [ ] Require the final health response to include the nested `tailscale` object.
 - [ ] Add health decoding tests next to this change:
-  - `tailscale.configured = false`
+  - `tailscale.enabled = false`
   - active Tailscale state
   - inactive fallback message
 
@@ -661,10 +663,10 @@ Work through this in order. Each checkbox is intended to be a small, reviewable 
   - restart bundled server
   - refresh `/healthz`
 - [ ] When `Connect phone` is disabled:
-  - write `tailscale_enabled = false`
+  - write `tailscale.enabled = false`
   - restart bundled server without `--tailscale`
   - clear transient setup state
-- [ ] On app startup, start bundled server according to `tailscale_enabled` from config.
+- [ ] On app startup, start bundled server according to `tailscale.enabled` from config.
 
 #### `tincan-swift-app/tincan/AppPaths.swift`
 
@@ -778,11 +780,11 @@ bin/build-and-run mac
 - [ ] Use `Open link` and approve the node.
 - [ ] Confirm the setup UI transitions to QR code plus URL.
 - [ ] Confirm `config.json` contains:
-  - `tailscale_enabled: true`
-  - `tailscale_node_url: https://...ts.net`
+  - `tailscale.enabled: true`
+  - `tailscale.node_url: https://...ts.net`
 - [ ] Confirm main server restarts after setup.
 - [ ] Confirm `/healthz` reports:
-  - `tailscale.configured = true`
+  - `tailscale.enabled = true`
   - `tailscale.active = true`
   - `tailscale.node_url = https://...ts.net`
 - [ ] Scan the QR code on iPhone.
@@ -796,7 +798,7 @@ These are the known gaps between the current code and this plan:
 - `Connect phone` is still stored in `UserDefaults`
 - `setup-tailscale` is not launched as a separate Mac setup process
 - setup/runtime state is currently based on a status file
-- `config.json` does not yet contain `server_url`, `tailscale_enabled`, or `tailscale_node_url`
+- `config.json` does not yet contain `server_url` or the nested `tailscale` object
 - `/healthz` does not report Tailscale runtime state
 - setup currently reports/assumes port `443`; master notes require setup on port `80`
 - QR payload currently uses `tincan://connect?...`; required payload is the direct server URL
