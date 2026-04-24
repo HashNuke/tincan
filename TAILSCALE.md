@@ -106,6 +106,23 @@ tincan-server setup-tailscale
 
 No default implicit startup path should remain once the CLI split is implemented.
 
+## tsnet References
+
+Use these Tailscale docs as the implementation reference:
+
+- `https://tailscale.com/docs/features/tsnet#include-tsnet-in-your-program`
+- `https://tailscale.com/docs/features/tsnet/how-to/create-basic-tsnet-app`
+
+The runtime server should follow the documented `tsnet.Server` listener pattern:
+
+1. create `tsnet.Server` with the derived hostname and persistent state directory
+2. create a listener with `srv.Listen("tcp", addr)`
+3. obtain `srv.LocalClient()`
+4. when `addr == ":443"`, wrap the listener with `tls.NewListener` using `LocalClient.GetCertificate`
+5. serve the existing tincan HTTP handler with `http.Serve`
+
+Do not use `ListenTLS` for the planned implementation. The intended implementation follows the docs above.
+
 ## Tailscale Hostname
 
 The tsnet hostname must be derived from the machine hostname:
@@ -133,6 +150,14 @@ tincan-akashs-macbook-air
 ## Config Model
 
 Use `config.json` as the source of truth. Do not use `UserDefaults` as the source of truth for these values.
+
+The app passes `--data-dir <AppPaths.appSupportDirectory.path>` to `tincan-server`. The config file path for both the Swift app and Go server is:
+
+```text
+<data-dir>/config/config.json
+```
+
+In Swift, this is exposed as `AppPaths.generatedAppConfigURL`.
 
 Required fields:
 
@@ -174,19 +199,18 @@ No legacy or fallback config implementations should be kept as parallel behavior
 1. resolve the data directory
 2. derive the Tailscale hostname
 3. create or reuse the tsnet state directory
-4. start the tsnet setup server on port `80`
-5. call `srv.Up(ctx)`
-6. surface login URLs through stdout/stderr
-7. wait until the node is approved or already approved
-8. fetch `srv.CertDomains()`
-9. pick the domain containing `.ts.net`
-10. strip a trailing `.` before using it
-11. construct `https://<fqdn>`
-12. persist:
+4. start a tsnet listener on port `80` using the documented `srv.Listen("tcp", ":80")` pattern
+5. surface login URLs through stdout/stderr
+6. wait until the node is approved or already approved
+7. fetch `srv.CertDomains()`
+8. pick the domain containing `.ts.net`
+9. strip a trailing `.` before using it
+10. construct `https://<fqdn>`
+11. persist:
     - `tailscale.enabled = true`
     - `tailscale.node_url = "https://<fqdn>"`
-13. emit stable machine-readable output
-14. exit successfully
+12. emit stable machine-readable output
+13. exit successfully
 
 The command must handle both approval flows:
 
@@ -217,7 +241,7 @@ The setup command should still allow Tailscale's own logs to appear, because tho
 1. start the local HTTP server as today
 2. read `config.json`
 3. run local-only unless `--tailscale` is passed
-4. if `--tailscale` is passed, attempt embedded tsnet runtime on port `443`
+4. if `--tailscale` is passed, attempt embedded tsnet runtime on port `443` using the documented `srv.Listen("tcp", ":443")` plus `tls.NewListener(..., GetCertificate: lc.GetCertificate)` pattern
 5. if Tailscale runtime starts successfully:
    - serve the tincan API over Tailscale HTTPS
    - fetch `srv.CertDomains()`
@@ -225,9 +249,11 @@ The setup command should still allow Tailscale's own logs to appear, because tho
    - strip a trailing `.`
    - refresh `tailscale.node_url` in `config.json` if it changed
 6. if Tailscale runtime fails:
-   - return startup failure to the Mac app
-   - the Mac app restarts `tincan-server run` without `--tailscale`
-   - the fallback run still reads config and exposes that Tailscale is configured but inactive
+   - fail this `tincan-server run --tailscale` process
+   - do not silently continue as local-only inside the server process
+   - return a non-zero startup failure to the Mac app
+   - the Mac app may then start a new `tincan-server run` process without `--tailscale`
+   - the second local-only run still reads config and exposes that Tailscale is configured but inactive
 
 There is no `--no-tailscale` flag. Tailscale is opt-in through `--tailscale`.
 
@@ -354,7 +380,8 @@ Work through this in order. Each checkbox is intended to be a small, reviewable 
 - [ ] Start the local HTTP server exactly as today.
 - [ ] Read `config.json` through `AppConfigStore`.
 - [ ] Attempt embedded Tailscale runtime only when `--tailscale` is present.
-- [ ] Return startup failure if `--tailscale` is present and Tailscale startup fails; the Mac app owns the fallback restart without `--tailscale`.
+- [ ] If `--tailscale` is present and Tailscale startup/listen fails, exit this server process with an error; do not continue local-only inside the same process.
+- [ ] Let the Mac app own the fallback restart by launching a fresh `tincan-server run` process without `--tailscale`.
 - [ ] Store runtime Tailscale state on the server struct for `/healthz`.
 - [ ] Refresh `tailscale.node_url` when Tailscale runtime starts and discovers a different `.ts.net` URL.
 - [ ] Add or update command dispatch tests next to this change:
@@ -363,6 +390,7 @@ Work through this in order. Each checkbox is intended to be a small, reviewable 
   - `run`
   - `setup-tailscale`
   - `run --tailscale`
+  - `run --tailscale` returns an error when Tailscale startup/listen fails
 
 #### `tincan-server/config/app_config.go`
 
@@ -441,11 +469,15 @@ Work through this in order. Each checkbox is intended to be a small, reviewable 
   - `NodeURL string`
   - `Message string`
 - [ ] Start tsnet runtime on `:443` only.
-- [ ] Use `srv.ListenTLS("tcp", ":443")`.
+- [ ] Use the documented listener pattern:
+  - `ln, err := srv.Listen("tcp", ":443")`
+  - `lc, err := srv.LocalClient()`
+  - wrap with `tls.NewListener(ln, &tls.Config{GetCertificate: lc.GetCertificate})`
+  - serve the existing tincan mux over the wrapped listener
 - [ ] On successful runtime startup, mark runtime state active.
 - [ ] On startup/listen failure, mark runtime state inactive with message:
   - `Could not start with Tailscale. Please ensure Tailscale is running.`
-- [ ] When `--tailscale` startup fails, return an error so the Mac app can restart without `--tailscale`.
+- [ ] When `--tailscale` startup/listen fails, return an error and let the process exit non-zero.
 - [ ] Add or update Tailscale helper tests next to this change:
   - `TestNormalizeTailscaleHostname`
   - `TestSelectTailscaleNodeURLSelectsTSNetDomain`
@@ -459,12 +491,12 @@ Work through this in order. Each checkbox is intended to be a small, reviewable 
 - [ ] Parse `--data-dir`.
 - [ ] Remove `--tailscale-status-file`.
 - [ ] Emit `TINCAN_TAILSCALE_STATUS=starting` before tsnet startup.
-- [ ] Start the tsnet setup server on port `80`; do not use `443` in `setup-tailscale`.
+- [ ] Start the tsnet setup listener with `srv.Listen("tcp", ":80")`; do not use `443` in `setup-tailscale`.
 - [ ] Use `tsnet.Server.UserLogf` to detect `https://login.tailscale.com/a/...`.
 - [ ] When a login URL is detected, emit:
   - `TINCAN_TAILSCALE_STATUS=needs_login`
   - `TINCAN_TAILSCALE_AUTH_URL=<url>`
-- [ ] After `srv.Up(ctx)` succeeds, call `srv.CertDomains()`.
+- [ ] After the setup listener is running and the node is approved, call `srv.CertDomains()`.
 - [ ] Resolve the canonical node URL through `selectTailscaleNodeURL`.
 - [ ] Persist the setup result through `AppConfigStore.SetTailscaleBootstrapResult(nodeURL)`.
 - [ ] Emit `TINCAN_TAILSCALE_STATUS=running`.
@@ -554,6 +586,11 @@ Work through this in order. Each checkbox is intended to be a small, reviewable 
 - [ ] Keep `serverBaseURL`, `liveUpdatesURL`, and `liveUpdatesOriginHeaderValue` computed from `serverURL`.
 - [ ] Add a draft URL string used by settings UI.
 - [ ] Add `applyServerURLDraft()` that validates URL syntax but does not save until health succeeds.
+- [ ] Implement health retry through injected dependencies:
+  - `healthChecker: (URL) async throws -> HealthResponse`
+  - `retryPolicy` containing max duration, interval, and max attempts
+  - production policy: 5 second interval, 60 second maximum duration
+  - unit-test policy: one attempt, zero delay
 - [ ] Add health-check retry behavior:
   - request `/healthz`
   - retry every 5 seconds
@@ -574,8 +611,8 @@ Work through this in order. Each checkbox is intended to be a small, reviewable 
 - [ ] Replace scheme/host/port persistence tests with `server_url` tests.
 - [ ] Test valid direct URL parsing.
 - [ ] Test invalid direct URL parsing.
-- [ ] Test save-after-health-success.
-- [ ] Test no-save-after-health-timeout.
+- [ ] Test save-after-health-success using an injected fake health checker; do not make a real network call.
+- [ ] Test no-save-after-health-timeout using a one-attempt retry policy with a failing fake health checker.
 - [ ] Test websocket URL derives `wss` from HTTPS.
 - [ ] Test connection revision increments after successful save.
 
@@ -642,7 +679,8 @@ Work through this in order. Each checkbox is intended to be a small, reviewable 
 - [ ] Keep `--data-dir`.
 - [ ] Keep `--port`.
 - [ ] Pass `--tailscale` only when local config says Tailscale is enabled.
-- [ ] If launching with `--tailscale` fails, restart with the same base arguments without `--tailscale`.
+- [ ] If launching with `--tailscale` fails or exits before readiness, restart with the same base arguments without `--tailscale`.
+- [ ] Treat that second launch as a new process; do not expect server-side fallback behavior.
 - [ ] Update tests or helper assertions that inspect process arguments.
 - [ ] Keep local server readiness check against loopback `/healthz`.
 - [ ] Add bundled server argument tests next to this change:
