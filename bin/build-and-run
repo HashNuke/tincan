@@ -1,0 +1,192 @@
+#!/usr/bin/env zsh
+
+set -euo pipefail
+
+ROOT_DIR=$(cd -- "$(dirname -- "$0")/.." && pwd)
+PROJECT_DIR="$ROOT_DIR/tincan-swift-app"
+PROJECT_PATH="$PROJECT_DIR/tincan.xcodeproj"
+SCHEME="tincan"
+CONFIGURATION="Debug"
+
+usage() {
+  print "Usage: bin/build-and-run mac|ios|all"
+}
+
+require_tool() {
+  local tool="$1"
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    print -u2 "Missing required tool: $tool"
+    exit 1
+  fi
+}
+
+build_settings() {
+  local destination="$1"
+  xcodebuild \
+    -project "$PROJECT_PATH" \
+    -scheme "$SCHEME" \
+    -configuration "$CONFIGURATION" \
+    -destination "$destination" \
+    -showBuildSettings
+}
+
+build_app() {
+  local destination="$1"
+  xcodebuild \
+    -project "$PROJECT_PATH" \
+    -scheme "$SCHEME" \
+    -configuration "$CONFIGURATION" \
+    -destination "$destination" \
+    build
+}
+
+build_setting_value() {
+  local settings="$1"
+  local key="$2"
+  print -r -- "$settings" | awk -F' = ' -v key="$key" '$1 ~ "^[[:space:]]*" key "$" { print $2; exit }'
+}
+
+resolve_app_path() {
+  local destination="$1"
+  local settings
+  settings=$(build_settings "$destination")
+
+  local target_build_dir
+  target_build_dir=$(build_setting_value "$settings" "TARGET_BUILD_DIR")
+
+  local full_product_name
+  full_product_name=$(build_setting_value "$settings" "FULL_PRODUCT_NAME")
+
+  if [[ -z "$target_build_dir" || -z "$full_product_name" ]]; then
+    print -u2 "Failed to resolve app path for destination: $destination"
+    exit 1
+  fi
+
+  print -- "$target_build_dir/$full_product_name"
+}
+
+resolve_bundle_id() {
+  local destination="$1"
+  local settings
+  settings=$(build_settings "$destination")
+
+  local bundle_id
+  bundle_id=$(build_setting_value "$settings" "PRODUCT_BUNDLE_IDENTIFIER")
+
+  if [[ -z "$bundle_id" ]]; then
+    print -u2 "Failed to resolve product bundle identifier."
+    exit 1
+  fi
+
+  print -- "$bundle_id"
+}
+
+connected_iphone_json() {
+  local devices_json="$1"
+  ruby -rjson -e '
+    data = JSON.parse(File.read(ARGV[0]))
+    device = data.fetch("result", {}).fetch("devices", []).find do |candidate|
+      hardware = candidate.fetch("hardwareProperties", {})
+      connection = candidate.fetch("connectionProperties", {})
+      device_props = candidate.fetch("deviceProperties", {})
+
+      hardware["deviceType"] == "iPhone" &&
+        hardware["platform"] == "iOS" &&
+        hardware["reality"] == "physical" &&
+        connection["pairingState"] == "paired" &&
+        connection["tunnelState"] == "connected" &&
+        device_props["ddiServicesAvailable"] == true
+    end
+
+    if device
+      puts JSON.generate({
+        "name" => device.dig("deviceProperties", "name"),
+        "udid" => device.dig("hardwareProperties", "udid")
+      })
+    end
+  ' "$devices_json"
+}
+
+build_and_run_mac() {
+  local destination="platform=macOS"
+  local app_path
+  app_path=$(resolve_app_path "$destination")
+
+  print "Building macOS app..."
+  build_app "$destination"
+
+  print "Launching $app_path"
+  pkill -x tincan >/dev/null 2>&1 || true
+  open "$app_path"
+}
+
+build_and_run_ios() {
+  local devices_json
+  devices_json=$(mktemp -t tincan-devices.XXXXXX.json)
+ 
+  xcrun devicectl list devices --json-output "$devices_json" >/dev/null
+
+  local iphone_json
+  iphone_json=$(connected_iphone_json "$devices_json")
+
+  if [[ -z "$iphone_json" ]]; then
+    print "No connected physical iPhone with developer services available. Skipping iOS build."
+    rm -f "$devices_json"
+    return 0
+  fi
+
+  local iphone_name
+  iphone_name=$(print -r -- "$iphone_json" | ruby -rjson -e 'puts JSON.parse(STDIN.read).fetch("name")')
+
+  local iphone_udid
+  iphone_udid=$(print -r -- "$iphone_json" | ruby -rjson -e 'puts JSON.parse(STDIN.read).fetch("udid")')
+
+  local destination="id=$iphone_udid"
+  local app_path
+  app_path=$(resolve_app_path "$destination")
+
+  local bundle_id
+  bundle_id=$(resolve_bundle_id "$destination")
+
+  print "Building iOS app for $iphone_name..."
+  build_app "$destination"
+
+  print "Installing $app_path on $iphone_name"
+  xcrun devicectl device install app --device "$iphone_udid" "$app_path"
+
+  print "Launching $bundle_id on $iphone_name"
+  xcrun devicectl device process launch --device "$iphone_udid" --terminate-existing "$bundle_id"
+
+  rm -f "$devices_json"
+}
+
+main() {
+  if [[ $# -ne 1 ]]; then
+    usage
+    exit 1
+  fi
+
+  require_tool xcodebuild
+  require_tool xcrun
+  require_tool ruby
+  require_tool awk
+
+  case "$1" in
+    mac)
+      build_and_run_mac
+      ;;
+    ios)
+      build_and_run_ios
+      ;;
+    all)
+      build_and_run_mac
+      build_and_run_ios
+      ;;
+    *)
+      usage
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"
