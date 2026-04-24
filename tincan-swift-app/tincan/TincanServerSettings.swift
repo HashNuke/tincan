@@ -3,6 +3,26 @@ import Foundation
 
 @MainActor
 final class ServerConnectionStore: ObservableObject {
+    enum Scheme: String, CaseIterable, Identifiable {
+        case http
+        case https
+
+        var id: String { rawValue }
+
+        var title: String {
+            rawValue.uppercased()
+        }
+
+        var websocketScheme: String {
+            switch self {
+            case .http:
+                return "ws"
+            case .https:
+                return "wss"
+            }
+        }
+    }
+
     enum ConnectionMode: String, CaseIterable, Identifiable {
         case localMac
         case remote
@@ -36,8 +56,10 @@ final class ServerConnectionStore: ObservableObject {
     }
 
     @Published private(set) var connectionMode: ConnectionMode
+    @Published var draftScheme: Scheme
     @Published var draftHost: String
     @Published var draftPort: String
+    @Published private(set) var configuredScheme: Scheme
     @Published private(set) var configuredRemoteHost: String
     @Published private(set) var configuredPort: Int
     @Published private(set) var hasExplicitEndpointConfiguration: Bool
@@ -47,6 +69,7 @@ final class ServerConnectionStore: ObservableObject {
     private let defaults: UserDefaults
 
     private static let connectionModeKey = "server_connection_mode"
+    private static let configuredSchemeKey = "server_configured_scheme"
     private static let configuredHostKey = "server_configured_host"
     private static let configuredPortKey = "server_configured_port"
     private static let legacyBackendURLKey = "backend_url"
@@ -55,9 +78,11 @@ final class ServerConnectionStore: ObservableObject {
         self.defaults = defaults
 
         let persistedEndpoint = Self.loadPersistedEndpoint(defaults: defaults)
+        configuredScheme = persistedEndpoint.scheme
         configuredRemoteHost = persistedEndpoint.host
         configuredPort = persistedEndpoint.port
         hasExplicitEndpointConfiguration = persistedEndpoint.isExplicit
+        draftScheme = persistedEndpoint.scheme
         draftHost = persistedEndpoint.host
         draftPort = String(persistedEndpoint.port)
 
@@ -73,6 +98,7 @@ final class ServerConnectionStore: ObservableObject {
     }
 
     var serverBaseURL: URL? {
+        let scheme = effectiveScheme
         let host = effectiveHost
         let port = effectivePort
 
@@ -81,7 +107,7 @@ final class ServerConnectionStore: ObservableObject {
         }
 
         var components = URLComponents()
-        components.scheme = "http"
+        components.scheme = scheme.rawValue
         components.host = host
         components.port = port
         return components.url
@@ -96,7 +122,7 @@ final class ServerConnectionStore: ObservableObject {
               var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
             return nil
         }
-        components.scheme = components.scheme == "https" ? "wss" : "ws"
+        components.scheme = effectiveScheme.websocketScheme
         components.path = "/api/v1/live"
         components.query = nil
         components.fragment = nil
@@ -116,11 +142,11 @@ final class ServerConnectionStore: ObservableObject {
     }
 
     var shareableConnectionLabel: String {
-        "\(shareableHost):\(effectivePort)"
+        "\(effectiveScheme.rawValue)://\(shareableHost):\(effectivePort)"
     }
 
     var qrPayload: String {
-        "tincan://connect?host=\(shareableHost)&port=\(effectivePort)"
+        "tincan://connect?scheme=\(effectiveScheme.rawValue)&host=\(shareableHost)&port=\(effectivePort)"
     }
 
     func setConnectionMode(_ mode: ConnectionMode) {
@@ -137,6 +163,7 @@ final class ServerConnectionStore: ObservableObject {
             return false
         }
 
+        configuredScheme = draftScheme
         configuredRemoteHost = host
         configuredPort = port
         hasExplicitEndpointConfiguration = true
@@ -170,8 +197,17 @@ final class ServerConnectionStore: ObservableObject {
     }
 
     private func persistEndpoint() {
+        defaults.set(configuredScheme.rawValue, forKey: Self.configuredSchemeKey)
         defaults.set(configuredRemoteHost, forKey: Self.configuredHostKey)
         defaults.set(configuredPort, forKey: Self.configuredPortKey)
+    }
+
+    private var effectiveScheme: Scheme {
+        if shouldUseBundledServer {
+            return .http
+        }
+
+        return configuredScheme
     }
 
     private var effectiveHost: String {
@@ -190,24 +226,28 @@ final class ServerConnectionStore: ObservableObject {
         return configuredPort
     }
 
-    private static func loadPersistedEndpoint(defaults: UserDefaults) -> (host: String, port: Int, isExplicit: Bool) {
+    private static func loadPersistedEndpoint(defaults: UserDefaults) -> (scheme: Scheme, host: String, port: Int, isExplicit: Bool) {
+        let persistedScheme = Scheme(rawValue: defaults.string(forKey: configuredSchemeKey) ?? "") ?? .http
         let persistedHost = defaults.string(forKey: configuredHostKey)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let persistedPort = defaults.integer(forKey: configuredPortKey)
+        let hasPersistedScheme = defaults.object(forKey: configuredSchemeKey) != nil
         let hasPersistedHost = defaults.object(forKey: configuredHostKey) != nil
         let hasPersistedPort = defaults.object(forKey: configuredPortKey) != nil
 
         if hasPersistedHost, hasPersistedPort, let persistedHost, !persistedHost.isEmpty, persistedPort > 0 {
-            return (persistedHost, persistedPort, true)
+            let scheme = hasPersistedScheme ? persistedScheme : .http
+            return (scheme, persistedHost, persistedPort, true)
         }
 
         if let legacyValue = defaults.string(forKey: legacyBackendURLKey),
            let components = URLComponents(string: legacyValue),
+           let scheme = components.scheme.flatMap(Scheme.init(rawValue:)),
            let host = components.host,
            let port = components.port {
-            return (host, port, true)
+            return (scheme, host, port, true)
         }
 
-        return (BackendConnectionConfig.publicHost, BackendConnectionConfig.port, false)
+        return (.http, BackendConnectionConfig.publicHost, BackendConnectionConfig.port, false)
     }
 }

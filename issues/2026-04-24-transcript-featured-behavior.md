@@ -19,6 +19,8 @@ Updated the SwiftUI home and transcript screens.
 - changed transcript auto-scroll to trigger only when a new message arrives and the scroll position is already near the bottom
 - kept the initial transcript open behavior that scrolls to the latest message
 - removed the filter that excluded the featured conversation from the conversations list
+- added an entrance transition for the featured conversation card so it animates into place when a featured conversation becomes available
+- added content-change animation for the featured card so handle, summary, and timestamp updates animate while the card remains visible, and added an identity-based transition when the featured conversation switches to a different thread
 
 ## Notes
 
