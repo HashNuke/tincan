@@ -211,7 +211,6 @@ private struct TincanAppSurface: View {
                     conversations: workspace.conversations,
                     isLoadingConversations: workspace.isLoadingConversationList,
                     conversationListError: workspace.conversationListError,
-                    highlightedLiveUpdate: workspace.highlightedLiveUpdate,
                     callState: callState,
                     onOpenSettings: onOpenSettings,
                     onOpenTranscript: { conversation in
@@ -255,7 +254,6 @@ private struct TincanHomeScreen: View {
     let conversations: [TincanConversationSummary]
     let isLoadingConversations: Bool
     let conversationListError: String?
-    let highlightedLiveUpdate: TincanHighlightedLiveUpdate?
     let callState: TincanCallPresentationState
     let onOpenSettings: () -> Void
     let onOpenTranscript: (TincanConversationSummary) -> Void
@@ -274,10 +272,6 @@ private struct TincanHomeScreen: View {
         return nil
     }
 
-    private var remainingConversations: [TincanConversationSummary] {
-        conversations.filter { $0.id != featuredConversation?.id }
-    }
-
     private var shouldShowStandaloneTranscriptCard: Bool {
 #if os(macOS)
         return false
@@ -293,19 +287,6 @@ private struct TincanHomeScreen: View {
 
     @ViewBuilder
     private var homeFeed: some View {
-        if let highlightedLiveUpdate {
-            TincanHighlightedUpdateCard(
-                update: highlightedLiveUpdate,
-                onOpenTranscript: {
-                    guard let conversationID = highlightedLiveUpdate.conversationID,
-                          let conversation = conversations.first(where: { $0.id == conversationID }) else {
-                        return
-                    }
-                    onOpenTranscript(conversation)
-                }
-            )
-        }
-
         if let featuredConversation {
             TincanFeaturedConversationCard(
                 conversation: featuredConversation,
@@ -354,7 +335,7 @@ private struct TincanHomeScreen: View {
                     TincanEmptyConversationsCard(isCallActive: callState.isCallActive)
                 }
             } else {
-                ForEach(remainingConversations) { conversation in
+                ForEach(conversations) { conversation in
                     TincanConversationRow(
                         conversation: conversation,
                         onOpenTranscript: {
@@ -1033,40 +1014,6 @@ private struct TincanCallControlPanel: View {
     }
 }
 
-private struct TincanHighlightedUpdateCard: View {
-    let update: TincanHighlightedLiveUpdate
-    let onOpenTranscript: () -> Void
-
-    var body: some View {
-        Button(action: onOpenTranscript) {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    TincanCapsuleTag(text: update.title, tone: TincanTone.amber.accent)
-                    Spacer()
-                    Text(relativeTimestampLabel(for: update.timestamp))
-                        .font(.system(size: 10, weight: .bold, design: .monospaced))
-                        .foregroundStyle(TincanPalette.textSecondary)
-                }
-
-                Text(update.body)
-                    .font(.system(size: 15, weight: .semibold, design: .rounded))
-                    .foregroundStyle(TincanPalette.textPrimary)
-                    .multilineTextAlignment(.leading)
-            }
-            .padding(16)
-            .background(
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .fill(TincanTone.amber.tint.opacity(0.82))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 24, style: .continuous)
-                            .stroke(TincanTone.amber.accent.opacity(0.52), lineWidth: 1)
-                    )
-            )
-        }
-        .buttonStyle(.plain)
-    }
-}
-
 private struct TincanFeaturedConversationCard: View {
     let conversation: TincanConversationSummary
     let onOpenTranscript: () -> Void
@@ -1338,6 +1285,9 @@ private struct TincanTranscriptScreen: View {
     let onBack: () -> Void
 
     @State private var scrollOffset: CGFloat = 0
+    @State private var isNearTranscriptBottom = true
+
+    private let transcriptAutoscrollThreshold: CGFloat = 140
 
     private var tone: TincanTone {
         tincanTone(for: conversation)
@@ -1386,10 +1336,14 @@ private struct TincanTranscriptScreen: View {
                     }
                     .padding(18)
                 }
-                .onScrollGeometryChange(for: CGFloat.self, of: { geometry in
-                    geometry.visibleRect.minY
-                }) { _, newValue in
-                    scrollOffset = max(0, newValue)
+                .onScrollGeometryChange(for: TranscriptScrollMetrics.self, of: { geometry in
+                    TranscriptScrollMetrics(
+                        topOffset: geometry.visibleRect.minY,
+                        bottomGap: max(0, geometry.contentSize.height - geometry.visibleRect.maxY)
+                    )
+                }) { _, metrics in
+                    scrollOffset = max(0, metrics.topOffset)
+                    isNearTranscriptBottom = metrics.bottomGap <= transcriptAutoscrollThreshold
                 }
                 .overlay(alignment: .bottomTrailing) {
                     if shouldShowScrollToTopButton {
@@ -1408,6 +1362,7 @@ private struct TincanTranscriptScreen: View {
                     scrollToLatest(proxy: proxy)
                 }
                 .onChange(of: timelineMessages.last?.id) { _, _ in
+                    guard isNearTranscriptBottom else { return }
                     scrollToLatest(proxy: proxy)
                 }
             }
@@ -1424,6 +1379,11 @@ private struct TincanTranscriptScreen: View {
             }
         }
     }
+}
+
+private struct TranscriptScrollMetrics: Equatable {
+    let topOffset: CGFloat
+    let bottomGap: CGFloat
 }
 
 private struct TincanTranscriptHeader: View {

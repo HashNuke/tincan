@@ -1,13 +1,6 @@
 import Combine
 import Foundation
 
-struct TincanHighlightedLiveUpdate: Equatable {
-    let conversationID: String?
-    let title: String
-    let body: String
-    let timestamp: Date
-}
-
 @MainActor
 final class TincanWorkspaceStore: ObservableObject {
     enum LiveConnectionStatus: Equatable {
@@ -21,7 +14,6 @@ final class TincanWorkspaceStore: ObservableObject {
     @Published private(set) var conversationMessages: [String: [TincanConversationMessage]] = [:]
     @Published private(set) var agentBackends: [TincanAgentBackend] = []
     @Published private(set) var agentProfiles: [TincanAgentProfile] = []
-    @Published private(set) var highlightedLiveUpdate: TincanHighlightedLiveUpdate?
     @Published private(set) var conversationListError: String?
     @Published private(set) var lastSyncError: String?
     @Published private(set) var lastRefreshAt: Date?
@@ -110,7 +102,6 @@ final class TincanWorkspaceStore: ObservableObject {
     }
 
     private func reloadForConnectionChange() async {
-        highlightedLiveUpdate = nil
         conversationListError = nil
         lastSyncError = nil
         conversations = []
@@ -313,19 +304,8 @@ final class TincanWorkspaceStore: ObservableObject {
                 upsertConversation(updatedConversation)
             }
 
-            highlightedLiveUpdate = TincanHighlightedLiveUpdate(
-                conversationID: event.conversationID,
-                title: "update",
-                body: message.summaryText.isEmpty ? message.detailText : message.summaryText,
-                timestamp: message.updatedAt
-            )
         case .textEvent(let event):
-            highlightedLiveUpdate = TincanHighlightedLiveUpdate(
-                conversationID: event.conversationID,
-                title: event.event.kind.replacingOccurrences(of: "_", with: " "),
-                body: event.event.summaryText.isEmpty ? event.event.text : event.event.summaryText,
-                timestamp: Date()
-            )
+            _ = event
         }
     }
 
