@@ -294,6 +294,8 @@ private struct TincanHomeScreen: View {
                     onOpenTranscript(featuredConversation)
                 }
             )
+            .id(featuredConversation.id)
+            .transition(.move(edge: .top).combined(with: .opacity).combined(with: .scale(scale: 0.96, anchor: .top)))
         }
 
         VStack(alignment: .leading, spacing: 12) {
@@ -369,6 +371,7 @@ private struct TincanHomeScreen: View {
                         VStack(alignment: .leading, spacing: 18) {
                             homeFeed
                         }
+                        .animation(.spring(response: 0.34, dampingFraction: 0.82), value: featuredConversation?.id)
                     } header: {
                         TincanPinnedCallControlsHeader(
                             callState: callState,
@@ -418,6 +421,7 @@ private struct TincanHomeScreen: View {
                     VStack(alignment: .leading, spacing: 18) {
                         homeFeed
                     }
+                    .animation(.spring(response: 0.34, dampingFraction: 0.82), value: featuredConversation?.id)
                     .padding(.bottom, 24)
                 }
                 .onScrollGeometryChange(for: CGFloat.self, of: { geometry in
@@ -1031,11 +1035,13 @@ private struct TincanFeaturedConversationCard: View {
                             TincanCapsuleTag(text: conversation.handle, tone: tone.accent)
                             TincanCapsuleTag(text: "current", tone: tone.accent.opacity(0.85), filled: false)
                         }
+                        .contentTransition(.opacity)
 
                         Text(summaryText)
                             .font(.system(size: 19, weight: .bold, design: .rounded))
                             .foregroundStyle(TincanPalette.textPrimary)
                             .multilineTextAlignment(.leading)
+                            .contentTransition(.opacity)
                     }
 
                     Spacer(minLength: 12)
@@ -1044,6 +1050,7 @@ private struct TincanFeaturedConversationCard: View {
                         Text(relativeTimestampLabel(for: conversation.updatedAt))
                             .font(.system(size: 11, weight: .bold, design: .monospaced))
                             .foregroundStyle(TincanPalette.textPrimary.opacity(0.82))
+                            .contentTransition(.opacity)
                         Image(systemName: "arrow.up.forward")
                             .font(.system(size: 15, weight: .bold))
                             .foregroundStyle(tone.accent)
@@ -1067,6 +1074,9 @@ private struct TincanFeaturedConversationCard: View {
             )
         }
         .buttonStyle(.plain)
+        .animation(.easeOut(duration: 0.2), value: conversation.handle)
+        .animation(.easeOut(duration: 0.2), value: summaryText)
+        .animation(.easeOut(duration: 0.2), value: conversation.updatedAt)
     }
 
     private var summaryText: String {
@@ -1593,7 +1603,7 @@ private enum TincanSettingsDestination: String, CaseIterable, Hashable, Identifi
     var title: String {
         switch self {
         case .connectPhone:
-            return "Connect Phone"
+            return "Connect to Server"
         case .agentBackends:
             return "Agent Backends"
         case .agentServices:
@@ -1780,7 +1790,7 @@ private struct TincanSettingsDestinationContent: View {
         switch destination {
         case .connectPhone:
             TincanServerSettingsSection(
-                title: showsPageCardTitle ? "Connect phone" : nil,
+                title: showsPageCardTitle ? "Connect to server" : nil,
                 serverSettings: serverSettings,
                 onApplyConnection: {
                     let changed = serverSettings.applyRemoteDraft()
@@ -2020,7 +2030,7 @@ private struct TincanServerSettingsSection: View {
                 }
 
                     VStack(alignment: .leading, spacing: 10) {
-                        Text("Connect to remote server")
+                        Text("Connect to server")
                             .font(TincanSettingsTypography.emphasis)
                             .foregroundStyle(TincanPalette.textPrimary)
 
@@ -2030,6 +2040,7 @@ private struct TincanServerSettingsSection: View {
                                 .foregroundStyle(TincanPalette.textSecondary)
                         } else {
                             TincanSettingsValueRow(label: "Current", value: serverSettings.shareableConnectionLabel)
+                            TincanSchemePicker(selection: $serverSettings.draftScheme)
                             TincanLabeledField(label: "Host", text: $serverSettings.draftHost)
                             TincanLabeledField(label: "Port", text: $serverSettings.draftPort)
 
@@ -2037,14 +2048,14 @@ private struct TincanServerSettingsSection: View {
                                 .buttonStyle(.borderedProminent)
                                 .controlSize(.large)
                         }
-                    }
+                }
 #else
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("Connect to remote server")
+                    Text("Connect to server")
                         .font(TincanSettingsTypography.emphasis)
                         .foregroundStyle(TincanPalette.textPrimary)
 
-                    TincanSettingsValueRow(label: "Current", value: serverSettings.shareableConnectionLabel)
+                    TincanSchemePicker(selection: $serverSettings.draftScheme)
                     TincanLabeledField(label: "Host", text: $serverSettings.draftHost)
                     TincanLabeledField(label: "Port", text: $serverSettings.draftPort)
 
@@ -2160,6 +2171,25 @@ private struct TincanLabeledField: View {
             TextField("", text: $text)
                 .font(TincanSettingsTypography.body)
                 .textFieldStyle(.roundedBorder)
+        }
+    }
+}
+
+private struct TincanSchemePicker: View {
+    @Binding var selection: ServerConnectionStore.Scheme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Scheme")
+                .font(TincanSettingsTypography.emphasis)
+                .foregroundStyle(TincanPalette.textSecondary)
+
+            Picker("Scheme", selection: $selection) {
+                ForEach(ServerConnectionStore.Scheme.allCases) { scheme in
+                    Text(scheme.title).tag(scheme)
+                }
+            }
+            .pickerStyle(.segmented)
         }
     }
 }
