@@ -27,3 +27,5 @@ The `tincan-server` subdir has the orchestration server. This is a Swift app bas
 When git committing, always commit with a very detailed commit description. Include the list of changes and the purpose of the changes in the commit.
 
 NEVER run UI automation tests in xcode unless I explicitly ask for it to be run.
+
+When you need to build and run the app from CLI, prefer the repo-local `bin/build-and-run` script. Use `bin/build-and-run mac`, `bin/build-and-run ios`, or `bin/build-and-run all` instead of rebuilding that workflow manually.
