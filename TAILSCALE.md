@@ -1,183 +1,114 @@
-# Tailscale Plan
+# Tailscale Implementation Plan
 
-## Status
-
-This document is a planning document only.
-
-It describes the desired Tailscale architecture, UX flow, server command structure, config model, and implementation sequence for tincan.
+> **Source of truth:** `TAILSCALE-CHAT.md` is the master product record. This file is the implementation plan derived from it. If this file conflicts with `TAILSCALE-CHAT.md`, fix this file.
 
 ## Goal
 
-Add a smooth phone-pairing flow for the Mac-hosted bundled server using Tailscale and `tsnet`, without forcing the user to type server details on iPhone.
+Add Tailscale-backed phone pairing for the Mac-hosted tincan server so the phone can connect by scanning a QR code instead of typing server details.
 
-The phone should connect by scanning a QR code from the Mac app.
+The Mac app owns the guided setup flow. The server owns tsnet setup/runtime and persisted connection state.
 
-## Product Goals
+## Required User Experience
 
-1. The Mac app should keep working locally even if Tailscale is unavailable.
-2. Phone pairing should be a guided toggle-driven flow, not a manual hostname flow.
-3. Tailscale enablement should be persisted in `config.json`.
-4. The main bundled server process should be separate from the one-time Tailscale bootstrap process.
-5. Runtime fallback should be visible in the Mac UI when Tailscale is configured but not actually active.
+### macOS Connect Server Screen
 
-## Final UX
-
-### Connect server page on macOS
-
-The Connect server page should be split into two cards.
+The Connect server screen must be organized into two cards:
 
 1. `Run on this computer`
-2. `Connect to server`
+2. `Connect to remote server`
 
-### Run on this computer card
+Use the existing `TincanSettingsSectionCard` visual component.
 
-This card should contain:
+### Run on this computer Card
 
-- the existing local bundled-server toggle
-- the local server endpoint
-- a `Connect phone` toggle
-- setup/progress state for Tailscale bootstrap
-- QR code and server URL once pairing is ready
-- runtime fallback warning if Tailscale was enabled in config but is not active at runtime
+This card contains:
 
-### Connect to server card
+- local bundled-server toggle
+- local server endpoint
+- `Connect phone` toggle
+- Tailscale setup progress
+- Tailscale approval URL, when approval is required
+- `Open link` and `Copy link` buttons for the approval URL
+- QR code once the Tailscale node URL is known
+- server URL next to the QR code
+- fallback warning if Tailscale is enabled in config but runtime is not active
 
-This card should contain the existing manual remote server configuration:
-
-- scheme
-- host
-- port
-- apply button
-
-This remains the advanced/manual path.
-
-## Expected User Workflow
-
-### First-time enable flow
-
-1. User opens macOS Settings > Connect server.
-2. User leaves `Run on this computer` enabled.
-3. User enables `Connect phone`.
-4. The Mac app launches a separate process:
+When the user enables `Connect phone`, the Mac app must launch:
 
 ```text
-tincan-server setup-tailscale --data-dir <...>
+tincan-server setup-tailscale --data-dir <app-support-data-dir>
 ```
 
-5. The Mac app monitors that process live through stdout and stderr.
-6. If setup emits a Tailscale login URL, the UI shows:
+The Mac app must monitor that setup process through stdout and stderr.
+
+If setup emits a Tailscale approval URL, show:
 
 ```text
 <spinner> Waiting for you to approve on Tailscale:
 <login-link> <open link> <copy link>
 ```
 
-7. The user approves the node in Tailscale.
-8. The setup process reaches the equivalent of:
+When setup completes successfully:
+
+- remove the approval/waiting UI
+- show the QR code
+- show the Tailscale server URL
+- restart the main bundled server process
+
+If the device was already approved, setup may complete without ever showing a login URL. The UI must handle this and go straight to QR code plus server URL.
+
+### Connect to remote server Card
+
+This card is for connecting this app instance to a server.
+
+Replace separate scheme/host/port fields with one `server_url` input.
+
+Examples:
 
 ```text
-AuthLoop: state is Running; done
+http://127.0.0.1:4490
+https://tincan-akashs-macbook-air.tailnet-name.ts.net
 ```
 
-9. The setup process fetches the HTTPS-capable node domain from `srv.CertDomains()`.
-10. It picks the `.ts.net` domain.
-11. It strips a trailing `.` if present.
-12. It persists the result to `config.json`.
-13. The setup process exits successfully.
-14. The Mac app force-restarts the main server process.
-15. The main server starts in Tailscale-enabled mode.
-16. The Mac UI removes the waiting state and instead shows:
-   - QR code
-   - `https://<fqdn>`
+When the user applies the URL:
 
-### Already approved flow
+1. call the server health endpoint
+2. retry every 5 seconds for up to 60 seconds
+3. keep the Apply button disabled and spinning while checking
+4. save `server_url` only after the health check succeeds
 
-If the device was already approved earlier:
+This retry behavior is required because the Tailscale HTTPS endpoint may take time to fetch its certificate.
 
-1. User enables `Connect phone`.
-2. `setup-tailscale` runs.
-3. No login URL is shown.
-4. The command quickly resolves the node FQDN and exits successfully.
-5. The Mac app restarts the main server.
-6. The UI goes directly to QR code plus `https://<fqdn>`.
+### iPhone Connect Server Screen
 
-### Later visits to settings
+The phone Connect server screen must provide a `Scan QR code` option.
 
-If `config.json` already contains a Tailscale-enabled state:
+Scanning the Mac QR code applies the scanned URL as `server_url`.
 
-1. The `Connect phone` toggle appears enabled.
-2. The card should show the saved Tailscale node URL.
-3. If the runtime server is currently active with Tailscale, show QR code and the active URL.
-4. If the runtime server fell back to local-only mode, show a warning like:
+After scanning or manually entering a URL, the phone must perform the same health-check retry behavior before saving:
 
-```text
-Could not start with Tailscale. Please ensure Tailscale is running.
-```
-
-### Disable flow
-
-If the user disables `Connect phone`:
-
-1. Persist `tailscale_enabled = false` to `config.json`.
-2. Restart the main server.
-3. Stop showing the Tailscale QR and phone-pairing UI.
-4. Keep local bundled-server operation unaffected.
+- retry every 5 seconds
+- stop after 60 seconds
+- save `server_url` only after success
 
 ## Server Command Model
 
-The server should move from implicit default startup to explicit subcommands.
-
-### Final CLI
+The server command model must be explicit:
 
 ```text
 tincan-server run
 tincan-server setup-tailscale
 ```
 
-### Why this split
+`tincan-server run` is the normal long-lived server.
 
-The two commands have different responsibilities.
+`tincan-server setup-tailscale` is a separate bootstrap process used by the Mac app when the user enables `Connect phone`.
 
-- `run` is the normal long-lived bundled server process.
-- `setup-tailscale` is a short-lived bootstrap process used only for approval and node discovery.
+No default implicit startup path should remain once the CLI split is implemented.
 
-This separation makes the lifecycle much easier to reason about than combining bootstrap and steady-state runtime concerns.
+## Tailscale Hostname
 
-## Recommended File Layout
-
-Preferred structure:
-
-```text
-tincan-server/
-  main.go
-  internal/
-    commands/
-      run.go
-      setup_tailscale.go
-    serverapp/
-      ... shared server bootstrap/runtime code ...
-```
-
-Why:
-
-- a dedicated `commands` package is cleaner long term
-- current server bootstrap logic in `main.go` is too large to keep inside a tiny dispatcher
-- shared server bootstrap should be extracted into a reusable internal package
-
-Lower-churn alternative if we want fewer moves first:
-
-```text
-tincan-server/
-  main.go
-  run_command.go
-  setup_tailscale_command.go
-```
-
-Both are valid. The important part is the explicit command split.
-
-## Tailscale Hostname Rules
-
-The Tailscale node hostname should be derived from the machine hostname using:
+The tsnet hostname must be derived from the machine hostname:
 
 ```text
 tincan-<machine-hostname>
@@ -186,9 +117,10 @@ tincan-<machine-hostname>
 Normalization rules:
 
 - lowercase everything
-- remove apostrophes
+- remove straight and curly apostrophes
 - replace runs of non-alphanumeric characters with `-`
 - trim leading/trailing `-`
+- if the normalized machine name is empty, use `mac`
 
 Example:
 
@@ -198,100 +130,72 @@ Akash’s MacBook air
 tincan-akashs-macbook-air
 ```
 
-## Config Source of Truth
+## Config Model
 
-Tailscale enablement should live in `config.json`.
+Use `config.json` as the source of truth. Do not use `UserDefaults` as the source of truth for these values.
 
-### New config fields
+Required fields:
 
 ```json
 {
+  "server_url": "https://remote-tincan-server.example.com",
   "tailscale_enabled": true,
-  "tailscale_node": "https://tincan-akashs-macbook-air.tail12345.ts.net"
+  "tailscale_node_url": "https://tincan-akashs-macbook-air.tailnet-name.ts.net"
 }
 ```
 
-### Meaning
+Field meanings:
 
-- `tailscale_enabled`
-  - user intent
-  - whether phone-connect via Tailscale is enabled
-- `tailscale_node`
-  - last known canonical HTTPS node URL
-  - should be stored as full scheme + host
-  - expected scheme is `https`
+- `server_url`: server this app instance should connect to on startup. This is used by iOS and by the Mac `Connect to remote server` card. It is not the URL where the Mac-hosted bundled server advertises itself.
+- `tailscale_enabled`: user intent for Mac-hosted phone connectivity
+- `tailscale_node_url`: last known Tailscale HTTPS URL where this Mac-hosted bundled server is reachable
 
-### Ownership
+Validation:
 
-- `setup-tailscale` writes these fields on successful approval/bootstrap
-- `run` refreshes `tailscale_node` whenever it starts successfully with Tailscale and discovers the current node FQDN
-- disabling phone-connect writes `tailscale_enabled = false`
+- `server_url` must be a full `http` or `https` URL
+- `tailscale_node_url` must be a full `https` URL
+- `tailscale_node_url` should not include an explicit port
+- trim whitespace before storing
 
-### Recommendation on disabling
-
-When the user turns Tailscale off, keep `tailscale_node` unless there is a strong reason to clear it.
-
-Recommended behavior:
+When disabling `Connect phone`:
 
 - set `tailscale_enabled = false`
-- keep `tailscale_node` as last-known value
+- keep `tailscale_node_url` as the last known value
+- restart `tincan-server run`
 
-That preserves useful diagnostic information.
+No legacy or fallback config implementations should be kept as parallel behavior.
 
-## setup-tailscale Command
+## setup-tailscale Behavior
 
-### Responsibility
+`tincan-server setup-tailscale` must:
 
-`setup-tailscale` is a bootstrap-only command.
+1. resolve the data directory
+2. derive the Tailscale hostname
+3. create or reuse the tsnet state directory
+4. start the tsnet setup server on port `80`
+5. call `srv.Up(ctx)`
+6. surface login URLs through stdout/stderr
+7. wait until the node is approved or already approved
+8. fetch `srv.CertDomains()`
+9. pick the domain containing `.ts.net`
+10. strip a trailing `.` before using it
+11. construct `https://<fqdn>`
+12. persist:
+    - `tailscale_enabled = true`
+    - `tailscale_node_url = "https://<fqdn>"`
+13. emit stable machine-readable output
+14. exit successfully
 
-It should:
+The command must handle both approval flows:
 
-- initialize or resume the Tailscale node state
-- wait for approval if required
-- surface setup progress to the Mac app through stdout and stderr
-- discover the HTTPS node FQDN from `CertDomains()`
-- persist config
-- exit
+- first-time setup emits a login URL, then approval completes
+- already-approved setup emits no login URL and completes directly
 
-It is not the main bundled server.
+### setup-tailscale Output Contract
 
-### High-level behavior
+The Mac app may show raw log text for diagnostics, but UI logic should use stable app-owned markers from stdout/stderr.
 
-1. Resolve `dataDir`.
-2. Normalize the Tailscale hostname.
-3. Create or reuse the tsnet state directory.
-4. Start `tsnet.Server`.
-5. Call `srv.Up(ctx)`.
-6. If approval is needed, Tailscale emits a login URL.
-7. Once `Up(ctx)` returns successfully, fetch:
-
-```go
-domains := srv.CertDomains()
-```
-
-8. Pick the `.ts.net` entry.
-9. Trim trailing `.` if present.
-10. Construct:
-
-```text
-https://<fqdn>
-```
-
-11. Persist to `config.json`:
-
-- `tailscale_enabled = true`
-- `tailscale_node = "https://<fqdn>"`
-
-12. Emit stable success output.
-13. Exit.
-
-### stdout/stderr contract
-
-The Mac app should monitor stdout and stderr directly.
-
-The command may still print raw Tailscale logs, but it should also emit stable app-owned markers so the UI does not depend on brittle vendor log wording.
-
-Recommended markers:
+Required markers:
 
 ```text
 TINCAN_TAILSCALE_STATUS=starting
@@ -302,67 +206,40 @@ TINCAN_TAILSCALE_NODE=https://tincan-....ts.net
 TINCAN_TAILSCALE_ERROR=<message>
 ```
 
-### Approval detection
+The setup command should still allow Tailscale's own logs to appear, because those logs are useful for troubleshooting.
 
-The command must handle both success shapes:
+## run Behavior
 
-1. A login URL appears first, then approval completes.
-2. Approval already exists and no login URL appears at all.
+`tincan-server run` must:
 
-The UI should not depend on the login URL being present.
+1. start the local HTTP server as today
+2. read `config.json`
+3. run local-only unless `--tailscale` is passed
+4. if `--tailscale` is passed, attempt embedded tsnet runtime on port `443`
+5. if Tailscale runtime starts successfully:
+   - serve the tincan API over Tailscale HTTPS
+   - fetch `srv.CertDomains()`
+   - pick the `.ts.net` domain
+   - strip a trailing `.`
+   - refresh `tailscale_node_url` in `config.json` if it changed
+6. if Tailscale runtime fails:
+   - return startup failure to the Mac app
+   - the Mac app restarts `tincan-server run` without `--tailscale`
+   - the fallback run still reads config and exposes that Tailscale is configured but inactive
 
-## run Command
-
-### Responsibility
-
-`tincan-server run` is the normal bundled server process launched by the Mac app.
-
-It should:
-
-- start the local HTTP server as today
-- read `config.json`
-- decide whether Tailscale should be attempted
-- if enabled, try embedded Tailscale runtime
-- if startup succeeds, refresh the stored node URL if needed
-- if startup fails, keep serving locally and report fallback state
-
-### Behavior when Tailscale is enabled
-
-If `tailscale_enabled = true` in config:
-
-1. `run` attempts embedded Tailscale startup.
-2. If it succeeds:
-   - runtime state becomes active
-   - `tailscale_node` is refreshed from current `CertDomains()` if needed
-3. If it fails:
-   - local server still runs
-   - runtime state reports that Tailscale was configured but inactive
-
-### Behavior when Tailscale is disabled
-
-If `tailscale_enabled = false` in config:
-
-- behave as if running with `--no-tailscale`
-- no Tailscale bootstrap/runtime should be attempted
+There is no `--no-tailscale` flag. Tailscale is opt-in through `--tailscale`.
 
 ## Runtime Tailscale Signal
 
-The runtime server needs a clear way to tell the app whether Tailscale is actually active.
+The Mac app needs to distinguish:
 
-### Recommended mechanism
+- Tailscale enabled in config
+- Tailscale active in the current server process because it was started with `--tailscale`
+- Tailscale configured but inactive because the Mac app fell back to a local-only `run`
 
-Extend `/healthz`.
+Expose this through `/healthz`, because the app already uses that endpoint.
 
-The app already calls `/healthz`, so it is the cleanest place to report runtime Tailscale state.
-
-### Proposed health response
-
-Current health response already includes:
-
-- `status`
-- `agent_profile_count`
-
-Add a nested Tailscale object:
+Health response shape:
 
 ```json
 {
@@ -371,304 +248,559 @@ Add a nested Tailscale object:
   "tailscale": {
     "configured": true,
     "active": false,
-    "node": "https://tincan-akashs-macbook-air.tail12345.ts.net",
+    "node_url": "https://tincan-akashs-macbook-air.tailnet-name.ts.net",
     "message": "Could not start with Tailscale. Please ensure Tailscale is running."
   }
 }
 ```
 
-### Meaning
+This is the runtime indicator the Mac settings UI should use for fallback warnings.
 
-- `configured`
-  - reflects persisted config intent
-- `active`
-  - whether the current `run` process actually started Tailscale
-- `node`
-  - canonical node URL
-- `message`
-  - runtime user-facing status or failure reason
+## QR Payload
 
-## Mac App Architecture
-
-The Mac app should manage two different processes.
-
-1. `tincan-server run`
-2. `tincan-server setup-tailscale`
-
-They are separate on purpose.
-
-### When enabling Connect phone
-
-1. Launch `tincan-server setup-tailscale`.
-2. Pipe stdout and stderr.
-3. Watch for:
-   - login URL
-   - approval completion
-   - resolved node URL
-   - setup failure
-4. Update the UI live.
-5. On success:
-   - reload config
-   - restart `tincan-server run`
-   - refresh `/healthz`
-   - show QR code and `https://<fqdn>`
-
-### When disabling Connect phone
-
-1. Write `tailscale_enabled = false` to config.
-2. Restart `tincan-server run`.
-3. Remove the pairing UI state.
-
-### When opening settings later
-
-1. Read persisted config.
-2. Read runtime state from `/healthz`.
-3. Render based on both:
-   - persisted intent
-   - actual runtime status
-
-## macOS UI Design
-
-Use the existing `TincanSettingsSectionCard` component from `TincanDesignSystem.swift`.
-
-### Card 1: Run on this computer
-
-Contains:
-
-- local bundled-server toggle
-- local endpoint
-- `Connect phone` toggle
-- if setup is waiting:
+The QR code shown on Mac should encode the server URL directly:
 
 ```text
-<spinner> Waiting for you to approve on Tailscale:
-<login-link> <open link> <copy link>
+https://tincan-akashs-macbook-air.tailnet-name.ts.net
 ```
 
-- if setup completed and runtime is active:
-  - QR code
-  - `https://<fqdn>`
-- if config says enabled but runtime is inactive:
-  - `Could not start with Tailscale. Please ensure Tailscale is running.`
+The scanned QR payload must be saved as `server_url` only after the health-check retry succeeds.
 
-### Card 2: Connect to server
+For the Mac `Run on this computer` card, the QR payload comes from `tailscale_node_url`.
 
-Contains:
+## Swift Ownership
 
-- manual scheme/host/port fields
-- apply button
+### Remove From `ServerConnectionStore`
 
-This is the existing remote connection path.
+`ServerConnectionStore` should no longer own:
 
-## iPhone UX
+- `connectPhoneEnabled`
+- separate persisted scheme/host/port as the primary model
 
-The iPhone should not need Tailscale-specific setup UI.
+### Keep In `ServerConnectionStore`
 
-### Behavior
+`ServerConnectionStore` can own:
 
-1. User opens settings.
-2. Taps `Scan QR code`.
-3. Scans QR from Mac.
-4. App applies:
+- current effective server URL
+- health-check state
+- QR/manual URL application
+- connection revision notifications
 
-- `scheme = https`
-- `host = <fqdn>`
-- `port = 443`
+### Add Local Config Store
 
-The existing QR payload path is good for this.
+Add a dedicated Swift local config store for `config.json`.
 
-## Swift State Ownership Changes
+It owns:
 
-### Current state
+- `server_url`
+- `tailscale_enabled`
+- `tailscale_node_url`
 
-The current `connectPhoneEnabled` value is stored in `UserDefaults` via `ServerConnectionStore`.
+Follow the load/save style used by `TincanSpeechSettingsStore.swift`, but keep this store separate from speech settings.
 
-That does not match the desired architecture.
+### Add Setup Process Monitor
 
-### Desired state
+Add a Mac-only setup process monitor responsible for:
 
-Tailscale enablement should come from `config.json`, not `UserDefaults`.
+- launching `tincan-server setup-tailscale`
+- reading stdout and stderr without blocking
+- parsing stable markers
+- storing transient setup state:
+  - setup running
+  - approval URL
+  - setup error
+  - completed node URL
 
-### Recommended split
+Do not model setup progress by polling a status file.
 
-- `ServerConnectionStore`
-  - manual local/remote endpoint selection
-  - QR payload parsing for scanned phone-connect URLs
-- new local server config store
-  - reads and writes `config.json`
-  - owns:
-    - `tailscale_enabled`
-    - `tailscale_node`
-- setup process monitor
-  - owns transient bootstrap state:
-    - setup running
-    - login URL
-    - setup success/failure
+### Add Runtime Health State
+
+Runtime Tailscale active/fallback state should come from `/healthz`, not from a status file.
+
+The Mac settings UI renders from:
+
+- persisted config intent
+- transient setup process state
 - runtime health state
-  - owns actual active/fallback Tailscale state
 
-### Reuse candidate
+## Detailed Implementation Checklist
 
-`TincanSpeechSettingsStore.swift` already contains a robust local `config.json` load/save path.
+Work through this in order. Each checkbox is intended to be a small, reviewable change.
 
-That implementation style should be reused, but Tailscale config should live in a dedicated local config store rather than inside the speech-specific store.
+### Phase 1: Go Server CLI and Config
 
-## Go Config Changes
+#### `tincan-server/main.go`
 
-### AppConfigStore changes
+- [ ] Replace the current implicit default startup with a command dispatcher.
+- [ ] Support exactly these subcommands:
+  - `run`
+  - `setup-tailscale`
+- [ ] Return a usage error for missing or unknown subcommands.
+- [ ] Move the current long-lived server startup body into a `runTincanServerCommand(ctx, args)` function in `run_command.go`.
+- [ ] Keep `setup-tailscale` dispatch pointed at `runSetupTailscaleCommand(ctx, args)`.
+- [ ] Remove top-level parsing of long-lived server flags from `main()`.
 
-Extend `tincan-server/config/app_config.go`:
+#### `tincan-server/run_command.go`
 
-- `AppConfigStore`
-- `AppConfigSnapshot`
-- `decodeAppConfig(...)`
-- `ApplyPatch(...)`
+- [ ] Create this file.
+- [ ] Move current server flags into `runTincanServerCommand`:
+  - `--data-dir`
+  - `--log-file`
+  - `--port`
+  - `--tailscale`
+- [ ] Do not include `--tailscale-status-file`; status-file reporting is not part of the final design.
+- [ ] Start the local HTTP server exactly as today.
+- [ ] Read `config.json` through `AppConfigStore`.
+- [ ] Attempt embedded Tailscale runtime only when `--tailscale` is present.
+- [ ] Return startup failure if `--tailscale` is present and Tailscale startup fails; the Mac app owns the fallback restart without `--tailscale`.
+- [ ] Store runtime Tailscale state on the server struct for `/healthz`.
+- [ ] Refresh `tailscale_node_url` when Tailscale runtime starts and discovers a different `.ts.net` URL.
+- [ ] Add or update command dispatch tests next to this change:
+  - missing subcommand
+  - unknown subcommand
+  - `run`
+  - `setup-tailscale`
+  - `run --tailscale`
 
-Add fields:
+#### `tincan-server/config/app_config.go`
 
-- `tailscale_enabled`
-- `tailscale_node`
-
-### Validation rules
-
-- `tailscale_enabled`
-  - boolean
-- `tailscale_node`
-  - optional string
-  - trim whitespace
-  - store full URL including scheme
-  - expected scheme should be `https`
-
-### Refresh rule
-
-Every time `tincan-server run` starts successfully with Tailscale enabled:
-
-1. call `srv.CertDomains()`
-2. choose the `.ts.net` domain
-3. trim trailing `.`
-4. build `https://<fqdn>`
-5. if different from config, rewrite `tailscale_node`
-
-That keeps the stored endpoint synchronized with runtime reality.
-
-## File Touchpoints
-
-### Go server
-
-- `tincan-server/main.go`
-- `tincan-server/setup_tailscale.go`
-- `tincan-server/tailscale_runtime.go`
-- new command files for `run` and `setup-tailscale`
-- `tincan-server/config/app_config.go`
-- `tincan-server/config/store_test.go`
-
-### Swift app
-
-- `tincan-swift-app/tincan/TincanRootView.swift`
-- `tincan-swift-app/tincan/TincanDesignSystem.swift`
-- `tincan-swift-app/tincan/MacBundledTincanServerController.swift`
-- `tincan-swift-app/tincan/MacTailscaleServerController.swift`
-- `tincan-swift-app/tincan/TincanAppModel.swift`
-- `tincan-swift-app/tincan/TincanServerSettings.swift`
-- `tincan-swift-app/tincan/TincanAPIClient.swift`
-- new local config store for `config.json`
-
-## Implementation Sequence
-
-1. Refactor CLI to explicit `run` and `setup-tailscale` subcommands.
-2. Add `tailscale_enabled` and `tailscale_node` to Go config.
-3. Implement full `setup-tailscale` persistence behavior.
-4. Add stable stdout/stderr markers to `setup-tailscale`.
-5. Refactor `run` to read config and attempt embedded Tailscale only when enabled.
-6. Extend `/healthz` with runtime Tailscale state.
-7. Build a dedicated Swift config store for local server/Tailscale settings.
-8. Make the Mac app launch and monitor `setup-tailscale` separately.
-9. Restart `tincan-server run` after successful setup.
-10. Convert macOS settings into the two-card layout.
-11. Hook QR + server details + fallback warning into the cards.
-12. Remove `UserDefaults` as the source of truth for `Connect phone`.
-
-## Testing Plan
-
-### Go tests
-
-Add or extend tests for:
-
-- command parsing for `run` and `setup-tailscale`
-- config read/write for:
+- [ ] Add fields to `AppConfigStore`:
+  - `serverURL string`
+  - `tailscaleEnabled bool`
+  - `tailscaleNodeURL string`
+- [ ] Add fields to `AppConfigSnapshot`:
+  - `ServerURL string json:"server_url,omitempty"`
+  - `TailscaleEnabled bool json:"tailscale_enabled,omitempty"`
+  - `TailscaleNodeURL string json:"tailscale_node_url,omitempty"`
+- [ ] Update `decodeAppConfig` to parse the three fields.
+- [ ] Add `ServerURL() (string, bool)`.
+- [ ] Add `TailscaleEnabled() bool`.
+- [ ] Add `TailscaleNodeURL() (string, bool)`.
+- [ ] Add `SetServerURL(value string) error`.
+- [ ] Add `SetTailscaleEnabled(value bool) error`.
+- [ ] Add `SetTailscaleNodeURL(value string) error`.
+- [ ] Add `SetTailscaleBootstrapResult(nodeURL string) error` that writes:
+  - `tailscale_enabled = true`
+  - `tailscale_node_url = nodeURL`
+- [ ] Add `SetTailscaleDisabled() error` that writes:
+  - `tailscale_enabled = false`
+  - preserves `tailscale_node_url`
+- [ ] Extend `ApplyPatch` for:
+  - `server_url`
   - `tailscale_enabled`
-  - `tailscale_node`
-- hostname normalization
-- `.ts.net` domain selection
-- trailing-dot trimming
-- `run` rewriting `tailscale_node` when runtime value changes
+  - `tailscale_node_url`
+- [ ] Validate `server_url` as a full `http` or `https` URL with a host.
+- [ ] Validate `tailscale_node_url` as a full `https` URL with a host and no explicit port.
+- [ ] Trim whitespace before storing URL fields.
+- [ ] Preserve unrelated keys when writing.
+- [ ] Add or update config tests next to this change:
+  - `TestAppConfigStoreLoadsServerURL`
+  - `TestAppConfigStoreSetServerURLWritesConfig`
+  - `TestAppConfigStoreRejectsInvalidServerURL`
+  - `TestAppConfigStoreLoadsTailscaleFields`
+  - `TestAppConfigStoreSetTailscaleBootstrapResult`
+  - `TestAppConfigStoreSetTailscaleDisabledKeepsNodeURL`
+  - `TestAppConfigStoreRejectsInvalidTailscaleNodeURL`
+  - `TestAppConfigStoreApplyPatchUpdatesTailscaleFields`
+  - `TestAppConfigStoreApplyPatchRejectsUnknownTailscaleRelatedFields`
 
-### Swift tests
+#### `tincan-server/config/store_test.go`
 
-Add or extend tests for:
+- [ ] Add a test that missing optional fields load as empty/false.
+- [ ] Add a test that `server_url` loads from `config/config.json`.
+- [ ] Add a test that `SetServerURL("https://example.ts.net")` writes `server_url`.
+- [ ] Add a test that invalid `server_url` values are rejected:
+  - empty host
+  - unsupported scheme
+  - relative string
+- [ ] Add a test that `tailscale_enabled` loads from `config/config.json`.
+- [ ] Add a test that `SetTailscaleBootstrapResult("https://tincan-host.tail.ts.net")` writes both Tailscale fields.
+- [ ] Add a test that `SetTailscaleDisabled()` sets `tailscale_enabled = false` without deleting `tailscale_node_url`.
+- [ ] Add a test that `tailscale_node_url` rejects non-HTTPS URLs.
+- [ ] Add a test that `tailscale_node_url` rejects explicit ports.
+- [ ] Add a test that patching unknown fields still fails.
 
-- local config store load/save for Tailscale fields
-- QR payload application
-- health response decoding for Tailscale runtime state
-- setup process monitor state transitions
+### Phase 2: Go Tailscale Setup and Runtime
 
-## Risks and Gotchas
+#### `tincan-server/tailscale_runtime.go`
 
-1. A true `commands/` package means shared bootstrap logic must be extracted from `main.go` into reusable code.
-2. Current app state is split across `UserDefaults`, config, and runtime state; this must be collapsed cleanly.
-3. Setup stdout/stderr monitoring needs proper non-blocking pipe handling.
-4. Raw Tailscale logs are not a stable UI API; the app should prefer explicit app-owned output markers.
-5. Bootstrap progress and runtime active/fallback state are separate concerns and must stay separate.
-6. Avoid noisy config rewrites if the discovered node URL is unchanged.
+- [ ] Remove status-file reporter types and JSON status-file writing.
+- [ ] Keep hostname normalization in this file and reuse it from setup/runtime.
+- [ ] Add `selectTailscaleNodeURL(domains ...[]string) (string, error)`.
+- [ ] Make `selectTailscaleNodeURL`:
+  - trim whitespace
+  - strip trailing `.`
+  - select a host containing `.ts.net`
+  - return `https://<host>`
+  - error when no usable domain exists
+- [ ] Add a runtime state type used by `/healthz`, for example:
+  - `Configured bool`
+  - `Active bool`
+  - `NodeURL string`
+  - `Message string`
+- [ ] Start tsnet runtime on `:443` only.
+- [ ] Use `srv.ListenTLS("tcp", ":443")`.
+- [ ] On successful runtime startup, mark runtime state active.
+- [ ] On startup/listen failure, mark runtime state inactive with message:
+  - `Could not start with Tailscale. Please ensure Tailscale is running.`
+- [ ] When `--tailscale` startup fails, return an error so the Mac app can restart without `--tailscale`.
+- [ ] Add or update Tailscale helper tests next to this change:
+  - `TestNormalizeTailscaleHostname`
+  - `TestSelectTailscaleNodeURLSelectsTSNetDomain`
+  - `TestSelectTailscaleNodeURLStripsTrailingDot`
+  - `TestSelectTailscaleNodeURLIgnoresNonTSNetDomains`
+  - `TestSelectTailscaleNodeURLErrorsWithoutTSNetDomain`
 
-## Current Repo State vs Desired State
+#### `tincan-server/setup_tailscale.go`
 
-Current repo state is partially aligned but not yet correct.
+- [ ] Keep this command separate from the main server runtime.
+- [ ] Parse `--data-dir`.
+- [ ] Remove `--tailscale-status-file`.
+- [ ] Emit `TINCAN_TAILSCALE_STATUS=starting` before tsnet startup.
+- [ ] Start the tsnet setup server on port `80`; do not use `443` in `setup-tailscale`.
+- [ ] Use `tsnet.Server.UserLogf` to detect `https://login.tailscale.com/a/...`.
+- [ ] When a login URL is detected, emit:
+  - `TINCAN_TAILSCALE_STATUS=needs_login`
+  - `TINCAN_TAILSCALE_AUTH_URL=<url>`
+- [ ] After `srv.Up(ctx)` succeeds, call `srv.CertDomains()`.
+- [ ] Resolve the canonical node URL through `selectTailscaleNodeURL`.
+- [ ] Persist the setup result through `AppConfigStore.SetTailscaleBootstrapResult(nodeURL)`.
+- [ ] Emit `TINCAN_TAILSCALE_STATUS=running`.
+- [ ] Emit `TINCAN_TAILSCALE_NODE=<nodeURL>`.
+- [ ] Exit successfully after emitting the node URL.
+- [ ] On failure, emit `TINCAN_TAILSCALE_ERROR=<message>` before returning the error.
+- [ ] Add marker-formatting tests next to this change if marker formatting is factored into helpers.
 
-### Current mismatches
+#### `tincan-server/tailscale_runtime_test.go`
 
-- normal startup is still implicit instead of `tincan-server run`
-- `setup-tailscale` exists but does not yet persist Tailscale config
-- the embedded Tailscale runtime is already wired into the main server path
-- the Mac app currently polls a status file instead of directly monitoring `setup-tailscale` stdout/stderr
-- `Connect phone` is still backed by `UserDefaults`
-- the macOS Connect server screen is not yet split into two cards
+- [ ] Create or extend this test file.
+- [ ] Test hostname normalization:
+  - `Akash’s MacBook air` becomes `tincan-akashs-macbook-air`
+  - punctuation runs collapse into one hyphen
+  - empty input becomes `tincan-mac`
+- [ ] Test domain selection:
+  - selects `foo.ts.net`
+  - strips trailing `.`
+  - ignores non-`.ts.net` domains
+  - errors when no `.ts.net` domain exists
+- [ ] Test marker formatting helpers if marker output is factored into helper functions.
 
-### Desired end state
+#### `tincan-server/main.go`
 
-- `run` and `setup-tailscale` are explicit commands
-- config owns Tailscale enablement and node URL
-- setup and runtime are separate processes with separate responsibilities
-- the Mac app monitors setup process IO directly
-- runtime fallback is reported through `/healthz`
-- the Mac UI is card-based and reflects both persisted intent and actual runtime state
+- [ ] Add Tailscale runtime state to the server struct.
+- [ ] Update `handleHealth` to include:
+  - `tailscale.configured`
+  - `tailscale.active`
+  - `tailscale.node_url`
+  - `tailscale.message`
+- [ ] Ensure health remains `200 OK` when Tailscale fails but local server is running.
+- [ ] Add health response tests next to this change:
+  - disabled Tailscale
+  - active Tailscale
+  - configured-but-inactive fallback
 
-## Recommendation
+### Phase 3: Swift Config and Connection Model
 
-Implement this in two broad phases.
+#### `tincan-swift-app/tincan/TincanLocalServerConfigStore.swift`
 
-### Phase 1
+- [ ] Create this file.
+- [ ] Load from `AppPaths.generatedAppConfigURL`.
+- [ ] Preserve unrelated JSON keys when saving.
+- [ ] Expose published state:
+  - `serverURL: URL?`
+  - `tailscaleEnabled: Bool`
+  - `tailscaleNodeURL: URL?`
+- [ ] Add `reload()`.
+- [ ] Add `setServerURL(_ url: URL) throws`.
+- [ ] Add `setTailscaleEnabled(_ enabled: Bool) throws`.
+- [ ] Add `setTailscaleNodeURL(_ url: URL) throws`.
+- [ ] Add `setTailscaleBootstrapResult(_ url: URL) throws`.
+- [ ] Validate `serverURL` as `http` or `https` with host.
+- [ ] Validate `tailscaleNodeURL` as `https` with host and no explicit port.
+- [ ] Add config store tests next to this change:
+  - `loadsEmptyConfig`
+  - `loadsServerURL`
+  - `savesServerURL`
+  - `savesTailscaleEnabled`
+  - `savesTailscaleNodeURL`
+  - `bootstrapResultEnablesTailscaleAndStoresNodeURL`
+  - `disablingTailscaleKeepsNodeURL`
+  - `preservesUnrelatedConfigKeys`
+  - `rejectsInvalidServerURL`
+  - `rejectsInvalidTailscaleNodeURL`
 
-- explicit CLI subcommands
-- config schema changes
-- setup persistence
-- runtime fallback reporting
-- health endpoint enrichment
+#### `tincan-swift-app/tincanTests/TincanLocalServerConfigStoreTests.swift`
 
-### Phase 2
+- [ ] Create this test file.
+- [ ] Test loading empty config.
+- [ ] Test loading existing `server_url`.
+- [ ] Test saving `server_url`.
+- [ ] Test saving `tailscale_enabled`.
+- [ ] Test saving `tailscale_node_url`.
+- [ ] Test bootstrap result writes `tailscale_enabled = true` and `tailscale_node_url`.
+- [ ] Test disabling keeps `tailscale_node_url`.
+- [ ] Test unrelated config keys are preserved.
+- [ ] Test invalid `server_url` is rejected.
+- [ ] Test invalid `tailscale_node_url` is rejected.
 
-- Mac app setup-process orchestration
-- config-backed phone toggle
-- two-card macOS settings UI
-- QR + warning polish
+#### `tincan-swift-app/tincan/TincanServerSettings.swift`
 
-## Open Product Decision
+- [ ] Replace separate persisted scheme/host/port as the primary model with one `serverURL`.
+- [ ] Remove `connectPhoneEnabled` from this store.
+- [ ] Remove `server_connect_phone_enabled` UserDefaults usage.
+- [ ] Keep `connectionRevision` so workspace/call models refresh when the URL changes.
+- [ ] Keep `serverBaseURL`, `liveUpdatesURL`, and `liveUpdatesOriginHeaderValue` computed from `serverURL`.
+- [ ] Add a draft URL string used by settings UI.
+- [ ] Add `applyServerURLDraft()` that validates URL syntax but does not save until health succeeds.
+- [ ] Add health-check retry behavior:
+  - request `/healthz`
+  - retry every 5 seconds
+  - stop after 60 seconds
+  - save only after success
+- [ ] Expose Apply/checking state for the UI.
+- [ ] Make QR scan apply direct URL payloads only.
+- [ ] Add server connection tests next to this change:
+  - direct URL parsing
+  - invalid URL rejection
+  - health-success-before-save
+  - health-timeout-does-not-save
+  - HTTPS-to-WSS live updates URL
+  - connection revision increment after successful save
 
-When the user disables `Connect phone`, should `tailscale_node` be cleared?
+#### `tincan-swift-app/tincanTests/ServerConnectionStoreTests.swift`
 
-Recommendation:
+- [ ] Replace scheme/host/port persistence tests with `server_url` tests.
+- [ ] Test valid direct URL parsing.
+- [ ] Test invalid direct URL parsing.
+- [ ] Test save-after-health-success.
+- [ ] Test no-save-after-health-timeout.
+- [ ] Test websocket URL derives `wss` from HTTPS.
+- [ ] Test connection revision increments after successful save.
 
-- do not clear it
-- only set `tailscale_enabled = false`
+#### `tincan-swift-app/tincan/TincanAPIClient.swift`
 
-That preserves the last known node value for display and debugging, while still correctly representing user intent.
+- [ ] Extend `HealthResponse` with nested `TailscaleHealth`.
+- [ ] Decode:
+  - `configured`
+  - `active`
+  - `node_url`
+  - `message`
+- [ ] Require the final health response to include `tailscale`.
+- [ ] Add health decoding tests next to this change:
+  - `tailscale.configured = false`
+  - active Tailscale state
+  - inactive fallback message
+
+### Phase 4: Swift Tailscale Setup Monitor and Server Launch
+
+#### `tincan-swift-app/tincan/MacTailscaleServerController.swift`
+
+- [ ] Rewrite this from status-file polling to setup-process monitoring.
+- [ ] Add setup state:
+  - idle
+  - starting
+  - needs login with auth URL
+  - running/completed with node URL
+  - failed with message
+- [ ] Launch `tincan-server setup-tailscale --data-dir <AppPaths.appSupportDirectory.path>`.
+- [ ] Capture stdout and stderr with pipes.
+- [ ] Parse stable markers:
+  - `TINCAN_TAILSCALE_STATUS=starting`
+  - `TINCAN_TAILSCALE_STATUS=needs_login`
+  - `TINCAN_TAILSCALE_AUTH_URL=...`
+  - `TINCAN_TAILSCALE_STATUS=running`
+  - `TINCAN_TAILSCALE_NODE=...`
+  - `TINCAN_TAILSCALE_ERROR=...`
+- [ ] Expose `authURL`.
+- [ ] Expose `nodeURL`.
+- [ ] Expose `progressMessage`.
+- [ ] Expose `availabilityMessage`.
+- [ ] Stop any existing setup process before launching a new one.
+- [ ] On successful node URL, ask `TincanLocalServerConfigStore` to reload.
+- [ ] Add marker parser tests next to this change:
+  - auth URL marker parsing
+  - node URL marker parsing
+  - error marker parsing
+  - transition from starting to needs-login
+  - transition from running plus node URL to completed/ready
+
+#### `tincan-swift-app/tincanTests/MacTailscaleServerControllerTests.swift`
+
+- [ ] Create or extend this test file for pure marker parsing.
+- [ ] Test auth URL marker parsing.
+- [ ] Test node URL marker parsing.
+- [ ] Test error marker parsing.
+- [ ] Test status transition from starting to needs-login.
+- [ ] Test status transition from running to completed when node URL arrives.
+
+#### `tincan-swift-app/tincan/MacBundledTincanServerController.swift`
+
+- [ ] Launch `tincan-server run`, not bare `tincan-server`.
+- [ ] Remove `--tailscale-status-file`.
+- [ ] Keep `--data-dir`.
+- [ ] Keep `--port`.
+- [ ] Pass `--tailscale` only when local config says Tailscale is enabled.
+- [ ] If launching with `--tailscale` fails, restart with the same base arguments without `--tailscale`.
+- [ ] Update tests or helper assertions that inspect process arguments.
+- [ ] Keep local server readiness check against loopback `/healthz`.
+- [ ] Add bundled server argument tests next to this change:
+  - includes `run`
+  - includes `--tailscale` when enabled
+  - omits `--tailscale` when disabled
+  - omits `--tailscale-status-file`
+
+#### `tincan-swift-app/tincan/TincanAppModel.swift`
+
+- [ ] Add `localServerConfig = TincanLocalServerConfigStore()`.
+- [ ] Pass the local config store into `ServerConnectionStore`.
+- [ ] Pass the local config store into `MacTailscaleServerController`.
+- [ ] Replace `serverSettings.$connectPhoneEnabled` subscription with local config Tailscale state.
+- [ ] When `Connect phone` is enabled:
+  - launch setup process
+  - wait for successful node URL
+  - restart bundled server
+  - refresh `/healthz`
+- [ ] When `Connect phone` is disabled:
+  - write `tailscale_enabled = false`
+  - restart bundled server without `--tailscale`
+  - clear transient setup state
+- [ ] On app startup, start bundled server according to `tailscale_enabled` from config.
+
+#### `tincan-swift-app/tincan/AppPaths.swift`
+
+- [ ] Remove `tincanServerTailscaleStatusURL` after status-file polling is removed.
+- [ ] Keep `generatedAppConfigURL` as the config store path.
+
+### Phase 5: Swift Settings UI
+
+#### `tincan-swift-app/tincan/TincanRootView.swift`
+
+- [ ] Split macOS Connect server UI into two `TincanSettingsSectionCard` cards:
+  - `Run on this computer`
+  - `Connect to remote server`
+- [ ] In `Run on this computer`, keep the bundled server toggle.
+- [ ] In `Run on this computer`, add `Connect phone` bound to `localServerConfig.tailscaleEnabled`.
+- [ ] On enabling `Connect phone`, call the setup flow from `TincanAppModel`.
+- [ ] While setup is starting, show a spinner.
+- [ ] If auth URL exists, show:
+  - waiting text
+  - approval URL
+  - `Open link`
+  - `Copy link`
+- [ ] After node URL exists, show:
+  - QR code encoding direct node URL
+  - text value of node URL
+- [ ] Show runtime fallback warning from decoded `/healthz` Tailscale state.
+- [ ] In `Connect to remote server`, replace scheme picker, host field, and port field with one URL field.
+- [ ] Disable the Apply button while health retry is running.
+- [ ] Show spinner/progress state while applying URL.
+- [ ] On iOS, keep the QR scanner button.
+- [ ] On iOS, make scanner payload populate the direct URL draft and run the health retry before saving.
+- [ ] Remove UI paths that generate `tincan://connect?...` payloads.
+
+#### `tincan-swift-app/tincan/TincanDesignSystem.swift`
+
+- [ ] Reuse `TincanSettingsSectionCard`; only modify this file if spacing or layout primitives are missing.
+- [ ] Do not add nested cards.
+
+#### `tincan-swift-app/tincanTests` view-model tests
+
+- [ ] Add tests for any extracted formatting helpers:
+  - setup waiting text
+  - fallback warning text
+  - direct QR payload string
+- [ ] Leave Xcode UI automation coverage to the pending/deferred UI automation task list below.
+
+### Phase 6: Remove Prototype Artifacts
+
+#### `tincan-server/tailscale_runtime.go`
+
+- [ ] Confirm no status-file writing remains.
+- [ ] Confirm no status-file JSON structs remain unless used for health response.
+
+#### `tincan-swift-app/tincan/MacTailscaleServerController.swift`
+
+- [ ] Confirm no status-file polling remains.
+
+#### `tincan-swift-app/tincan/TincanServerSettings.swift`
+
+- [ ] Confirm no `connectPhoneEnabled` remains.
+- [ ] Confirm no `server_connect_phone_enabled` key remains.
+- [ ] Confirm scheme/host/port are not the primary persisted connection model.
+
+#### `tincan-swift-app/tincan/AppPaths.swift`
+
+- [ ] Confirm `tincanServerTailscaleStatusURL` is removed.
+
+#### `tshello/`
+
+- [ ] Leave this playground unchanged unless it blocks builds or tests.
+- [ ] Do not make app runtime depend on `tshello`.
+
+### Phase 7: Pending Xcode UI Automation Tests
+
+- [ ] Pending/deferred: Add UI automation coverage for macOS Connect server two-card layout.
+- [ ] Pending/deferred: Add UI automation coverage for Tailscale approval URL display.
+- [ ] Pending/deferred: Add UI automation coverage for QR scanner/apply flow on iOS.
+- [ ] Pending/deferred: Do not run Xcode UI automation tests for this implementation pass unless explicitly requested.
+
+### Phase 8: Verification Checklist
+
+#### Go
+
+- [ ] Run:
+
+```bash
+cd tincan-server
+go test ./...
+```
+
+- [ ] Confirm `tincan-server run --data-dir <dir> --port 4490` starts local server without Tailscale.
+- [ ] Confirm `tincan-server run --data-dir <dir> --port 4490 --tailscale` attempts Tailscale runtime on port `443`.
+- [ ] Confirm `tincan-server setup-tailscale --data-dir <dir>` emits stable markers.
+
+#### Swift/macOS
+
+- [ ] Run:
+
+```bash
+bin/build-and-run mac
+```
+
+- [ ] Confirm the app launches the bundled server with `run`.
+- [ ] Confirm the settings screen shows two cards.
+- [ ] Confirm enabling `Connect phone` launches setup, not the main server with status-file polling.
+
+#### Manual Tailscale
+
+- [ ] Enable `Connect phone`.
+- [ ] Confirm approval URL appears if Tailscale requires login.
+- [ ] Use `Open link` and approve the node.
+- [ ] Confirm the setup UI transitions to QR code plus URL.
+- [ ] Confirm `config.json` contains:
+  - `tailscale_enabled: true`
+  - `tailscale_node_url: https://...ts.net`
+- [ ] Confirm main server restarts after setup.
+- [ ] Confirm `/healthz` reports:
+  - `tailscale.configured = true`
+  - `tailscale.active = true`
+  - `tailscale.node_url = https://...ts.net`
+- [ ] Scan the QR code on iPhone.
+- [ ] Confirm iPhone saves `server_url` only after health succeeds.
+
+## Current Implementation Gaps
+
+These are the known gaps between the current code and this plan:
+
+- normal server startup is still implicit instead of `tincan-server run`
+- `Connect phone` is still stored in `UserDefaults`
+- `setup-tailscale` is not launched as a separate Mac setup process
+- setup/runtime state is currently based on a status file
+- `config.json` does not yet contain `server_url`, `tailscale_enabled`, or `tailscale_node_url`
+- `/healthz` does not report Tailscale runtime state
+- setup currently reports/assumes port `443`; master notes require setup on port `80`
+- QR payload currently uses `tincan://connect?...`; required payload is the direct server URL
+- manual server settings still use separate scheme/host/port fields
+- Apply does not yet retry health checks for up to 60 seconds before saving
+- Tailscale domain selection does not yet require `.ts.net` or strip trailing `.`
+- Mac settings are visually grouped but not yet two dedicated cards
