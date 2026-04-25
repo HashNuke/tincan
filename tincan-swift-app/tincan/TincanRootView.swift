@@ -1,3 +1,4 @@
+import MarkdownView
 import SwiftUI
 
 #if os(iOS)
@@ -1641,10 +1642,8 @@ private struct TincanMessageCard: View {
                 .multilineTextAlignment(.leading)
 
             if detailText != summaryText {
-                Text(detailText)
-                    .font(.system(size: 13, weight: .medium, design: .rounded))
-                    .foregroundStyle(TincanPalette.textSecondary)
-                    .multilineTextAlignment(.leading)
+                MarkdownView(detailText)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .padding(16)
