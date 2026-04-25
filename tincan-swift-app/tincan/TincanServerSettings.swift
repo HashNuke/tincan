@@ -137,35 +137,17 @@ final class ServerConnectionStore: ObservableObject {
         self.defaults = defaults
         self.configURL = configURL
         self.fileManager = fileManager
-
-        let persistedEndpoint = Self.loadPersistedEndpoint(defaults: defaults)
-        let config = Self.loadAppConfig(url: configURL)
-        let endpoint = config.serverURL.flatMap { Self.endpoint(from: $0) } ?? persistedEndpoint
-        configuredScheme = endpoint.scheme
-        configuredRemoteHost = endpoint.host
-        configuredPort = endpoint.port
-        hasExplicitEndpointConfiguration = endpoint.isExplicit
-        draftScheme = endpoint.scheme
-        draftHost = endpoint.host
-        draftPort = String(endpoint.port)
-        draftServerURL = endpoint.isExplicit ? Self.urlString(scheme: endpoint.scheme, host: endpoint.host, port: endpoint.port) : ""
-        connectPhoneEnabled = config.tailscaleEnabled
-
-#if os(macOS)
-        let defaultMode: ConnectionMode = .localMac
-#else
-        let defaultMode: ConnectionMode = .remote
-#endif
-
-        if let configMode = config.connectTo {
-            connectionMode = configMode == .remote && !endpoint.isExplicit ? .localMac : configMode
-        } else if let persistedMode = ConnectionMode(rawValue: defaults.string(forKey: Self.connectionModeKey) ?? "") {
-            connectionMode = persistedMode == .remote && !endpoint.isExplicit ? .localMac : persistedMode
-        } else if endpoint.isExplicit && config.serverURL == nil {
-            connectionMode = .remote
-        } else {
-            connectionMode = defaultMode
-        }
+        connectionMode = .remote
+        draftScheme = .http
+        draftHost = BackendConnectionConfig.publicHost
+        draftPort = String(BackendConnectionConfig.port)
+        draftServerURL = ""
+        configuredScheme = .http
+        configuredRemoteHost = BackendConnectionConfig.publicHost
+        configuredPort = BackendConnectionConfig.port
+        hasExplicitEndpointConfiguration = false
+        connectPhoneEnabled = false
+        restorePersistedConfiguration()
     }
 
     var serverBaseURL: URL? {
@@ -395,6 +377,23 @@ final class ServerConnectionStore: ObservableObject {
         }
     }
 
+    func resetAppConfiguration() {
+        if fileManager.fileExists(atPath: configURL.path) {
+            try? fileManager.removeItem(at: configURL)
+        }
+
+        defaults.removeObject(forKey: Self.connectionModeKey)
+        defaults.removeObject(forKey: Self.configuredSchemeKey)
+        defaults.removeObject(forKey: Self.configuredHostKey)
+        defaults.removeObject(forKey: Self.configuredPortKey)
+        defaults.removeObject(forKey: Self.legacyBackendURLKey)
+
+        restorePersistedConfiguration()
+        serverURLApplyMessage = nil
+        healthStatus = .idle
+        connectionRevision += 1
+    }
+
     private func persistEndpoint() {
         defaults.set(configuredScheme.rawValue, forKey: Self.configuredSchemeKey)
         defaults.set(configuredRemoteHost, forKey: Self.configuredHostKey)
@@ -476,6 +475,37 @@ final class ServerConnectionStore: ObservableObject {
         }
 
         return configuredPort
+    }
+
+    private func restorePersistedConfiguration() {
+        let persistedEndpoint = Self.loadPersistedEndpoint(defaults: defaults)
+        let config = Self.loadAppConfig(url: configURL)
+        let endpoint = config.serverURL.flatMap { Self.endpoint(from: $0) } ?? persistedEndpoint
+        configuredScheme = endpoint.scheme
+        configuredRemoteHost = endpoint.host
+        configuredPort = endpoint.port
+        hasExplicitEndpointConfiguration = endpoint.isExplicit
+        draftScheme = endpoint.scheme
+        draftHost = endpoint.host
+        draftPort = String(endpoint.port)
+        draftServerURL = endpoint.isExplicit ? Self.urlString(scheme: endpoint.scheme, host: endpoint.host, port: endpoint.port) : ""
+        connectPhoneEnabled = config.tailscaleEnabled
+
+#if os(macOS)
+        let defaultMode: ConnectionMode = .localMac
+#else
+        let defaultMode: ConnectionMode = .remote
+#endif
+
+        if let configMode = config.connectTo {
+            connectionMode = configMode == .remote && !endpoint.isExplicit ? .localMac : configMode
+        } else if let persistedMode = ConnectionMode(rawValue: defaults.string(forKey: Self.connectionModeKey) ?? "") {
+            connectionMode = persistedMode == .remote && !endpoint.isExplicit ? .localMac : persistedMode
+        } else if endpoint.isExplicit && config.serverURL == nil {
+            connectionMode = .remote
+        } else {
+            connectionMode = defaultMode
+        }
     }
 
     private static func loadPersistedEndpoint(defaults: UserDefaults) -> (scheme: Scheme, host: String, port: Int, isExplicit: Bool) {

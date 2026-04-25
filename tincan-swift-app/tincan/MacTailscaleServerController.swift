@@ -160,6 +160,65 @@ final class MacTailscaleServerController: ObservableObject {
         return runtimeStatus.message
     }
 
+    nonisolated static func runtimeStatus(
+        from tailscaleStatus: TincanAPIClient.HealthResponse.TailscaleStatus?
+    ) -> RuntimeStatus {
+        guard let tailscaleStatus, tailscaleStatus.enabled else {
+            return .idle
+        }
+
+        if tailscaleStatus.active {
+            if let nodeURL = tailscaleStatus.nodeURL?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !nodeURL.isEmpty {
+                return RuntimeStatus(
+                    state: "serving",
+                    message: nil,
+                    hostname: nil,
+                    authURL: nil,
+                    httpsURL: nodeURL
+                )
+            }
+
+            return RuntimeStatus(
+                state: "serving",
+                message: nil,
+                hostname: nil,
+                authURL: nil,
+                httpsURL: nil
+            )
+        }
+
+        if let message = tailscaleStatus.message?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !message.isEmpty {
+            return RuntimeStatus(
+                state: "error",
+                message: message,
+                hostname: nil,
+                authURL: nil,
+                httpsURL: tailscaleStatus.nodeURL
+            )
+        }
+
+        if let nodeURL = tailscaleStatus.nodeURL?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !nodeURL.isEmpty {
+            return RuntimeStatus(
+                state: "serving",
+                message: nil,
+                hostname: nil,
+                authURL: nil,
+                httpsURL: nodeURL
+            )
+        }
+
+        return RuntimeStatus(
+            state: "running",
+            message: "Tailscale setup is finishing.",
+            hostname: nil,
+            authURL: nil,
+            httpsURL: tailscaleStatus.nodeURL
+        )
+    }
+
     nonisolated static func setupArguments(dataDir: String) -> [String] {
         [
             "setup-tailscale",
@@ -255,11 +314,26 @@ final class MacTailscaleServerController: ObservableObject {
     }
 
     func startMonitoring() {
-        // Runtime fallback state now comes from /healthz. Setup progress comes from runSetup().
+        refreshStatus()
     }
 
     func refreshStatus() {
-        // Runtime fallback state now comes from /healthz. Setup progress comes from runSetup().
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                var request = URLRequest(url: URL(string: BackendConnectionConfig.loopbackHealthURLString)!)
+                request.timeoutInterval = 5
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                    throw URLError(.badServerResponse)
+                }
+
+                let health = try TincanAPIClient.decodeHealthResponse(from: data)
+                self.runtimeStatus = Self.runtimeStatus(from: health.tailscale)
+            } catch {
+                self.runtimeStatus = Self.runtimeStatus(from: nil)
+            }
+        }
     }
 
     func applyStatusMarkerLine(_ line: String) {

@@ -148,9 +148,6 @@ func runTincanServerCommand(ctx context.Context, args []string) error {
 }
 
 func localHTTPAddress(options runServerOptions) (string, bool) {
-	if options.enableTailscale {
-		return "", false
-	}
 	return fmt.Sprintf("0.0.0.0:%d", options.port), true
 }
 

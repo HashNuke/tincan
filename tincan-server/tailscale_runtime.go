@@ -55,7 +55,7 @@ func startTailscaleRuntime(ctx context.Context, mux *http.ServeMux, config tails
 	}
 	state.Configured = true
 
-	tsServer, ln, nodeURL, err := prepareTailscaleRuntime(config)
+	tsServer, ln, nodeURL, err := prepareTailscaleRuntime(ctx, config)
 	if err != nil {
 		state.Active = false
 		state.Message = tailscaleFallbackMessage
@@ -98,7 +98,7 @@ func startTailscaleRuntime(ctx context.Context, mux *http.ServeMux, config tails
 	return state, nil
 }
 
-func prepareTailscaleRuntime(config tailscaleRuntimeConfig) (*tsnet.Server, net.Listener, string, error) {
+func prepareTailscaleRuntime(ctx context.Context, config tailscaleRuntimeConfig) (*tsnet.Server, net.Listener, string, error) {
 	hostname, err := derivedTailscaleHostname()
 	if err != nil {
 		return nil, nil, "", fmt.Errorf("resolve tailscale hostname: %w", err)
@@ -131,7 +131,7 @@ func prepareTailscaleRuntime(config tailscaleRuntimeConfig) (*tsnet.Server, net.
 		return nil, nil, "", err
 	}
 
-	nodeURL, err := selectTailscaleNodeURL(tsServer.CertDomains())
+	nodeURL, err := runtimeTailscaleNodeURL(ctx, tsServer)
 	if err != nil {
 		_ = ln.Close()
 		_ = tsServer.Close()
@@ -140,6 +140,10 @@ func prepareTailscaleRuntime(config tailscaleRuntimeConfig) (*tsnet.Server, net.
 
 	wrapped := tls.NewListener(ln, &tls.Config{GetCertificate: lc.GetCertificate})
 	return tsServer, wrapped, nodeURL, nil
+}
+
+func runtimeTailscaleNodeURL(ctx context.Context, provider tailscaleCertDomainProvider) (string, error) {
+	return waitForTailscaleNodeURL(ctx, provider, 500*time.Millisecond)
 }
 
 func derivedTailscaleHostname() (string, error) {

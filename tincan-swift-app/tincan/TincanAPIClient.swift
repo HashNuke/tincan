@@ -77,12 +77,28 @@ struct TincanAgentProfile: Identifiable, Equatable {
 
 struct TincanAPIClient {
     struct HealthResponse: Decodable {
+        struct TailscaleStatus: Decodable {
+            let enabled: Bool
+            let active: Bool
+            let nodeURL: String?
+            let message: String?
+
+            enum CodingKeys: String, CodingKey {
+                case enabled
+                case active
+                case nodeURL = "node_url"
+                case message
+            }
+        }
+
         let status: String
         let agentProfileCount: Int
+        let tailscale: TailscaleStatus?
 
         enum CodingKeys: String, CodingKey {
             case status
             case agentProfileCount = "agent_profile_count"
+            case tailscale
         }
     }
 

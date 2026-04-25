@@ -190,6 +190,37 @@ struct ServerConnectionStoreTests {
         #expect(tailscale["enabled"] as? Bool == true)
     }
 
+    @Test func resetAppConfigurationClearsConfigFileAndPersistedEndpointState() throws {
+        let defaults = makeDefaults()
+        let configURL = makeConfigURL()
+        let store = ServerConnectionStore(defaults: defaults, configURL: configURL)
+
+        store.draftServerURL = "https://phone.example.ts.net"
+        defaults.set("https", forKey: "server_configured_scheme")
+        defaults.set("phone.example.ts.net", forKey: "server_configured_host")
+        defaults.set(443, forKey: "server_configured_port")
+        defaults.set("remote", forKey: "server_connection_mode")
+        defaults.set("https://legacy.example:8443", forKey: "backend_url")
+        store.setConnectPhoneEnabled(true)
+
+        #expect(FileManager.default.fileExists(atPath: configURL.path))
+        #expect(store.connectPhoneEnabled)
+
+        store.resetAppConfiguration()
+
+        #expect(!FileManager.default.fileExists(atPath: configURL.path))
+        #expect(store.draftServerURL.isEmpty)
+        #expect(store.connectionMode == .remote)
+        #expect(!store.hasExplicitEndpointConfiguration)
+        #expect(store.healthStatus == .idle)
+        #expect(store.connectPhoneEnabled == false)
+        #expect(defaults.string(forKey: "server_connection_mode") == nil)
+        #expect(defaults.string(forKey: "server_configured_scheme") == nil)
+        #expect(defaults.string(forKey: "server_configured_host") == nil)
+        #expect(defaults.object(forKey: "server_configured_port") == nil)
+        #expect(defaults.string(forKey: "backend_url") == nil)
+    }
+
     private func makeDefaults() -> UserDefaults {
         let defaultsName = "ServerConnectionStoreTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: defaultsName)!

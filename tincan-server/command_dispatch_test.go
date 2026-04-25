@@ -120,9 +120,12 @@ func TestLocalHTTPAddressUsesRunPortWithoutTailscale(t *testing.T) {
 	}
 }
 
-func TestLocalHTTPAddressIsDisabledWithTailscale(t *testing.T) {
+func TestLocalHTTPAddressStaysEnabledWithTailscale(t *testing.T) {
 	address, ok := localHTTPAddress(runServerOptions{port: 4990, enableTailscale: true})
-	if ok {
-		t.Fatalf("expected local HTTP listener to be disabled under tailscale, got %q", address)
+	if !ok {
+		t.Fatalf("expected local HTTP listener to stay enabled under tailscale")
+	}
+	if address != "0.0.0.0:4990" {
+		t.Fatalf("unexpected local HTTP address under tailscale: %q", address)
 	}
 }

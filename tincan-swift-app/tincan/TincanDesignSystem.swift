@@ -255,8 +255,8 @@ struct TincanSettingsSectionCard<Content: View>: View {
 
             if let subtitle, !subtitle.isEmpty {
                 Text(subtitle)
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
-                    .foregroundStyle(TincanPalette.textMuted)
+                    .font(.system(size: 14, weight: .medium, design: .rounded))
+                    .foregroundStyle(TincanPalette.textSecondary)
             }
 
             content

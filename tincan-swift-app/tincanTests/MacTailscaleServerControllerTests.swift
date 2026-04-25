@@ -102,5 +102,44 @@ struct MacTailscaleServerControllerTests {
             executablePath: executablePath
         ))
     }
+
+    @Test func runtimeStatusFromHealthReturnsServingWhenActiveNodeURLExists() {
+        let status = MacTailscaleServerController.runtimeStatus(from: .init(
+            enabled: true,
+            active: true,
+            nodeURL: "https://tincan-host.tail.ts.net",
+            message: nil
+        ))
+
+        #expect(status.state == "serving")
+        #expect(status.httpsURL == "https://tincan-host.tail.ts.net")
+        #expect(status.message == nil)
+    }
+
+    @Test func runtimeStatusFromHealthReturnsErrorWhenConfiguredButInactive() {
+        let status = MacTailscaleServerController.runtimeStatus(from: .init(
+            enabled: true,
+            active: false,
+            nodeURL: "https://tincan-host.tail.ts.net",
+            message: "Could not start with Tailscale. Please ensure Tailscale is running."
+        ))
+
+        #expect(status.state == "error")
+        #expect(status.message == "Could not start with Tailscale. Please ensure Tailscale is running.")
+        #expect(status.httpsURL == "https://tincan-host.tail.ts.net")
+    }
+
+    @Test func runtimeStatusFromHealthReturnsServingWhenConfiguredNodeURLExistsWithoutError() {
+        let status = MacTailscaleServerController.runtimeStatus(from: .init(
+            enabled: true,
+            active: false,
+            nodeURL: "https://tincan-host.tail.ts.net",
+            message: nil
+        ))
+
+        #expect(status.state == "serving")
+        #expect(status.message == nil)
+        #expect(status.httpsURL == "https://tincan-host.tail.ts.net")
+    }
 }
 #endif
