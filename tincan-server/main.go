@@ -116,12 +116,18 @@ const (
 )
 
 func main() {
+	sanitizeForkExecEnvironment()
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	if err := runMainCommand(ctx, os.Args[1:], commandHandlers{}); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func sanitizeForkExecEnvironment() {
+	_ = os.Unsetenv("__CF_USER_TEXT_ENCODING")
 }
 
 func newServer(dataDir string, port int, runtimeOutput io.Writer) (*server, error) {

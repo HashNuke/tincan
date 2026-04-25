@@ -11,6 +11,8 @@ import (
 var buildVersion = "dev"
 
 func main() {
+	_ = os.Unsetenv("__CF_USER_TEXT_ENCODING")
+
 	if len(os.Args) < 2 {
 		fmt.Fprintln(os.Stderr, "usage: tincan-exec <command> [args...]")
 		os.Exit(2)
