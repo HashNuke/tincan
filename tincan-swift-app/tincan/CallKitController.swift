@@ -19,7 +19,7 @@ final class CallKitController: NSObject {
     private var activeCallUUID: UUID?
 
     override init() {
-        let configuration = CXProviderConfiguration(localizedName: "tincan")
+        let configuration = CXProviderConfiguration()
         configuration.supportsVideo = false
         configuration.maximumCallsPerCallGroup = 1
         configuration.maximumCallGroups = 1
@@ -42,7 +42,7 @@ final class CallKitController: NSObject {
         let callUUID = UUID()
         activeCallUUID = callUUID
 
-        let handle = CXHandle(type: .generic, value: "Coding Agent")
+        let handle = CXHandle(type: .generic, value: "tincan agents")
         let startAction = CXStartCallAction(call: callUUID, handle: handle)
         startAction.isVideo = false
         let transaction = CXTransaction(action: startAction)
