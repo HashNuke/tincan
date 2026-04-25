@@ -249,12 +249,16 @@ final class MacBundledTincanServerController {
         formatter.timeZone = .current
         return formatter
     }()
+    private static let healthRetryDelayNanoseconds: UInt64 = 2_000_000_000
 
     private let port: Int
     private var process: Process?
     private var logHandle: FileHandle?
     private var terminationObserver: NSObjectProtocol?
     private var launchedWithTailscale = false
+    private var startupTask: Task<Void, Error>?
+    private var startupTaskID: UUID?
+    private var startupTaskEnableTailscale: Bool?
 
     nonisolated static func bundledServerArguments(dataDir: String, port: Int, enableTailscale: Bool) -> [String] {
         var arguments = [
@@ -288,6 +292,12 @@ final class MacBundledTincanServerController {
     }
 
     func startIfNeeded(enableTailscale: Bool) async throws {
+        try await runOrJoinStartup(enableTailscale: enableTailscale) {
+            try await self.performStartIfNeeded(enableTailscale: enableTailscale)
+        }
+    }
+
+    private func performStartIfNeeded(enableTailscale: Bool) async throws {
         prepareStartupLoggingIfNeeded()
         guard !Task.isCancelled else { throw CancellationError() }
 
@@ -307,7 +317,7 @@ final class MacBundledTincanServerController {
         if process?.isRunning == true {
             guard launchedWithTailscale == enableTailscale else {
                 stop()
-                return try await startIfNeeded(enableTailscale: enableTailscale)
+                return try await performStartIfNeeded(enableTailscale: enableTailscale)
             }
             do {
                 try await waitUntilReady(timeout: 10)
@@ -370,7 +380,7 @@ final class MacBundledTincanServerController {
             if enableTailscale {
                 writeStartupLog("falling back to bundled tincan-server without Tailscale")
                 stop()
-                try await startIfNeeded(enableTailscale: false)
+                try await performStartIfNeeded(enableTailscale: false)
                 return
             }
             throw error
@@ -378,9 +388,51 @@ final class MacBundledTincanServerController {
     }
 
     func restart(enableTailscale: Bool) async throws {
+        try await awaitStartupIfNeeded()
         prepareStartupLoggingIfNeeded()
         stop()
         try await startIfNeeded(enableTailscale: enableTailscale)
+    }
+
+    private func runOrJoinStartup(
+        enableTailscale: Bool,
+        operation: @escaping @MainActor () async throws -> Void
+    ) async throws {
+        if let startupTask {
+            let inFlightEnableTailscale = startupTaskEnableTailscale
+            try await startupTask.value
+            if inFlightEnableTailscale == enableTailscale {
+                return
+            }
+        }
+
+        let taskID = UUID()
+        startupTaskID = taskID
+        startupTaskEnableTailscale = enableTailscale
+        let startupTask = Task { @MainActor in
+            try await operation()
+        }
+        self.startupTask = startupTask
+
+        do {
+            try await startupTask.value
+            clearStartupTaskIfNeeded(taskID: taskID)
+        } catch {
+            clearStartupTaskIfNeeded(taskID: taskID)
+            throw error
+        }
+    }
+
+    private func awaitStartupIfNeeded() async throws {
+        guard let startupTask else { return }
+        try await startupTask.value
+    }
+
+    private func clearStartupTaskIfNeeded(taskID: UUID) {
+        guard startupTaskID == taskID else { return }
+        startupTask = nil
+        startupTaskID = nil
+        startupTaskEnableTailscale = nil
     }
 
     func sendSecretUpdates(_ updates: [String: String]) async throws {
@@ -542,7 +594,7 @@ final class MacBundledTincanServerController {
             if await isServerReachable() {
                 return
             }
-            try await Task.sleep(nanoseconds: 250_000_000)
+            try await Task.sleep(nanoseconds: Self.healthRetryDelayNanoseconds)
         }
         throw LaunchError.serverDidNotBecomeHealthy(port)
     }
