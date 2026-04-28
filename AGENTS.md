@@ -15,7 +15,7 @@ Primary functionality
 
 The main app is the xcode project for tincan that is the universal macos/ios/watch app. This is the UI, written in SwiftUI.
 
-The `tincan-server` subdir has the orchestration server. This is a Swift app based on the Vapor framework.
+The `tincan-server` subdir has the orchestration server. This backend server is written in Go and includes support for Tailscale connectivity.
 
 ## Reference
 
